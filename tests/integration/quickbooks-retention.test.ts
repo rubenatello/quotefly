@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { readFile } from "node:fs/promises";
 import { afterAll, beforeEach, describe, expect, test } from "vitest";
 import { prisma } from "../../src/lib/prisma";
 import {
@@ -35,10 +36,28 @@ async function createOAuthState(params: {
   expiresAtUtc: Date;
   consumedAtUtc?: Date | null;
 }) {
+  const userId = `user-${params.label}`;
+  await prisma.user.upsert({
+    where: { id: userId },
+    update: {},
+    create: {
+      id: userId,
+      email: `${userId}@retention.test`,
+      fullName: `Retention ${params.label}`,
+      passwordHash: "not-used-by-retention-tests",
+    },
+  });
+  await prisma.tenantUser.create({
+    data: {
+      tenantId: params.tenantId,
+      userId,
+      role: "owner",
+    },
+  });
   return prisma.quickBooksOAuthState.create({
     data: {
       tenantId: params.tenantId,
-      userId: `user-${params.label}`,
+      userId,
       stateHash: `${params.label}-${Math.random().toString(36).slice(2)}`.padEnd(64, "0").slice(0, 64),
       expiresAtUtc: params.expiresAtUtc,
       consumedAtUtc: params.consumedAtUtc ?? null,
@@ -102,6 +121,80 @@ describe("QuickBooks security-record retention", () => {
 
   afterAll(async () => {
     await prisma.$disconnect();
+  });
+
+  test("quarantine retention role is managed-PostgreSQL safe and has no inherited privilege path", async () => {
+    const rows = await prisma.$queryRaw<Array<{
+      canLogin: boolean;
+      superuser: boolean;
+      bypassRls: boolean;
+      createDatabase: boolean;
+      createRole: boolean;
+      inherits: boolean;
+      replication: boolean;
+      memberships: bigint;
+    }>>`
+      SELECT
+        role.rolcanlogin AS "canLogin",
+        role.rolsuper AS "superuser",
+        role.rolbypassrls AS "bypassRls",
+        role.rolcreatedb AS "createDatabase",
+        role.rolcreaterole AS "createRole",
+        role.rolinherit AS "inherits",
+        role.rolreplication AS "replication",
+        COUNT(membership.roleid)::bigint AS "memberships"
+      FROM pg_roles role
+      LEFT JOIN pg_auth_members membership ON membership.member = role.oid
+      WHERE role.rolname = 'quotefly_quarantine_retention'
+      GROUP BY role.rolcanlogin, role.rolsuper, role.rolbypassrls,
+        role.rolcreatedb, role.rolcreaterole, role.rolinherit, role.rolreplication
+    `;
+    expect(rows).toEqual([{
+      canLogin: false,
+      superuser: false,
+      bypassRls: false,
+      createDatabase: false,
+      createRole: false,
+      inherits: false,
+      replication: false,
+      memberships: 0n,
+    }]);
+
+    const incomingMemberships = await prisma.$queryRaw<Array<{
+      isMigrationOwner: boolean;
+      admin: boolean;
+      canSet: boolean;
+      inherits: boolean;
+    }>>`
+      SELECT
+        member_role.rolname = current_user AS "isMigrationOwner",
+        membership.admin_option AS "admin",
+        membership.set_option AS "canSet",
+        membership.inherit_option AS "inherits"
+      FROM pg_auth_members membership
+      INNER JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
+      INNER JOIN pg_roles member_role ON member_role.oid = membership.member
+      WHERE granted_role.rolname = 'quotefly_quarantine_retention'
+    `;
+    expect(incomingMemberships).toEqual([{
+      isMigrationOwner: true,
+      admin: true,
+      canSet: false,
+      inherits: false,
+    }]);
+
+    for (const migrationPath of [
+      "../../prisma/migrations/20260827163000_add_quickbooks_global_quarantine_retention/migration.sql",
+      "../../prisma/migrations/20260827163500_avoid_quarantine_retention_update_grant/migration.sql",
+      "../../prisma/migrations/20260828123000_quarantine_unsupported_quickbooks_webhooks/migration.sql",
+      "../../prisma/migrations/20260831194500_harden_quickbooks_retention_role_portability/migration.sql",
+    ]) {
+      const migrationSql = await readFile(new URL(migrationPath, import.meta.url), "utf8");
+      expect(migrationSql).not.toMatch(/ALTER\s+ROLE\s+quotefly_quarantine_retention[^;]*(?:NO)?SUPERUSER/i);
+      expect(migrationSql).not.toMatch(/ALTER\s+ROLE\s+quotefly_quarantine_retention[^;]*(?:NO)?BYPASSRLS/i);
+      expect(migrationSql).not.toMatch(/ALTER\s+ROLE\s+quotefly_quarantine_retention/i);
+      expect(migrationSql).not.toMatch(/REVOKE\s+quotefly_quarantine_retention\s+FROM\s+CURRENT_USER/i);
+    }
   });
 
   test("deletes only terminal records beyond policy, remains tenant-scoped, and honors the row cap", async () => {
@@ -173,6 +266,42 @@ describe("QuickBooks security-record retention", () => {
     await expect(prisma.quickBooksWebhookEvent.findUnique({ where: { id: unresolved.id } })).resolves.not.toBeNull();
   });
 
+  test("enforces the OAuth actor tenant boundary and cascades only the matching actor state", async () => {
+    const first = await createTenant("QuickBooks Actor First");
+    const second = await createTenant("QuickBooks Actor Second");
+    const firstState = await createOAuthState({
+      tenantId: first.id,
+      label: "actor-first",
+      expiresAtUtc: daysBefore(-1),
+    });
+    const secondState = await createOAuthState({
+      tenantId: second.id,
+      label: "actor-second",
+      expiresAtUtc: daysBefore(-1),
+    });
+
+    await expect(prisma.quickBooksOAuthState.create({
+      data: {
+        tenantId: first.id,
+        userId: secondState.userId,
+        stateHash: `cross-actor-${Math.random().toString(36).slice(2)}`.padEnd(64, "0").slice(0, 64),
+        expiresAtUtc: daysBefore(-1),
+      },
+    })).rejects.toMatchObject({ code: "P2003" });
+
+    await prisma.tenantUser.delete({
+      where: {
+        tenantId_userId: {
+          tenantId: first.id,
+          userId: firstState.userId,
+        },
+      },
+    });
+
+    await expect(prisma.quickBooksOAuthState.findUnique({ where: { id: firstState.id } })).resolves.toBeNull();
+    await expect(prisma.quickBooksOAuthState.findUnique({ where: { id: secondState.id } })).resolves.not.toBeNull();
+  });
+
   test("runtime-role cleanup can delete only its current tenant terminal records", async () => {
     const first = await createTenant("QuickBooks Runtime First");
     const second = await createTenant("QuickBooks Runtime Second");
@@ -183,6 +312,22 @@ describe("QuickBooks security-record retention", () => {
     const runtimePrisma = new PrismaClient({ datasources: { db: { url: runtimeDatabaseUrl(password) } } });
     try {
       await runtimePrisma.$connect();
+      const visibleBeforeCleanup = await runtimePrisma.$transaction(async (transaction) => {
+        await transaction.$executeRaw`SELECT set_config('app.tenant_id', ${first.id}, true)`;
+        return transaction.quickBooksOAuthState.count();
+      });
+      expect(visibleBeforeCleanup).toBe(1);
+      await expect(runtimePrisma.$transaction(async (transaction) => {
+        await transaction.$executeRaw`SELECT set_config('app.tenant_id', ${first.id}, true)`;
+        return transaction.quickBooksOAuthState.create({
+          data: {
+            tenantId: second.id,
+            userId: secondState.userId,
+            stateHash: `runtime-cross-${Math.random().toString(36).slice(2)}`.padEnd(64, "0").slice(0, 64),
+            expiresAtUtc: daysBefore(-1),
+          },
+        });
+      })).rejects.toThrow();
       const result = await runQuickBooksRetentionForTenant(runtimePrisma, { tenantId: first.id, now: NOW });
       expect(result).toMatchObject({ oauthStatesDeleted: 1, lockSkipped: false, hasMore: false });
       await expect(runtimePrisma.quickBooksOAuthState.count()).resolves.toBe(0);

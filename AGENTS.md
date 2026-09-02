@@ -10,7 +10,7 @@ Prioritize the core workflow: customer lookup or creation, quote draft, line-ite
 
 - Runtime: Node.js 22+; use Node 22.13+ when possible for current frontend tooling compatibility.
 - Backend: TypeScript, Fastify 5, Zod, Pino/Fastify logging.
-- Database: PostgreSQL with Prisma ORM and checked-in migrations.
+- Database: PostgreSQL 16+ with Prisma ORM and checked-in migrations.
 - Frontend: React 19, React Router 7, TypeScript, Vite 8, Tailwind CSS 4, Radix UI primitives, lucide-react icons.
 - Auth: local email/password with bcrypt, Fastify JWT, and HttpOnly session cookies for browser sessions.
 - Payments: Stripe Checkout, Billing Portal, and signed webhooks.
@@ -111,6 +111,7 @@ Do not route ambiguous architecture, security-boundary, migration-strategy, or p
 
 ## Security And Privacy
 
+- Follow [infrastructure secret handling](docs/security/infrastructure-secret-handling.md) for every provider or deployment environment. Never retrieve, print, paste, screenshot, or otherwise retain raw environment values; presence-only evidence is the only permitted operational output.
 - Browser auth uses an HttpOnly session cookie. Frontend API calls must use `credentials: "include"` and must not store JWTs in `localStorage`.
 - Enforce strong production `JWT_SECRET` and non-localhost `APP_URL`/`API_URL` through env validation.
 - Keep CORS locked to production app origins. Do not use wildcard CORS in production.

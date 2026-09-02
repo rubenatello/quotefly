@@ -4,6 +4,19 @@ Status: operator runbook for a separately authorized Intuit sandbox test. This d
 
 Use an Intuit Developer sandbox company for the first end-to-end test. A paid QuickBooks Online subscription or trial is not required for normal development testing, and a real trial company risks writing test customers, invoices, and payments into live books.
 
+## Current QuoteFly staging topology
+
+As of 2026-08-31, the isolated provider test surface is:
+
+- web: `https://staging.quotefly.us`;
+- API: `https://api-staging.quotefly.us`;
+- OAuth callback: `https://api-staging.quotefly.us/v1/integrations/quickbooks/callback`;
+- future webhook endpoint: `https://api-staging.quotefly.us/v1/integrations/quickbooks/webhook`.
+
+DNS, TLS, API liveness, database readiness, trusted-origin CORS, least-privileged runtime login, staging-page `noindex`, and the OAuth authorization handoff have been verified. Public staging signup is disabled outside a short, monitored owner-registration window. The staging API currently permits OAuth/provider connection only. Hosted payments, reconciliation, CDC, and webhook processing remain disabled, and no webhook verifier is configured.
+
+The remaining OAuth proof is an owner action in a real browser: approve the dedicated Intuit sandbox company, return to QuoteFly, verify the expected company, and stop before **Confirm setup**. Do not use a live QuickBooks company.
+
 Official references:
 
 - [Intuit Developer: sandbox environments](https://developer.intuit.com/app/developer/qbo/docs/develop/sandboxes)
@@ -19,10 +32,14 @@ Official references:
 - one dedicated sandbox company containing sample data only;
 - an HTTPS staging web origin and API origin that are not QuoteFly production origins;
 - access to the staging provider secret manager and Intuit app settings;
-- a public HTTPS webhook endpoint for webhook and reconciliation evidence;
+- a public HTTPS webhook endpoint for the later accounting and reconciliation evidence;
 - a named evidence owner who can record the candidate SHA and test outcomes.
 
 Do not paste client secrets, token-encryption keys, refresh tokens, webhook verifier values, OAuth codes, or hosted invoice links into Git, tickets, screenshots, chat, or retained logs.
+
+Follow the [infrastructure secret-handling protocol](../security/infrastructure-secret-handling.md) for every staging setup, credential disclosure, and rotation. Never run a provider command that streams raw environment values into a terminal, CI log, agent transcript, or screenshot. Use the provider dashboard's secret editor for writes and its masked-value view for manual review. For the connection-only proof, run `npm run infra:variables:audit -- --profile quickbooks-oauth`. Use the `quickbooks` profile only for the later full accounting runtime. Both profiles emit fixed names, classifications, and configured/missing status only, never values. Do not use a downloaded `.env` file or a provider CLI environment dump as evidence.
+
+Neon and other managed-PostgreSQL rehearsals must also follow the [PostgreSQL 16+ migration-portability protocol](../deployment/postgresql-migration-portability.md). The QuickBooks quarantine-retention role is cluster-wide, so a second database in one branch is an intentional release test, not an interchangeable application database.
 
 ## 1. Create the Intuit test environment
 
@@ -32,13 +49,13 @@ Do not paste client secrets, token-encryption keys, refresh tokens, webhook veri
 4. Create or select a dedicated QuickBooks Online sandbox company.
 5. Add the exact QuoteFly staging callback URL to the app's redirect URI list:
 
-   `https://<staging-api-origin>/v1/integrations/quickbooks/callback`
+   `https://api-staging.quotefly.us/v1/integrations/quickbooks/callback`
 
-6. Configure the staging webhook endpoint in the Intuit app:
+6. Record, but do not enable, the staging webhook endpoint for the later accounting proof:
 
-   `https://<staging-api-origin>/v1/integrations/quickbooks/webhook`
+   `https://api-staging.quotefly.us/v1/integrations/quickbooks/webhook`
 
-7. Select the current **CloudEvents v1.0** payload format and subscribe only to the supported `Invoice`, `Payment`, and `RefundReceipt` entities. QuoteFly reconciles create, update, and void operations for those entities. Delete, merge, and unknown operations are durably quarantined before acknowledgement and never enter the provider-fetch worker because QuoteFly does not yet have an authoritative provider-deletion projection. QuoteFly also accepts Intuit's legacy `eventNotifications` envelope during the provider transition; sandbox evidence must record the selected portal format and prove unsupported operations land in quarantine or the terminal inbox, not the worker queue.
+7. Before the later accounting proof, select the current **CloudEvents v1.0** payload format and subscribe only to the supported `Invoice`, `Payment`, and `RefundReceipt` entities. Do not send webhooks to OAuth-only staging. QuoteFly reconciles create, update, and void operations for those entities only after the full accounting runtime is separately enabled and verified.
 
 The redirect URI must match exactly. Keep sandbox and production credentials, callback URLs, webhook configuration, realm IDs, and evidence separate.
 
@@ -54,18 +71,20 @@ QUICKBOOKS_CLIENT_SECRET=<Intuit development client secret>
 QUICKBOOKS_ENVIRONMENT=sandbox
 QUICKBOOKS_SANDBOX_STAGING_ORIGINS=https://<staging-web-origin>,https://<staging-api-origin>
 QUICKBOOKS_REDIRECT_URI=https://<staging-api-origin>/v1/integrations/quickbooks/callback
-QUICKBOOKS_WEBHOOK_VERIFIER=<Intuit sandbox webhook verifier>
 QUICKBOOKS_TOKEN_ENCRYPTION_KEY=<independent random secret of at least 32 characters>
 ```
 
-Keep provider features off while validating configuration:
+Enable only the connection handshake while keeping every accounting workflow off:
 
 ```text
-QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false
+QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=true
+QUICKBOOKS_OAUTH_ONLY_MODE=true
 QUICKBOOKS_HOSTED_PAYMENTS_ENABLED=false
 QUICKBOOKS_RECONCILIATION_WORKER_ENABLED=false
 QUICKBOOKS_CDC_WORKER_ENABLED=false
 ```
+
+`QUICKBOOKS_WEBHOOK_VERIFIER` must remain unset in this profile. OAuth-only mode permits status, connect, callback, and disconnect; it rejects setup confirmation, provider search and mapping, invoice sync, hosted links, webhooks, reconciliation, and CDC with a stable `QUICKBOOKS_OAUTH_ONLY_MODE` response.
 
 Before changing a flag, record approval, exact candidate SHA, migrated staging database, callback/webhook URLs, test company, evidence owner, and rollback owner. The API refuses sandbox workflows on QuoteFly production origins.
 
@@ -76,19 +95,20 @@ Before changing a flag, record approval, exact candidate SHA, migrated staging d
 3. Start the API with the least-privileged `quotefly_runtime` database role.
 4. Confirm `/v1/health` and `/v1/ready` succeed.
 5. Confirm provider logs and access logs do not retain callback query strings or hosted invoice links.
-6. Confirm alert destinations exist for OAuth failures, webhook age/retries/dead letters, reconciliation-required operations, token revocation, and CDC lag.
+6. Confirm an alert destination exists for OAuth and token-revocation failures. Webhook, reconciliation, and CDC alerts are required before the later accounting proof.
+7. Run `node scripts/quickbooks-staging-oauth-smoke.mjs`. It is hard-locked to the approved staging API, creates a disposable staging tenant, verifies the pre-connection fail-closed behavior and Intuit authorization handoff, and never prints credentials, OAuth state, or the authorization URL.
 
-Only then enable the approved staging flags. Start with connection and mapping evidence before hosted payments and workers.
+Only then run the connection proof. Mapping, hosted payments, webhooks, and workers remain outside this stage.
 
 ## 4. Connect from QuoteFly
 
-1. Sign in to the staging QuoteFly workspace as its current owner or admin.
+1. Ask the staging operator to open a short registration window, create the dedicated test owner, and have the operator disable public registration again. If that owner already exists, sign in normally without reopening registration.
 2. Open **Settings → Workspace → QuickBooks Online**.
 3. Open **Setup guide**, confirm the environment says **Sandbox**, and select **Connect QuickBooks**.
 4. On Intuit's authorization screen, choose the dedicated sandbox company and approve accounting access.
 5. Confirm Intuit returns to QuoteFly Settings and the expected sandbox company name appears.
 6. Review every readiness check. Do not confirm a different or unexpected company.
-7. Select **Confirm setup** only when the required checks pass.
+7. For the OAuth-only proof, stop before **Confirm setup** and record that the expected company is connected. Setup confirmation belongs to the later reviewed mapping/reconciliation phase.
 
 Members cannot view or manage provider setup. QuoteFly stores OAuth tokens encrypted on the API; the browser never receives them.
 

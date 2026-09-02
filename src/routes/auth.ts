@@ -143,6 +143,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   // POST /v1/auth/signup
   app.post("/auth/signup", signUpRateLimit, async (request, reply) => {
+    if (!app.env.PUBLIC_SIGNUP_ENABLED) {
+      return reply.code(503).send({
+        error: "New account registration is temporarily unavailable.",
+        code: "PUBLIC_SIGNUP_DISABLED",
+      });
+    }
     const payload = SignUpSchema.parse(request.body);
     const email = payload.email.toLowerCase();
 

@@ -5,6 +5,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { buildAccessContext } from "../lib/access-policy";
 import { getJwtClaims } from "../lib/auth";
+import { buildTenantEntitlements } from "../lib/subscription";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
   buildQuickBooksAdminRedirect,
@@ -273,6 +274,47 @@ class QuickBooksRealmChangeBlockedError extends Error {}
 class QuickBooksOAuthStateReplayError extends Error {}
 class QuickBooksCredentialLifecycleBlockedError extends Error {}
 
+type QuickBooksRealmSwitchCandidate = Readonly<{
+  realmId: string;
+  status: string;
+  accessTokenEncrypted: string | null;
+  refreshTokenEncrypted: string | null;
+  disconnectedAtUtc: Date | null;
+  disconnectRequestedAtUtc: Date | null;
+  tokenRefreshClaimHash: string | null;
+  setupConfirmedAtUtc: Date | null;
+  setupConfirmedByTenantUserId: string | null;
+  lastSyncAtUtc: Date | null;
+  lastWebhookAtUtc: Date | null;
+  deletedAtUtc: Date | null;
+  realmBinding: Readonly<{ active: boolean }> | null;
+  _count: Readonly<{
+    customerMaps: number;
+    itemMaps: number;
+    invoiceSyncs: number;
+    invoiceOperations: number;
+    webhookEvents: number;
+  }>;
+}>;
+
+function canReplaceUnusedDisconnectedQuickBooksRealm(
+  connection: QuickBooksRealmSwitchCandidate,
+): boolean {
+  return connection.status === "DISCONNECTED"
+    && connection.accessTokenEncrypted === null
+    && connection.refreshTokenEncrypted === null
+    && connection.disconnectedAtUtc !== null
+    && connection.disconnectRequestedAtUtc === null
+    && connection.tokenRefreshClaimHash === null
+    && connection.setupConfirmedAtUtc === null
+    && connection.setupConfirmedByTenantUserId === null
+    && connection.lastSyncAtUtc === null
+    && connection.lastWebhookAtUtc === null
+    && connection.deletedAtUtc === null
+    && connection.realmBinding?.active === false
+    && Object.values(connection._count).every((count) => count === 0);
+}
+
 const QuickBooksSetupConnectionSelect = Prisma.validator<Prisma.QuickBooksConnectionSelect>()({
   id: true,
   environment: true,
@@ -376,9 +418,18 @@ function sendQuickBooksInvoiceOperationError(reply: FastifyReply, error: unknown
 }
 
 export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
+  const QuickBooksConnectRateLimit = {
+    config: {
+      rateLimit: {
+        max: app.env.NODE_ENV === "test" ? 10_000 : 5,
+        timeWindow: "15 minutes",
+      },
+    },
+  } as const;
   const quickBooksSetupRuntime = (reconciliationWorkerHealthy = false) => ({
     providerConfigured: isQuickBooksConfigured(app.env),
     providerWorkflowsEnabled: app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
+    oauthOnlyMode: app.env.QUICKBOOKS_OAUTH_ONLY_MODE,
     webhookConfigured: isQuickBooksWebhookConfigured(app.env),
     hostedPaymentsEnabled: app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED,
     reconciliationWorkerEnabled: app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED,
@@ -415,8 +466,22 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(503).send({ error: QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE });
   }
 
+  function accountingWorkflowsAvailable(): boolean {
+    return app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED && !app.env.QUICKBOOKS_OAUTH_ONLY_MODE;
+  }
+
+  function accountingWorkflowsUnavailable(reply: FastifyReply) {
+    if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) {
+      return providerWorkflowsUnavailable(reply);
+    }
+    return reply.code(503).send({
+      error: "QuickBooks accounting workflows are paused while connection-only validation is active.",
+      code: "QUICKBOOKS_OAUTH_ONLY_MODE",
+    });
+  }
+
   function reconciliationRuntimeAvailable(): boolean {
-    return app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED
+    return accountingWorkflowsAvailable()
       && app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED
       && isQuickBooksWebhookConfigured(app.env);
   }
@@ -668,7 +733,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       // Validate ingress even while paused, then deliberately return a
       // retryable error instead of acknowledging and discarding a provider
       // change that may need a later refresh after workflows are re-enabled.
-      if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
 
       const persisted = await persistQuickBooksWebhookNotifications(app.prisma, notifications);
       request.log.info(
@@ -714,6 +779,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         enabled: isQuickBooksConfigured(app.env) && app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
         configured: isQuickBooksConfigured(app.env),
         providerWorkflowsEnabled: app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
+        oauthOnlyMode: app.env.QUICKBOOKS_OAUTH_ONLY_MODE,
         webhookConfigured: isQuickBooksWebhookConfigured(app.env),
         canManage: true,
         environment: app.env.QUICKBOOKS_ENVIRONMENT,
@@ -742,8 +808,11 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     "/integrations/quickbooks/connect",
-    { preHandler: [app.authenticate] },
+    { ...QuickBooksConnectRateLimit, preHandler: [app.authenticate] },
     async (request, reply) => {
+      // OAuth state and its authorization URL are credential-adjacent. Never
+      // allow an intermediary or a shared browser cache to retain this response.
+      reply.header("Cache-Control", "private, no-store");
       const claims = getJwtClaims(request);
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       const access = buildAccessContext(request);
@@ -761,6 +830,35 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       });
       const stateHash = createHash("sha256").update(state, "utf8").digest("hex");
       const credentialLifecycleBlocked = await withTenantRlsContext(app.prisma, claims.tenantId, async (transaction) => {
+        const now = new Date();
+        await transaction.$queryRaw(Prisma.sql`
+          SELECT 1::int AS "locked"
+          FROM (
+            SELECT pg_advisory_xact_lock(
+              hashtextextended(${`quickbooks-oauth-init:${claims.tenantId}:${claims.userId}`}, 0)
+            )
+          ) acquired
+        `);
+        await transaction.quickBooksOAuthState.deleteMany({
+          where: {
+            tenantId: claims.tenantId,
+            OR: [
+              { expiresAtUtc: { lte: now } },
+              {
+                consumedAtUtc: { not: null },
+                createdAt: { lt: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
+              },
+            ],
+          },
+        });
+        await transaction.quickBooksOAuthState.updateMany({
+          where: {
+            tenantId: claims.tenantId,
+            userId: claims.userId,
+            consumedAtUtc: null,
+          },
+          data: { consumedAtUtc: now },
+        });
         const connection = await transaction.quickBooksConnection.findFirst({
           where: { tenantId: claims.tenantId, deletedAtUtc: null },
           select: {
@@ -782,7 +880,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             quickBooksConnectionId: connection?.id ?? null,
             userId: claims.userId,
             stateHash,
-            expiresAtUtc: new Date(Date.now() + 10 * 60 * 1000),
+            expiresAtUtc: new Date(now.getTime() + 10 * 60 * 1000),
           },
         });
         await recordQuickBooksConnectionEvent(transaction, {
@@ -810,6 +908,11 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
   );
 
   app.get("/integrations/quickbooks/callback", async (request, reply) => {
+    // OAuth query parameters are credential-adjacent. Set these before query
+    // validation so success, denied, invalid-state, and malformed callbacks
+    // all avoid cache retention and referrer propagation.
+    reply.header("Cache-Control", "private, no-store");
+    reply.header("Referrer-Policy", "no-referrer");
     const query = QuickBooksCallbackQuerySchema.parse(request.query);
     const failureRedirect = (state: string) => reply.redirect(buildQuickBooksAdminRedirect(app.env, state));
 
@@ -859,6 +962,29 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       );
       if (!stateConsumed) throw new QuickBooksOAuthStateReplayError();
 
+      // OAuth Security BCP requires the callback to remain bound to the user
+      // agent that initiated authorization. A valid state alone is not enough:
+      // revalidate the HttpOnly QuoteFly session and require the exact actor.
+      await app.authenticate(request, reply);
+      if (reply.sent) return reply;
+      const callbackClaims = getJwtClaims(request);
+      if (
+        callbackClaims.tenantId !== verifiedState.tenantId
+        || callbackClaims.userId !== verifiedState.userId
+      ) {
+        return failureRedirect("quickbooks_session_mismatch");
+      }
+      const callbackMembership = request.liveAuthMembership;
+      if (!callbackMembership) return failureRedirect("quickbooks_session_mismatch");
+      const callbackEntitlements = buildTenantEntitlements(
+        callbackMembership.tenant,
+        new Date(),
+        { userEmail: callbackMembership.user.email },
+      );
+      if (!callbackEntitlements.hasWorkspaceAccess) {
+        return failureRedirect("quickbooks_billing_required");
+      }
+
       if (query.error) return failureRedirect("quickbooks_denied");
       if (!query.code || !query.realmId) return failureRedirect("quickbooks_error");
       const callbackRealmId = query.realmId;
@@ -887,36 +1013,60 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         return failureRedirect("quickbooks_realm_in_use");
       }
 
-      // A tenant connection is one immutable QuickBooks company generation in
-      // this bounded release. Never exchange a code for another realm and then
-      // mutate existing mappings or uncertain operations onto that company.
-       const existingTenantConnection = await withTenantRlsContext(app.prisma, verifiedState.tenantId, (transaction) =>
-         transaction.quickBooksConnection.findUnique({
-           where: { tenantId: verifiedState.tenantId },
-           select: {
-             id: true,
-             realmId: true,
-             status: true,
-             disconnectRequestedAtUtc: true,
-             tokenRefreshClaimHash: true,
-           },
-         }),
-       );
-      if (existingTenantConnection && existingTenantConnection.realmId !== callbackRealmId) {
-         return failureRedirect("quickbooks_realm_change_blocked");
-       }
-       if (
-         (stateConsumed.quickBooksConnectionId ?? null) !== (existingTenantConnection?.id ?? null)
-         || existingTenantConnection?.status === "REVOCATION_PENDING"
-         || existingTenantConnection?.status === "ERROR"
-         || existingTenantConnection?.disconnectRequestedAtUtc
-         || existingTenantConnection?.tokenRefreshClaimHash
-       ) {
-         throw new QuickBooksCredentialLifecycleBlockedError();
-       }
+      // A used connection remains permanently bound to its original company.
+      // The only supported correction is an unused, unconfirmed connection
+      // that has completed token revocation and has no accounting history.
+      const existingTenantConnection = await withTenantRlsContext(
+        app.prisma,
+        verifiedState.tenantId,
+        (transaction) => transaction.quickBooksConnection.findUnique({
+          where: { tenantId: verifiedState.tenantId },
+          select: {
+            id: true,
+            realmId: true,
+            status: true,
+            accessTokenEncrypted: true,
+            refreshTokenEncrypted: true,
+            disconnectedAtUtc: true,
+            disconnectRequestedAtUtc: true,
+            tokenRefreshClaimHash: true,
+            setupConfirmedAtUtc: true,
+            setupConfirmedByTenantUserId: true,
+            lastSyncAtUtc: true,
+            lastWebhookAtUtc: true,
+            deletedAtUtc: true,
+            realmBinding: { select: { active: true } },
+            _count: {
+              select: {
+                customerMaps: true,
+                itemMaps: true,
+                invoiceSyncs: true,
+                invoiceOperations: true,
+                webhookEvents: true,
+              },
+            },
+          },
+        }),
+      );
+      if (
+        existingTenantConnection
+        && existingTenantConnection.realmId !== callbackRealmId
+        && !canReplaceUnusedDisconnectedQuickBooksRealm(existingTenantConnection)
+      ) {
+        return failureRedirect("quickbooks_realm_change_blocked");
+      }
+      if (
+        (stateConsumed.quickBooksConnectionId ?? null) !== (existingTenantConnection?.id ?? null)
+        || existingTenantConnection?.status === "REVOCATION_PENDING"
+        || existingTenantConnection?.status === "ERROR"
+        || existingTenantConnection?.disconnectRequestedAtUtc
+        || existingTenantConnection?.tokenRefreshClaimHash
+      ) {
+        throw new QuickBooksCredentialLifecycleBlockedError();
+      }
 
-       const tokenResponse = await exchangeQuickBooksAuthorizationCode(app.env, query.code);
-       issuedRefreshToken = tokenResponse.refresh_token;
+      const tokenResponse = await exchangeQuickBooksAuthorizationCode(app.env, query.code);
+      issuedRefreshToken = tokenResponse.refresh_token;
       const companyInfo = await fetchQuickBooksCompanyInfo(app.env, callbackRealmId, tokenResponse.access_token);
       if (companyInfo.realmId !== callbackRealmId) {
         throw new QuickBooksProviderError("QUICKBOOKS_COMPANY_REALM_MISMATCH", false);
@@ -929,8 +1079,8 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         verifiedState.tenantId,
         verifiedState.userId,
       );
-       if (!stillHasManagerAccess) {
-         throw new QuickBooksCredentialLifecycleBlockedError();
+      if (!stillHasManagerAccess) {
+        throw new QuickBooksCredentialLifecycleBlockedError();
       }
 
       const now = new Date();
@@ -945,23 +1095,65 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             )
           ) acquired
         `);
-         const currentConnection = await transaction.quickBooksConnection.findUnique({
-           where: { tenantId: verifiedState.tenantId },
-           select: {
-             id: true,
-             realmId: true,
-             status: true,
-             refreshTokenEncrypted: true,
-             disconnectRequestedAtUtc: true,
-             tokenRefreshClaimHash: true,
-           },
-         });
+        const currentConnection = await transaction.quickBooksConnection.findUnique({
+          where: { tenantId: verifiedState.tenantId },
+          select: {
+            id: true,
+            realmId: true,
+            status: true,
+            accessTokenEncrypted: true,
+            refreshTokenEncrypted: true,
+            disconnectedAtUtc: true,
+            disconnectRequestedAtUtc: true,
+            tokenRefreshClaimHash: true,
+            setupConfirmedAtUtc: true,
+            setupConfirmedByTenantUserId: true,
+            lastSyncAtUtc: true,
+            lastWebhookAtUtc: true,
+            deletedAtUtc: true,
+            realmBinding: { select: { active: true } },
+            _count: {
+              select: {
+                customerMaps: true,
+                itemMaps: true,
+                invoiceSyncs: true,
+                invoiceOperations: true,
+                webhookEvents: true,
+              },
+            },
+          },
+        });
          // Lock the exact selected-tenant actor, user, and tenant rows before
          // persisting credentials. A concurrent demotion/deletion must either
          // commit first and be observed here, or wait until this authorization
          // decision and credential write have committed atomically.
-         const [actor] = await transaction.$queryRaw<Array<{ id: string; role: string }>>(Prisma.sql`
-           SELECT membership."id", membership."role"
+         const [actor] = await transaction.$queryRaw<Array<{
+           id: string;
+           role: string;
+           email: string;
+           authVersion: number;
+           subscriptionStatus: string;
+           subscriptionPlanCode: string | null;
+           stripeCustomerId: string | null;
+           stripeSubscriptionId: string | null;
+           trialStartsAtUtc: Date | null;
+           trialEndsAtUtc: Date | null;
+           subscriptionCurrentPeriodStartUtc: Date | null;
+           subscriptionCurrentPeriodEndUtc: Date | null;
+         }>>(Prisma.sql`
+           SELECT
+             membership."id",
+             membership."role",
+             account."email",
+             account."authVersion",
+             selected_tenant."subscriptionStatus",
+             selected_tenant."subscriptionPlanCode",
+             selected_tenant."stripeCustomerId",
+             selected_tenant."stripeSubscriptionId",
+             selected_tenant."trialStartsAtUtc",
+             selected_tenant."trialEndsAtUtc",
+             selected_tenant."subscriptionCurrentPeriodStartUtc",
+             selected_tenant."subscriptionCurrentPeriodEndUtc"
            FROM "TenantUser" membership
            INNER JOIN "User" account ON account."id" = membership."userId"
            INNER JOIN "Tenant" selected_tenant ON selected_tenant."id" = membership."tenantId"
@@ -972,22 +1164,34 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
              AND selected_tenant."deletedAtUtc" IS NULL
            FOR UPDATE OF membership, account, selected_tenant
          `);
-         if (!actor || !canManageQuickBooks(actor.role)) {
-           throw new QuickBooksCredentialLifecycleBlockedError();
-         }
-        if (currentConnection && currentConnection.realmId !== callbackRealmId) {
-           throw new QuickBooksRealmChangeBlockedError();
-         }
          if (
-           (stateConsumed.quickBooksConnectionId ?? null) !== (currentConnection?.id ?? null)
-           || currentConnection?.status === "REVOCATION_PENDING"
-           || currentConnection?.status === "ERROR"
-           || currentConnection?.disconnectRequestedAtUtc
-           || currentConnection?.tokenRefreshClaimHash
+           !actor
+           || actor.authVersion !== callbackClaims.authVersion
+           || !canManageQuickBooks(actor.role)
+           || !buildTenantEntitlements(actor, new Date(), { userEmail: actor.email }).hasWorkspaceAccess
          ) {
            throw new QuickBooksCredentialLifecycleBlockedError();
          }
-         const credentialData = {
+        const switchingRealm = Boolean(
+          currentConnection && currentConnection.realmId !== callbackRealmId,
+        );
+        if (
+          currentConnection
+          && switchingRealm
+          && !canReplaceUnusedDisconnectedQuickBooksRealm(currentConnection)
+        ) {
+          throw new QuickBooksRealmChangeBlockedError();
+        }
+        if (
+          (stateConsumed.quickBooksConnectionId ?? null) !== (currentConnection?.id ?? null)
+          || currentConnection?.status === "REVOCATION_PENDING"
+          || currentConnection?.status === "ERROR"
+          || currentConnection?.disconnectRequestedAtUtc
+          || currentConnection?.tokenRefreshClaimHash
+        ) {
+          throw new QuickBooksCredentialLifecycleBlockedError();
+        }
+        const credentialData = {
            environment: app.env.QUICKBOOKS_ENVIRONMENT,
            companyName: companyInfo.companyName,
            status: "CONNECTED" as const,
@@ -1010,32 +1214,35 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
            lastError: null,
            deletedAtUtc: null,
          };
-         let savedConnection: { id: string };
-         if (!currentConnection) {
-           savedConnection = await transaction.quickBooksConnection.create({
-             data: {
-               tenantId: verifiedState.tenantId,
-               realmId: callbackRealmId,
-               ...credentialData,
-             },
-             select: { id: true },
-           });
-         } else {
-           const updated = await transaction.quickBooksConnection.updateMany({
-             where: {
-               id: currentConnection.id,
-               tenantId: verifiedState.tenantId,
-               realmId: callbackRealmId,
-               status: currentConnection.status,
-               refreshTokenEncrypted: currentConnection.refreshTokenEncrypted,
-               disconnectRequestedAtUtc: null,
-               tokenRefreshClaimHash: null,
-             },
-             data: credentialData,
-           });
-           if (updated.count !== 1) throw new QuickBooksCredentialLifecycleBlockedError();
-           savedConnection = { id: currentConnection.id };
-         }
+        let savedConnection: { id: string };
+        if (!currentConnection) {
+          savedConnection = await transaction.quickBooksConnection.create({
+            data: {
+              tenantId: verifiedState.tenantId,
+              realmId: callbackRealmId,
+              ...credentialData,
+            },
+            select: { id: true },
+          });
+        } else {
+          const updated = await transaction.quickBooksConnection.updateMany({
+            where: {
+              id: currentConnection.id,
+              tenantId: verifiedState.tenantId,
+              realmId: currentConnection.realmId,
+              status: currentConnection.status,
+              refreshTokenEncrypted: currentConnection.refreshTokenEncrypted,
+              disconnectRequestedAtUtc: null,
+              tokenRefreshClaimHash: null,
+            },
+            data: {
+              ...credentialData,
+              ...(switchingRealm ? { realmId: callbackRealmId } : {}),
+            },
+          });
+          if (updated.count !== 1) throw new QuickBooksCredentialLifecycleBlockedError();
+          savedConnection = { id: currentConnection.id };
+        }
         if (currentConnection) {
           await invalidateQuickBooksHostedPaymentLinks(
             transaction,
@@ -1067,6 +1274,9 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             changedSinceUtc: new Date(Date.now() - 5 * 60 * 1000),
           },
           update: {
+            changedSinceUtc: new Date(now.getTime() - 5 * 60 * 1000),
+            lastAttemptAtUtc: null,
+            lastSucceededAtUtc: null,
             nextAttemptAtUtc: null,
             attemptCount: 0,
             lastErrorCode: null,
@@ -1078,7 +1288,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           quickBooksConnectionId: savedConnection.id,
           actorTenantUserId: actor.id,
           requestId: request.id,
-          action: currentConnection ? "RECONNECTED" : "CONNECTED",
+          action: switchingRealm ? "COMPANY_SWITCHED" : currentConnection ? "RECONNECTED" : "CONNECTED",
           outcome: "SUCCEEDED",
           connectionGeneration: await nextQuickBooksConnectionGeneration(transaction, verifiedState.tenantId),
         });
@@ -1163,6 +1373,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const claims = getJwtClaims(request);
 
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       const { quoteId } = QuickBooksQuotePreviewParamsSchema.parse(request.params);
 
       try {
@@ -1229,6 +1440,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const body = QuickBooksSetupConfirmationBodySchema.parse(request.body);
       const claims = getJwtClaims(request);
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       const access = buildAccessContext(request);
       reply.header("Cache-Control", "private, no-store");
 
@@ -1314,7 +1526,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const claims = getJwtClaims(request);
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       const query = QuickBooksMappingSearchBodySchema.parse(request.body);
-      if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       const connection = await loadConnectedQuickBooksProvider(access.tenantId);
       if (!connection) return reply.code(409).send({ error: "Reconnect QuickBooks before searching customers.", code: "QUICKBOOKS_NOT_CONNECTED" });
       const accessToken = await getAccessToken(connection);
@@ -1338,7 +1550,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const claims = getJwtClaims(request);
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       const query = QuickBooksMappingSearchBodySchema.parse(request.body);
-      if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       const connection = await loadConnectedQuickBooksProvider(access.tenantId);
       if (!connection) return reply.code(409).send({ error: "Reconnect QuickBooks before searching items.", code: "QUICKBOOKS_NOT_CONNECTED" });
       const accessToken = await getAccessToken(connection);
@@ -1362,7 +1574,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const claims = getJwtClaims(request);
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       const body = QuickBooksCustomerMappingReviewBodySchema.parse(request.body);
-      if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       const connection = await loadConnectedQuickBooksProvider(access.tenantId);
       if (!connection) return reply.code(409).send({ error: "Reconnect QuickBooks before reviewing mappings.", code: "QUICKBOOKS_NOT_CONNECTED" });
       try {
@@ -1393,7 +1605,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const claims = getJwtClaims(request);
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       const body = QuickBooksItemMappingReviewBodySchema.parse(request.body);
-      if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       const connection = await loadConnectedQuickBooksProvider(access.tenantId);
       if (!connection) return reply.code(409).send({ error: "Reconnect QuickBooks before reviewing mappings.", code: "QUICKBOOKS_NOT_CONNECTED" });
       try {
@@ -1424,6 +1636,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const access = buildAccessContext(request);
       const { invoiceId } = QuickBooksInvoiceParamsSchema.parse(request.params);
       const paymentReview = QuickBooksInvoicePreviewBodySchema.parse(request.body ?? {});
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       if (
         (paymentReview.allowOnlineAchPayment || paymentReview.allowOnlineCardPayment)
         && !hostedPaymentsRuntimeAvailable()
@@ -1463,7 +1676,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const { invoiceId } = QuickBooksInvoiceParamsSchema.parse(request.params);
       const body = QuickBooksInvoicePublishBodySchema.parse(request.body);
       const key = quickBooksIdempotencyKey(request);
-      if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       if (!reconciliationRuntimeAvailable()) return reconciliationRuntimeUnavailable(reply);
       if (
         (body.allowOnlineAchPayment || body.allowOnlineCardPayment)
@@ -1701,7 +1914,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const access = buildAccessContext(request);
       const { invoiceId } = QuickBooksInvoiceParamsSchema.parse(request.params);
-      if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       if (!isQuickBooksConfigured(app.env)) {
         return reply.code(503).send({
           error: "QuickBooks integration is not configured yet.",
@@ -1884,7 +2097,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const claims = getJwtClaims(request);
       const { invoiceId } = QuickBooksInvoiceParamsSchema.parse(request.params);
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
-      if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) return providerWorkflowsUnavailable(reply);
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       try {
         const reconciliation = await reconcileQuickBooksInvoice({
           prisma: app.prisma,

@@ -5,11 +5,86 @@
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'quotefly_quarantine_retention') THEN
+    -- Managed PostgreSQL owners are not true superusers. New roles already
+    -- default to NOSUPERUSER and NOBYPASSRLS, so do not request attributes
+    -- that Neon correctly reserves for a real superuser.
     CREATE ROLE quotefly_quarantine_retention
-      NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
-  ELSE
-    ALTER ROLE quotefly_quarantine_retention
-      NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+      NOLOGIN NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_roles
+    WHERE rolname = 'quotefly_quarantine_retention'
+      AND (
+        rolsuper
+        OR rolbypassrls
+        OR rolcanlogin
+        OR rolcreatedb
+        OR rolcreaterole
+        OR rolinherit
+        OR rolreplication
+      )
+  ) THEN
+    RAISE EXCEPTION 'quotefly_quarantine_retention has unsafe role attributes';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_auth_members membership
+    INNER JOIN pg_roles member_role ON member_role.oid = membership.member
+    WHERE member_role.rolname = 'quotefly_quarantine_retention'
+  ) THEN
+    RAISE EXCEPTION 'quotefly_quarantine_retention must not inherit membership in another role';
+  END IF;
+
+  -- A prior interrupted/provider-managed run can leave an inert self-granted
+  -- row beside the provider's bounded ADMIN grant. Remove only that exact
+  -- duplicate grantor row before validating the incoming boundary.
+  IF EXISTS (
+    SELECT 1
+    FROM pg_auth_members membership
+    INNER JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
+    INNER JOIN pg_roles member_role ON member_role.oid = membership.member
+    INNER JOIN pg_roles grantor_role ON grantor_role.oid = membership.grantor
+    WHERE granted_role.rolname = 'quotefly_quarantine_retention'
+      AND member_role.rolname = current_user
+      AND grantor_role.rolname = current_user
+      AND NOT membership.admin_option
+      AND NOT membership.set_option
+      AND NOT membership.inherit_option
+  ) AND EXISTS (
+    SELECT 1
+    FROM pg_auth_members membership
+    INNER JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
+    INNER JOIN pg_roles member_role ON member_role.oid = membership.member
+    WHERE granted_role.rolname = 'quotefly_quarantine_retention'
+      AND member_role.rolname = current_user
+      AND membership.admin_option
+      AND NOT membership.set_option
+      AND NOT membership.inherit_option
+  ) THEN
+    EXECUTE format(
+      'REVOKE quotefly_quarantine_retention FROM %I GRANTED BY %I',
+      current_user,
+      current_user
+    );
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_auth_members membership
+    INNER JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
+    INNER JOIN pg_roles member_role ON member_role.oid = membership.member
+    WHERE granted_role.rolname = 'quotefly_quarantine_retention'
+      AND (
+        member_role.rolname <> current_user
+        OR NOT membership.admin_option
+        OR membership.set_option
+        OR membership.inherit_option
+      )
+  ) THEN
+    RAISE EXCEPTION 'quotefly_quarantine_retention has an unsafe incoming membership';
   END IF;
 END
 $$;
@@ -92,8 +167,38 @@ $$;
 REVOKE ALL ON FUNCTION public.quotefly_purge_quickbooks_unknown_realm_quarantine() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.quotefly_purge_quickbooks_unknown_realm_quarantine()
   TO quotefly_runtime;
-GRANT quotefly_quarantine_retention TO CURRENT_USER;
+-- PostgreSQL 16 grants a role creator ADMIN but not SET by default. Temporarily
+-- enable SET for the owner transfer, then retain only a non-inheriting,
+-- non-SET admin membership so later databases in the same cluster can repeat
+-- this migration without a superuser.
+GRANT quotefly_quarantine_retention TO CURRENT_USER
+  WITH SET TRUE, INHERIT FALSE;
 ALTER FUNCTION public.quotefly_purge_quickbooks_unknown_realm_quarantine()
   OWNER TO quotefly_quarantine_retention;
-REVOKE quotefly_quarantine_retention FROM CURRENT_USER;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_auth_members membership
+    INNER JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
+    INNER JOIN pg_roles member_role ON member_role.oid = membership.member
+    INNER JOIN pg_roles grantor_role ON grantor_role.oid = membership.grantor
+    WHERE granted_role.rolname = 'quotefly_quarantine_retention'
+      AND member_role.rolname = current_user
+      AND grantor_role.rolname = current_user
+      AND membership.admin_option
+  ) THEN
+    EXECUTE format(
+      'GRANT quotefly_quarantine_retention TO %I WITH SET FALSE, INHERIT FALSE',
+      current_user
+    );
+  ELSE
+    EXECUTE format(
+      'REVOKE quotefly_quarantine_retention FROM %I GRANTED BY %I',
+      current_user,
+      current_user
+    );
+  END IF;
+END
+$$;
 REVOKE CREATE ON SCHEMA public FROM quotefly_quarantine_retention;

@@ -32,6 +32,7 @@ type QuickBooksSetupPanelProps = {
 const checkKeys: Record<QuickBooksSetupCheckKey, string> = {
   PROVIDER_CONFIGURED: "admin.quickBooksSetup.checks.providerConfigured",
   PROVIDER_WORKFLOWS_ENABLED: "admin.quickBooksSetup.checks.workflowsEnabled",
+  ACCOUNTING_WORKFLOWS_ENABLED: "admin.quickBooksSetup.checks.accountingWorkflowsEnabled",
   WEBHOOK_CONFIGURED: "admin.quickBooksSetup.checks.webhookConfigured",
   HOSTED_PAYMENTS_ENABLED: "admin.quickBooksSetup.checks.hostedPaymentsEnabled",
   RECONCILIATION_WORKER_ENABLED: "admin.quickBooksSetup.checks.reconciliationWorkerEnabled",

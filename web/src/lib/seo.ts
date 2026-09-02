@@ -22,6 +22,7 @@ export function setSEOMetadata(props: SEOProps) {
   const hasBrandInTitle = /\bquotefly\b/i.test(props.title);
   const resolvedTitle = hasBrandInTitle ? props.title : `${props.title} | QuoteFly`;
   const isPrivateRoute = window.location.pathname === "/app" || window.location.pathname.startsWith("/app/");
+  const publicSearchIndexingDisabled = import.meta.env.VITE_PUBLIC_SEARCH_INDEXING?.trim() === "disabled";
   const requestedCanonicalPath = props.canonicalUrl
     ? new URL(props.canonicalUrl, PUBLIC_SITE_URL).pathname
     : window.location.pathname;
@@ -73,7 +74,9 @@ export function setSEOMetadata(props: SEOProps) {
   }
   robots.setAttribute(
     "content",
-    isPrivateRoute ? "noindex,nofollow,noarchive" : props.robots || "index,follow",
+    isPrivateRoute || publicSearchIndexingDisabled
+      ? "noindex,nofollow,noarchive"
+      : props.robots || "index,follow",
   );
 
   // Update Open Graph tags

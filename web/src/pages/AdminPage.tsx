@@ -197,6 +197,10 @@ function integrationNoticeText(code: string | null, t: TFunction): string | null
   if (code === "quickbooks_denied") return t("admin.notices.quickBooksDenied");
   if (code === "quickbooks_invalid_state") return t("admin.notices.quickBooksInvalid");
   if (code === "quickbooks_realm_in_use") return t("admin.notices.quickBooksInUse");
+  if (code === "quickbooks_realm_change_blocked") return t("admin.notices.quickBooksRealmChangeBlocked");
+  if (code === "quickbooks_cleanup_failed") return t("admin.notices.quickBooksCleanupFailed");
+  if (code === "quickbooks_session_mismatch") return t("admin.notices.quickBooksSessionMismatch");
+  if (code === "quickbooks_billing_required") return t("admin.notices.quickBooksBillingRequired");
   if (code === "quickbooks_disconnect_pending") return t("admin.notices.quickBooksDisconnectPending");
   if (code === "quickbooks_not_configured") return t("admin.notices.quickBooksUnavailable");
   if (code === "quickbooks_error") return t("admin.notices.quickBooksError");
@@ -433,6 +437,10 @@ export function AdminPage({ session }: AdminPageProps) {
 
     setNotice(nextNotice ?? nextIntegrationNotice);
     setError(null);
+    if (nextIntegrationNotice) {
+      navigate("/app/settings#admin-quickbooks", { replace: true });
+      return;
+    }
     if (billingState !== "success" || billingSubscriptionConfirmed) {
       navigate(settingsMode === "users" ? "/app/settings/users" : "/app/settings", { replace: true });
     }

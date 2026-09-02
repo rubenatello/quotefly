@@ -1,6 +1,18 @@
 node_modules
 # Keep environment variables out of version control
 .env
+.env.*
+!.env.example
+# Local deployment-provider links and downloaded environment files can contain
+# access tokens and runtime secrets. Keep checked-in provider configuration
+# (for example railway.json) separate from these local directories.
+.railway/
+.vercel/
+.neon
+.neon/
+*.pem
+*.p12
+*.pfx
 dist
 .vscode
 playwright-report

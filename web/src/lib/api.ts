@@ -2012,6 +2012,7 @@ export type QuickBooksSetupPhase =
 export type QuickBooksSetupCheckKey =
   | "PROVIDER_CONFIGURED"
   | "PROVIDER_WORKFLOWS_ENABLED"
+  | "ACCOUNTING_WORKFLOWS_ENABLED"
   | "WEBHOOK_CONFIGURED"
   | "HOSTED_PAYMENTS_ENABLED"
   | "RECONCILIATION_WORKER_ENABLED"
@@ -2055,6 +2056,7 @@ export type QuickBooksStatusPayload = {
   enabled: boolean;
   configured: boolean;
   providerWorkflowsEnabled: boolean;
+  oauthOnlyMode?: boolean;
   webhookConfigured: boolean;
   canManage: boolean;
   environment: "sandbox" | "production";

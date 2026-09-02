@@ -104,6 +104,20 @@ test("owners see setup readiness and can confirm the connected QuickBooks compan
   expect(confirmationRequests).toBe(1);
 });
 
+test("OAuth callback returns to QuickBooks settings and preserves the connection notice", async ({ context, page, request }) => {
+  const owner = await signUpViaApi(request, "quickbooks-oauth-return-owner");
+  await addSessionCookie(context, owner);
+  await page.route(`**${quickBooksStatusPath}`, async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(quickBooksStatus()) });
+  });
+
+  await page.goto("/app/settings?integrations=quickbooks_connected#admin-quickbooks");
+
+  await expect(page.getByText("QuickBooks connected successfully.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "QuoteFly Test Company" })).toBeVisible();
+  await expect(page).toHaveURL(/\/app\/settings#admin-quickbooks$/);
+});
+
 test("legacy or malformed QuickBooks status keeps Settings usable with a local retry error", async ({ context, page, request }) => {
   const owner = await signUpViaApi(request, "quickbooks-settings-malformed");
   await addSessionCookie(context, owner);

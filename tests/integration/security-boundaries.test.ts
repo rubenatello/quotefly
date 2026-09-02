@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { parseEnv } from "../../src/config/env.js";
 import {
   CURRENT_PRIVACY_POLICY_VERSION as API_PRIVACY_POLICY_VERSION,
@@ -120,6 +123,7 @@ describe("security boundary helpers", () => {
       API_URL: "https://api.quotefly.example",
       SESSION_COOKIE_SAME_SITE: "lax",
       ENABLE_TWILIO_SMS: "false",
+      AI_RAG_ROLLOUT_MODE: "off",
       STRIPE_SECRET_KEY: ["sk", "live", "quotefly", "test", "value"].join("_"),
       STRIPE_WEBHOOK_SECRET: ["whsec", "quotefly", "test", "value"].join("_"),
       STRIPE_PRICE_ID_STARTER: "price_quotefly_basic",
@@ -161,9 +165,7 @@ describe("security boundary helpers", () => {
       QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "",
       QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS: "",
     } satisfies NodeJS.ProcessEnv;
-    expect(() => parseEnv(quickBooksProductionEnv)).toThrow(
-      /QUICKBOOKS_TOKEN_ENCRYPTION_KEY must be at least 32 characters/i,
-    );
+    expect(() => parseEnv(quickBooksProductionEnv)).not.toThrow();
     expect(() => parseEnv({
       ...quickBooksProductionEnv,
       QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
@@ -178,7 +180,58 @@ describe("security boundary helpers", () => {
       QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS: "short-previous-key",
     })).toThrow(/PREVIOUS must be at least 32 characters/i);
 
+    const quickBooksDevelopmentEnv = {
+      ...quickBooksProductionEnv,
+      NODE_ENV: "development",
+      QUICKBOOKS_ENVIRONMENT: "sandbox",
+      QUICKBOOKS_REDIRECT_URI: "https://api.quotefly.example/v1/integrations/quickbooks/callback",
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "",
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+    } satisfies NodeJS.ProcessEnv;
+    expect(() => parseEnv(quickBooksDevelopmentEnv)).toThrow(
+      /must be at least 32 characters and independent from JWT_SECRET when QuickBooks provider workflows are enabled/i,
+    );
+    expect(() => parseEnv({
+      ...quickBooksDevelopmentEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: quickBooksDevelopmentEnv.JWT_SECRET,
+    })).toThrow(/must be independent from JWT_SECRET/i);
+    expect(() => parseEnv({
+      ...quickBooksDevelopmentEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+    })).not.toThrow();
+    expect(() => parseEnv({
+      ...quickBooksDevelopmentEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      QUICKBOOKS_OAUTH_ONLY_MODE: "true",
+      QUICKBOOKS_WEBHOOK_VERIFIER: "",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "false",
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "false",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "false",
+    })).not.toThrow();
+    expect(() => parseEnv({
+      ...quickBooksDevelopmentEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      QUICKBOOKS_OAUTH_ONLY_MODE: "true",
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+    })).toThrow(/must remain disabled in OAuth-only mode/i);
+    expect(() => parseEnv({
+      ...quickBooksDevelopmentEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      QUICKBOOKS_ENVIRONMENT: "production",
+      QUICKBOOKS_OAUTH_ONLY_MODE: "true",
+    })).toThrow(/restricted to sandbox staging/i);
+    expect(() => parseEnv({
+      ...quickBooksDevelopmentEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      APP_URL: "https://www.quotefly.us",
+      API_URL: "https://api.quotefly.us",
+    })).toThrow(/QuickBooks sandbox workflows are forbidden on QuoteFly production origins/i);
+
     expect(parseEnv(productionEnv).QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED).toBe(false);
+    expect(() => parseEnv({
+      ...quickBooksProductionEnv,
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+    })).toThrow(/must be at least 32 characters and independent from JWT_SECRET when QuickBooks provider workflows are enabled/i);
     expect(() => parseEnv({
       ...productionEnv,
       QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
@@ -201,6 +254,23 @@ describe("security boundary helpers", () => {
       QUICKBOOKS_SANDBOX_STAGING_ORIGINS: "https://staging-app.quotefly.example,https://staging-api.quotefly.example",
       QUICKBOOKS_REDIRECT_URI: "https://staging-api.quotefly.example/v1/integrations/quickbooks/callback",
     })).not.toThrow();
+    for (const invalidRedirectUri of [
+      "https://other-staging-api.quotefly.example/v1/integrations/quickbooks/callback",
+      "https://staging-api.quotefly.example/v1/integrations/quickbooks/connect",
+      "https://staging-api.quotefly.example/v1/integrations/quickbooks/callback?source=test",
+      "https://staging-api.quotefly.example/v1/integrations/quickbooks/callback#fragment",
+    ]) {
+      expect(() => parseEnv({
+        ...quickBooksProductionEnv,
+        APP_URL: "https://staging-app.quotefly.example",
+        API_URL: "https://staging-api.quotefly.example",
+        QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+        QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+        QUICKBOOKS_ENVIRONMENT: "sandbox",
+        QUICKBOOKS_SANDBOX_STAGING_ORIGINS: "https://staging-app.quotefly.example,https://staging-api.quotefly.example",
+        QUICKBOOKS_REDIRECT_URI: invalidRedirectUri,
+      })).toThrow(/must exactly match/i);
+    }
     expect(() => parseEnv({
       ...quickBooksProductionEnv,
       APP_URL: "https://www.quotefly.us",
@@ -229,6 +299,7 @@ describe("security boundary helpers", () => {
       API_URL: "https://api.quotefly.example",
       SESSION_COOKIE_SAME_SITE: "lax",
       ENABLE_TWILIO_SMS: "false",
+      AI_RAG_ROLLOUT_MODE: "off",
       STRIPE_SECRET_KEY: ["sk", "live", "quotefly", "test", "value"].join("_"),
       STRIPE_WEBHOOK_SECRET: ["whsec", "quotefly", "test", "value"].join("_"),
       STRIPE_PRICE_ID_STARTER: "price_quotefly_basic",
@@ -335,6 +406,66 @@ describe("security boundary helpers", () => {
     expect(csv).toContain("'@malicious Service");
     expect(csv).toContain("\"'=WEBSERVICE(\"\"https://attacker.invalid\"\")\"");
     expect(csv).toContain(",2.00,50.00,100.00,8.00,108.00,");
+  });
+
+  it("audits fixed infrastructure profiles without emitting raw values", () => {
+    const sentinel = "quickbooks-client-secret-must-never-appear-in-output";
+    const result = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL("../../scripts/infrastructure-variable-audit.mjs", import.meta.url)),
+        "--profile",
+        "quickbooks",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_ENV: "test",
+          DATABASE_URL: "database-audit-sentinel",
+          DIRECT_DATABASE_URL: "",
+          JWT_SECRET: "jwt-audit-sentinel",
+          QUICKBOOKS_CLIENT_ID: "quickbooks-client-id-safe-for-test",
+          QUICKBOOKS_CLIENT_SECRET: sentinel,
+          QUICKBOOKS_ENVIRONMENT: "sandbox",
+          QUICKBOOKS_REDIRECT_URI: "https://api.example.test/v1/integrations/quickbooks/callback",
+          QUICKBOOKS_WEBHOOK_VERIFIER: "quickbooks-webhook-verifier-sentinel",
+          QUICKBOOKS_TOKEN_ENCRYPTION_KEY: sentinel,
+          QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const report = JSON.parse(result.stdout) as {
+      schema: string;
+      evidenceScope: string;
+      profile: string;
+      outcome: string;
+      required: Array<{ name: string; classification: string; status: string }>;
+      forbidden: Array<{ name: string; classification: string; status: string }>;
+    };
+    expect(report.schema).toBe("quotefly.infrastructure-variable-audit/v1");
+    expect(report.evidenceScope).toBe("current-runtime-only");
+    expect(report.profile).toBe("quickbooks");
+    expect(report.outcome).toBe("pass");
+    expect(report.required).toContainEqual({
+      name: "QUICKBOOKS_CLIENT_SECRET",
+      classification: "secret",
+      status: "configured",
+    });
+    expect(result.stderr).not.toContain(sentinel);
+    expect(result.stdout).not.toContain(sentinel);
+
+    const gitignore = readFileSync(new URL("../../.gitignore", import.meta.url), "utf8");
+    expect(gitignore).toMatch(/^\.env\.\*$/m);
+    expect(gitignore).toMatch(/^\.railway\/$/m);
+    expect(gitignore).toMatch(/^\.vercel\/$/m);
+    expect(gitignore).toMatch(/^\.neon\/$/m);
+
+    const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+    expect(spawnSync("git", ["check-ignore", "-q", "--", ".env.staging.local"], { cwd: repositoryRoot }).status).toBe(0);
+    expect(spawnSync("git", ["check-ignore", "-q", "--", ".env.example"], { cwd: repositoryRoot }).status).toBe(1);
   });
 
   it("does not fetch a tenant-controlled remote logo while rendering a quote PDF", async () => {

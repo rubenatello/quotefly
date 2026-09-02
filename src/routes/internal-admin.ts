@@ -123,6 +123,7 @@ export const internalAdminRoutes: FastifyPluginAsync = async (app) => {
         quickBooksRuntime: {
           providerConfigured: isQuickBooksConfigured(app.env),
           providerWorkflowsEnabled: app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
+          oauthOnlyMode: app.env.QUICKBOOKS_OAUTH_ONLY_MODE,
           webhookConfigured: isQuickBooksWebhookConfigured(app.env),
           hostedPaymentsEnabled: app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED,
           reconciliationWorkerEnabled: app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED,

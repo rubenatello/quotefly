@@ -2205,7 +2205,16 @@ async function runQuickBooksSetupStatus(
     cdcWorkerEnabled: false,
     environment: env.QUICKBOOKS_ENVIRONMENT,
   }, connection);
-  const answer = setup.phase === "CONFIRMED" && setup.operations.allAccountingWorkflowsReady
+  const oauthOnlyConnected = Boolean(
+    params.quickBooksRuntime?.oauthOnlyMode && connection?.status === "CONNECTED",
+  );
+  const answer = oauthOnlyConnected
+    ? localeText(
+      params,
+      "The QuickBooks sandbox company is connected for validation only. Accounting actions and setup confirmation remain paused until QuoteFly completes the reviewed sandbox evidence and enables the full accounting runtime.",
+      "La empresa sandbox de QuickBooks esta conectada solo para validacion. Las acciones contables y la confirmacion de configuracion siguen pausadas hasta que QuoteFly complete la evidencia revisada de sandbox y habilite el entorno contable completo.",
+    )
+    : setup.phase === "CONFIRMED" && setup.operations.allAccountingWorkflowsReady
     ? localeText(
       params,
       "The QuickBooks company connection is confirmed and the reviewed accounting workflows are configured. Configuration alone does not prove worker health, signed webhook delivery, QuickBooks Payments eligibility, or an end-to-end sandbox test; review the evidence in Settings before relying on them.",
@@ -2224,6 +2233,7 @@ async function runQuickBooksSetupStatus(
     phase: setup.phase,
     ready: setup.ready,
     confirmed: setup.confirmed,
+    oauthOnlyMode: params.quickBooksRuntime?.oauthOnlyMode ?? false,
     environment: connection?.environment ?? params.quickBooksRuntime?.environment ?? null,
     connectionStatus: connection?.status ?? null,
     setupConfirmedAtUtc: setup.confirmedAtUtc?.toISOString() ?? null,

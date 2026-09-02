@@ -4,6 +4,7 @@ export const QUICKBOOKS_CONNECTION_EVENT_ACTIONS = [
   "CONNECT_STARTED",
   "CONNECTED",
   "RECONNECTED",
+  "COMPANY_SWITCHED",
   "SETUP_CONFIRMED",
   "DISCONNECT_REQUESTED",
   "DISCONNECTED",
@@ -21,6 +22,7 @@ export type QuickBooksConnectionEventContext = Readonly<{
 const SUCCESSFUL_CONNECTION_ACTIONS: QuickBooksConnectionEventAction[] = [
   "CONNECTED",
   "RECONNECTED",
+  "COMPANY_SWITCHED",
 ];
 
 export async function currentQuickBooksConnectionGeneration(

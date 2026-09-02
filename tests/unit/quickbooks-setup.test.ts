@@ -125,6 +125,29 @@ describe("QuickBooks setup readiness", () => {
     assert.equal(result.phase, "READY_FOR_CONFIRMATION");
     assert.equal(result.confirmed, false);
   });
+
+  it("allows OAuth connection proof without exposing accounting operations", () => {
+    const result = deriveQuickBooksSetupReadiness({
+      ...runtime,
+      oauthOnlyMode: true,
+      webhookConfigured: false,
+      hostedPaymentsEnabled: false,
+      reconciliationWorkerEnabled: false,
+      reconciliationWorkerHealthy: false,
+      cdcWorkerEnabled: false,
+    }, connection());
+
+    assert.equal(result.phase, "READY_FOR_CONFIRMATION");
+    assert.equal(result.capabilities.canConnect, false);
+    assert.equal(result.capabilities.canReconnect, true);
+    assert.equal(result.capabilities.canConfirm, false);
+    assert.equal(result.operations.coreConnectionReady, false);
+    assert.equal(result.operations.allAccountingWorkflowsReady, false);
+    assert.equal(
+      result.checks.find((check) => check.key === "ACCOUNTING_WORKFLOWS_ENABLED")?.passed,
+      false,
+    );
+  });
 });
 
 describe("QuickBooks authorization URL trust boundary", () => {

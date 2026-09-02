@@ -2264,6 +2264,7 @@ describe("invoice ledger API", () => {
     const callback = await app.inject({
       method: "GET",
       url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=realm-b-code&realmId=${realmB}`,
+      headers: { cookie: owner.cookie },
     });
     expect(callback.statusCode).toBe(302);
     expect(callback.headers.location).toContain("integrations=quickbooks_realm_change_blocked");
@@ -2446,8 +2447,8 @@ describe("invoice ledger API", () => {
     });
     quickBooksProviderMocks.fetchCompanyInfo.mockResolvedValue({ realmId, companyName: "OAuth Once Company" });
     const url = `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=oauth-code&realmId=${realmId}`;
-    const first = await app.inject({ method: "GET", url });
-    const replay = await app.inject({ method: "GET", url });
+    const first = await app.inject({ method: "GET", url, headers: { cookie: owner.cookie } });
+    const replay = await app.inject({ method: "GET", url, headers: { cookie: owner.cookie } });
     expect(first.headers.location).toContain("integrations=quickbooks_connected");
     expect(replay.headers.location).toContain("integrations=quickbooks_invalid_state");
     expect(quickBooksProviderMocks.exchangeAuthorizationCode).toHaveBeenCalledTimes(1);
@@ -2542,6 +2543,7 @@ describe("invoice ledger API", () => {
     const callback = await app.inject({
       method: "GET",
       url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=racing-code&realmId=${connection.realmId}`,
+      headers: { cookie: owner.cookie },
     });
     expect(callback.headers.location).toContain("integrations=quickbooks_disconnect_pending");
     expect(quickBooksProviderMocks.revokeToken).toHaveBeenCalledWith(env, "oauth-racing-refresh");

@@ -1793,6 +1793,10 @@ export const esUS = {
       quickBooksDenied: "La conexión con QuickBooks se canceló antes de completar la autorización.",
       quickBooksInvalid: "La autorización de QuickBooks venció o dejó de ser válida. Inicia la conexión de nuevo.",
       quickBooksInUse: "Esa empresa de QuickBooks ya está vinculada con otro cliente de QuoteFly.",
+      quickBooksRealmChangeBlocked: "Este espacio de trabajo ya está vinculado con otra empresa de QuickBooks. Desconéctala antes de elegir otra empresa.",
+      quickBooksCleanupFailed: "La autorización de QuickBooks no se guardó y la limpieza segura aún necesita atención. Contacta a soporte antes de volver a intentarlo.",
+      quickBooksSessionMismatch: "Regresa a QuoteFly en el mismo navegador con la sesión iniciada y vuelve a conectar QuickBooks.",
+      quickBooksBillingRequired: "El acceso a tu espacio cambió antes de terminar la conexión con QuickBooks. Revisa la facturación y vuelve a intentarlo.",
       quickBooksUnavailable: "La integración con QuickBooks aún no está configurada en la API.",
       quickBooksError: "Falló la conexión con QuickBooks. Revisa la configuración de tu aplicación de Intuit e inténtalo de nuevo.",
     },
@@ -2131,6 +2135,7 @@ export const esUS = {
       checks: {
         providerConfigured: "Credenciales del proveedor configuradas",
         workflowsEnabled: "Flujos contables activados",
+        accountingWorkflowsEnabled: "Acciones contables respaldadas por el proveedor habilitadas",
         webhookConfigured: "Verificador de webhook configurado; falta probar la entrega firmada",
         hostedPaymentsEnabled: "Pagos alojados de facturas habilitados",
         reconciliationWorkerEnabled: "Proceso de conciliación habilitado",

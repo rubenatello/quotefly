@@ -16,6 +16,9 @@ import { renderPublicSitemap } from "./sitemap";
 
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
 const distDir = join(webRoot, "dist");
+const publicRobots = process.env.VITE_PUBLIC_SEARCH_INDEXING?.trim() === "disabled"
+  ? "noindex,nofollow,noarchive"
+  : "index,follow";
 
 function extract(html: string, expression: RegExp, label: string): string {
   const value = html.match(expression)?.[1]?.trim();
@@ -195,7 +198,10 @@ test("every public route has unique raw crawlable HTML", async () => {
     assert.equal(decodeHtmlAttribute(title), route.title);
     assert.equal(decodeHtmlAttribute(description), route.description);
     assert.equal(canonical, publicCanonicalUrl(path));
-    assert.match(html, /<meta\s+name="robots"\s+content="index,follow"/i);
+    assert.match(
+      html,
+      new RegExp(`<meta\\s+name="robots"\\s+content="${publicRobots}"`, "i"),
+    );
     const h1 = extract(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i, `${path} h1`);
     assert.equal(decodeHtmlText(h1), route.heading);
     assert.ok(html.length > 10_000, `${path} must include its full public page in raw HTML`);

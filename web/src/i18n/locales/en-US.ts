@@ -1730,6 +1730,10 @@ export const enUS = {
       quickBooksDenied: "QuickBooks connection was canceled before authorization completed.",
       quickBooksInvalid: "QuickBooks authorization expired or became invalid. Start the connection again.",
       quickBooksInUse: "That QuickBooks company is already linked to another QuoteFly tenant.",
+      quickBooksRealmChangeBlocked: "This workspace is already bound to a different QuickBooks company. Disconnect it before choosing another company.",
+      quickBooksCleanupFailed: "QuickBooks authorization was not saved, and secure cleanup still needs attention. Contact support before trying again.",
+      quickBooksSessionMismatch: "Return to QuoteFly in the same signed-in browser and start the QuickBooks connection again.",
+      quickBooksBillingRequired: "Your workspace access changed before QuickBooks finished connecting. Review billing, then try again.",
       quickBooksUnavailable: "QuickBooks integration is not configured on the API yet.",
       quickBooksError: "QuickBooks connection failed. Review your Intuit app configuration and try again.",
     },
@@ -2068,6 +2072,7 @@ export const enUS = {
       checks: {
         providerConfigured: "Provider credentials configured",
         workflowsEnabled: "Accounting workflows enabled",
+        accountingWorkflowsEnabled: "Provider-backed accounting actions enabled",
         webhookConfigured: "Webhook verifier configured; signed delivery test pending",
         hostedPaymentsEnabled: "Hosted invoice payments enabled",
         reconciliationWorkerEnabled: "Reconciliation worker enabled",

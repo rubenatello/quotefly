@@ -4884,6 +4884,66 @@ describe("QuoteFly API integration", () => {
     }
   });
 
+  test("allows tenant OAuth setup while containing accounting routes in connection-only mode", async () => {
+    const session = await signUp("quickbooks-oauth-only");
+    const workflowFlag = app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED;
+    const oauthOnlyFlag = app.env.QUICKBOOKS_OAUTH_ONLY_MODE;
+    app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED = true;
+    app.env.QUICKBOOKS_OAUTH_ONLY_MODE = true;
+    for (const providerMock of Object.values(quickBooksProviderMocks)) providerMock.mockReset();
+
+    try {
+      const status = await app.inject({
+        method: "GET",
+        url: "/v1/integrations/quickbooks/status",
+        headers: authHeaders(session.cookie),
+      });
+      expect(status.statusCode).toBe(200);
+      expect(parseJson<{
+        enabled: boolean;
+        providerWorkflowsEnabled: boolean;
+        oauthOnlyMode: boolean;
+      }>(status)).toMatchObject({
+        enabled: true,
+        providerWorkflowsEnabled: true,
+        oauthOnlyMode: true,
+      });
+
+      const connect = await app.inject({
+        method: "POST",
+        url: "/v1/integrations/quickbooks/connect",
+        headers: authHeaders(session.cookie),
+      });
+      expect(connect.statusCode).toBe(200);
+      const authorizationUrl = new URL(
+        parseJson<{ authorizationUrl: string }>(connect).authorizationUrl,
+      );
+      expect(authorizationUrl.origin).toBe("https://appcenter.intuit.com");
+      expect(authorizationUrl.searchParams.get("state")).toBeTruthy();
+
+      const publish = await app.inject({
+        method: "POST",
+        url: "/v1/integrations/quickbooks/invoices/not-an-invoice/publish",
+        headers: {
+          ...authHeaders(session.cookie),
+          "idempotency-key": "oauth-only-publish",
+        },
+        payload: { invoiceVersion: 1, reviewBinding: "A".repeat(43) },
+      });
+      expect(publish.statusCode).toBe(503);
+      expect(parseJson<{ error: string; code: string }>(publish)).toEqual({
+        error: "QuickBooks accounting workflows are paused while connection-only validation is active.",
+        code: "QUICKBOOKS_OAUTH_ONLY_MODE",
+      });
+      for (const providerMock of Object.values(quickBooksProviderMocks)) {
+        expect(providerMock).not.toHaveBeenCalled();
+      }
+    } finally {
+      app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED = workflowFlag;
+      app.env.QUICKBOOKS_OAUTH_ONLY_MODE = oauthOnlyFlag;
+    }
+  });
+
   test("requires a live owner or admin before returning QuickBooks provider metadata", async () => {
     const owner = await signUp("quickbooks-live-manager");
     await prisma.quickBooksConnection.create({
@@ -5165,6 +5225,7 @@ describe("QuoteFly API integration", () => {
       headers: authHeaders(owner.cookie),
     });
     expect(connect.statusCode).toBe(200);
+    expect(connect.headers["cache-control"]).toBe("private, no-store");
     const authorizationUrl = new URL(parseJson<{ authorizationUrl: string }>(connect).authorizationUrl);
     const state = authorizationUrl.searchParams.get("state");
     expect(state).toBeTruthy();
@@ -5172,9 +5233,12 @@ describe("QuoteFly API integration", () => {
     const denied = await app.inject({
       method: "GET",
       url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state!)}&error=access_denied`,
+      headers: authHeaders(owner.cookie),
     });
     expect(denied.statusCode).toBe(302);
     expect(denied.headers.location).toContain("integrations=quickbooks_denied");
+    expect(denied.headers["cache-control"]).toBe("private, no-store");
+    expect(denied.headers["referrer-policy"]).toBe("no-referrer");
 
     const replay = await app.inject({
       method: "GET",
@@ -5182,6 +5246,16 @@ describe("QuoteFly API integration", () => {
     });
     expect(replay.statusCode).toBe(302);
     expect(replay.headers.location).toContain("integrations=quickbooks_invalid_state");
+    expect(replay.headers["cache-control"]).toBe("private, no-store");
+    expect(replay.headers["referrer-policy"]).toBe("no-referrer");
+
+    const malformed = await app.inject({
+      method: "GET",
+      url: "/v1/integrations/quickbooks/callback?state=",
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.headers["cache-control"]).toBe("private, no-store");
+    expect(malformed.headers["referrer-policy"]).toBe("no-referrer");
     expect(quickBooksProviderMocks.exchangeAuthorizationCode).not.toHaveBeenCalled();
     expect(quickBooksProviderMocks.fetchCompanyInfo).not.toHaveBeenCalled();
     expect(await prisma.quickBooksConnection.count({ where: { tenantId: owner.tenant.id } })).toBe(0);
@@ -5203,6 +5277,136 @@ describe("QuoteFly API integration", () => {
       outcome: "PENDING",
       connectionGeneration: 1,
     }]);
+  });
+
+  test("binds QuickBooks OAuth callback to the initiating QuoteFly browser session", async () => {
+    const owner = await signUp("quickbooks-session-bound-owner");
+    const otherOwner = await signUp("quickbooks-session-bound-other");
+    quickBooksProviderMocks.exchangeAuthorizationCode.mockReset();
+    quickBooksProviderMocks.fetchCompanyInfo.mockReset();
+
+    const startConnection = async () => {
+      const connect = await app.inject({
+        method: "POST",
+        url: "/v1/integrations/quickbooks/connect",
+        headers: authHeaders(owner.cookie),
+      });
+      expect(connect.statusCode).toBe(200);
+      const state = new URL(parseJson<{ authorizationUrl: string }>(connect).authorizationUrl)
+        .searchParams.get("state");
+      expect(state).toBeTruthy();
+      return state as string;
+    };
+
+    const missingSessionState = await startConnection();
+    const missingSession = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(missingSessionState)}&code=missing-session-code&realmId=missing-session-realm`,
+    });
+    expect(missingSession.statusCode).toBe(401);
+
+    const missingSessionReplay = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(missingSessionState)}&code=missing-session-replay&realmId=missing-session-realm`,
+      headers: authHeaders(owner.cookie),
+    });
+    expect(missingSessionReplay.statusCode).toBe(302);
+    expect(missingSessionReplay.headers.location).toContain("integrations=quickbooks_invalid_state");
+
+    const wrongSessionState = await startConnection();
+    const wrongSession = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(wrongSessionState)}&code=wrong-session-code&realmId=wrong-session-realm`,
+      headers: authHeaders(otherOwner.cookie),
+    });
+    expect(wrongSession.statusCode).toBe(302);
+    expect(wrongSession.headers.location).toContain("integrations=quickbooks_session_mismatch");
+
+    const wrongSessionReplay = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(wrongSessionState)}&code=wrong-session-replay&realmId=wrong-session-realm`,
+      headers: authHeaders(owner.cookie),
+    });
+    expect(wrongSessionReplay.statusCode).toBe(302);
+    expect(wrongSessionReplay.headers.location).toContain("integrations=quickbooks_invalid_state");
+    expect(quickBooksProviderMocks.exchangeAuthorizationCode).not.toHaveBeenCalled();
+    expect(quickBooksProviderMocks.fetchCompanyInfo).not.toHaveBeenCalled();
+  });
+
+  test("allows an unused disconnected tenant to correct the selected QuickBooks company", async () => {
+    const owner = await signUp("quickbooks-company-correction");
+    const previousRealmId = `realm-correction-old-${Date.now()}`;
+    const replacementRealmId = `realm-correction-new-${Date.now()}`;
+    const connection = await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: owner.tenant.id,
+        realmId: previousRealmId,
+        environment: "sandbox",
+        companyName: "Incorrect Sandbox Company",
+        status: "DISCONNECTED",
+        disconnectedAtUtc: new Date(),
+        realmBinding: {
+          create: { realmId: previousRealmId, active: false },
+        },
+        cdcCursor: {
+          create: { changedSinceUtc: new Date("2026-01-01T00:00:00.000Z") },
+        },
+      },
+    });
+    const state = createSignedQuickBooksState(env, {
+      tenantId: owner.tenant.id,
+      userId: owner.user.id,
+      role: "owner",
+    });
+    await prisma.quickBooksOAuthState.create({
+      data: {
+        tenantId: owner.tenant.id,
+        quickBooksConnectionId: connection.id,
+        userId: owner.user.id,
+        stateHash: createHash("sha256").update(state).digest("hex"),
+        expiresAtUtc: new Date(Date.now() + 60_000),
+      },
+    });
+    quickBooksProviderMocks.exchangeAuthorizationCode.mockReset().mockResolvedValue({
+      access_token: "corrected-company-access-token",
+      refresh_token: "corrected-company-refresh-token",
+      token_type: "bearer",
+      expires_in: 3600,
+    });
+    quickBooksProviderMocks.fetchCompanyInfo.mockReset().mockResolvedValue({
+      realmId: replacementRealmId,
+      companyName: "Correct Sandbox Company",
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=correct-company-code&realmId=${replacementRealmId}`,
+      headers: authHeaders(owner.cookie),
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toContain("integrations=quickbooks_connected");
+    expect(quickBooksProviderMocks.exchangeAuthorizationCode).toHaveBeenCalledOnce();
+    expect(quickBooksProviderMocks.fetchCompanyInfo).toHaveBeenCalledOnce();
+    const saved = await prisma.quickBooksConnection.findUniqueOrThrow({
+      where: { id: connection.id },
+      include: { realmBinding: true, cdcCursor: true },
+    });
+    expect(saved).toMatchObject({
+      realmId: replacementRealmId,
+      companyName: "Correct Sandbox Company",
+      status: "CONNECTED",
+      realmBinding: { realmId: replacementRealmId, active: true },
+    });
+    expect(saved.cdcCursor?.lastAttemptAtUtc).toBeNull();
+    expect(saved.cdcCursor?.lastSucceededAtUtc).toBeNull();
+    await expect(prisma.quickBooksConnectionEvent.findFirstOrThrow({
+      where: {
+        tenantId: owner.tenant.id,
+        quickBooksConnectionId: connection.id,
+        action: "COMPANY_SWITCHED",
+      },
+    })).resolves.toMatchObject({ outcome: "SUCCEEDED" });
   });
 
   test("rejects stale QuickBooks OAuth state before provider exchange or credential writes", async () => {
@@ -5330,10 +5534,15 @@ describe("QuoteFly API integration", () => {
       const response = await app.inject({
         method: "GET",
         url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=active-${role}-code&realmId=${realmId}`,
+        headers: authHeaders(session.cookie),
       });
 
       expect(response.statusCode).toBe(302);
-      expect(response.headers.location).toContain("integrations=quickbooks_connected");
+      expect(response.headers.location).toBe(
+        `http://localhost:5173/app/settings?integrations=quickbooks_connected#admin-quickbooks`,
+      );
+      expect(response.headers["cache-control"]).toBe("private, no-store");
+      expect(response.headers["referrer-policy"]).toBe("no-referrer");
       expect(quickBooksProviderMocks.exchangeAuthorizationCode).toHaveBeenCalledOnce();
       expect(quickBooksProviderMocks.fetchCompanyInfo).toHaveBeenCalledOnce();
 
@@ -5401,6 +5610,7 @@ describe("QuoteFly API integration", () => {
     const response = await app.inject({
       method: "GET",
       url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=revocation-race-code&realmId=${realmId}`,
+      headers: authHeaders(session.cookie),
     });
 
     expect(response.statusCode).toBe(302);
@@ -5483,6 +5693,7 @@ describe("QuoteFly API integration", () => {
     const callbackPromise = app.inject({
       method: "GET",
       url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=final-transaction-code&realmId=${realmId}`,
+      headers: authHeaders(session.cookie),
     });
     let callbackReachedIntegrationLock = false;
     try {
@@ -5551,6 +5762,7 @@ describe("QuoteFly API integration", () => {
     const response = await app.inject({
       method: "GET",
       url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=failing-code&realmId=realm-provider-failure`,
+      headers: authHeaders(session.cookie),
     });
 
     expect(response.statusCode).toBe(302);

@@ -8,6 +8,7 @@ const QUICKBOOKS_AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2";
 const QUICKBOOKS_TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 const QUICKBOOKS_REVOKE_URL = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke";
 const QUICKBOOKS_SECRET_ENVELOPE_VERSION = "v2";
+const QUICKBOOKS_OAUTH_STATE_ENVELOPE_VERSION = "qbo2";
 
 type RuntimeEnv = typeof env;
 
@@ -333,6 +334,14 @@ type SignedStatePayload = {
   nonce: string;
   exp: number;
 };
+
+const SignedStatePayloadSchema = z.object({
+  tenantId: z.string().min(1).max(191),
+  userId: z.string().min(1).max(191),
+  role: z.string().min(1).max(32),
+  nonce: z.string().regex(/^[a-f0-9]{24}$/),
+  exp: z.number().int().positive(),
+}).strict();
 
 export function isQuickBooksConfigured(runtimeEnv: RuntimeEnv): boolean {
   return runtimeEnv.QUICKBOOKS_CLIENT_ID.trim().length > 0 && runtimeEnv.QUICKBOOKS_CLIENT_SECRET.trim().length > 0;
@@ -976,27 +985,55 @@ export function createSignedQuickBooksState(
     nonce: randomBytes(12).toString("hex"),
     exp: Date.now() + 10 * 60 * 1000,
   };
-  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = createHmac("sha256", runtimeEnv.JWT_SECRET).update(encodedPayload).digest("base64url");
-  return `${encodedPayload}.${signature}`;
+  const key = createHash("sha256")
+    .update("quotefly:quickbooks:oauth-state:qbo2\0", "utf8")
+    .update(runtimeEnv.JWT_SECRET, "utf8")
+    .digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(Buffer.from(QUICKBOOKS_OAUTH_STATE_ENVELOPE_VERSION, "utf8"));
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]);
+  const authTag = cipher.getAuthTag();
+  return [
+    QUICKBOOKS_OAUTH_STATE_ENVELOPE_VERSION,
+    iv.toString("base64url"),
+    authTag.toString("base64url"),
+    encrypted.toString("base64url"),
+  ].join(".");
 }
 
 export function verifySignedQuickBooksState(runtimeEnv: RuntimeEnv, state: string): SignedStatePayload | null {
   const parts = state.split(".");
-  if (parts.length !== 2) return null;
-  const [encodedPayload, signature] = parts;
-  if (!encodedPayload || !signature) return null;
-
-  const expectedSignature = createHmac("sha256", runtimeEnv.JWT_SECRET).update(encodedPayload).digest("base64url");
-  const actualBytes = Buffer.from(signature, "utf8");
-  const expectedBytes = Buffer.from(expectedSignature, "utf8");
-  if (actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes)) return null;
+  if (parts.length !== 4 || parts[0] !== QUICKBOOKS_OAUTH_STATE_ENVELOPE_VERSION) return null;
+  const [, ivPart, authTagPart, encryptedPart] = parts;
+  if (
+    !ivPart
+    || !authTagPart
+    || !encryptedPart
+    || ![ivPart, authTagPart, encryptedPart].every((part) => /^[A-Za-z0-9_-]+$/.test(part))
+  ) return null;
 
   try {
-    const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as SignedStatePayload;
-    if (!payload?.tenantId || !payload?.userId || !payload?.role || !payload?.nonce || !payload?.exp) return null;
-    if (payload.exp < Date.now()) return null;
-    return payload;
+    const iv = Buffer.from(ivPart, "base64url");
+    const authTag = Buffer.from(authTagPart, "base64url");
+    const encrypted = Buffer.from(encryptedPart, "base64url");
+    if (iv.length !== 12 || authTag.length !== 16 || encrypted.length === 0) return null;
+    const key = createHash("sha256")
+      .update("quotefly:quickbooks:oauth-state:qbo2\0", "utf8")
+      .update(runtimeEnv.JWT_SECRET, "utf8")
+      .digest();
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAAD(Buffer.from(QUICKBOOKS_OAUTH_STATE_ENVELOPE_VERSION, "utf8"));
+    decipher.setAuthTag(authTag);
+    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    const parsed = SignedStatePayloadSchema.safeParse(JSON.parse(decrypted.toString("utf8")));
+    if (!parsed.success) return null;
+    const now = Date.now();
+    if (parsed.data.exp < now || parsed.data.exp > now + 10 * 60 * 1000 + 30_000) return null;
+    return parsed.data;
   } catch {
     return null;
   }
@@ -1195,7 +1232,10 @@ export function encryptQuickBooksSecret(runtimeEnv: RuntimeEnv, value: string): 
     throw new Error("QuickBooks secret value is required.");
   }
 
-  const encryptionSecret = runtimeEnv.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim() || runtimeEnv.JWT_SECRET;
+  const encryptionSecret = runtimeEnv.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim();
+  if (encryptionSecret.length < 32) {
+    throw new Error("QuickBooks token encryption key is not configured.");
+  }
   const key = createHash("sha256").update(encryptionSecret).digest();
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
@@ -1236,7 +1276,7 @@ export function decryptQuickBooksSecret(runtimeEnv: RuntimeEnv, encryptedValue: 
 
   const candidateSecrets = isCurrentEnvelope
     ? [
-        runtimeEnv.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim() || runtimeEnv.JWT_SECRET,
+        runtimeEnv.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim(),
         runtimeEnv.QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS.trim(),
       ].filter((candidate, index, candidates) => candidate && candidates.indexOf(candidate) === index)
     : [runtimeEnv.JWT_SECRET];
@@ -1260,7 +1300,7 @@ export function decryptQuickBooksSecret(runtimeEnv: RuntimeEnv, encryptedValue: 
 }
 
 export function buildQuickBooksAdminRedirect(runtimeEnv: RuntimeEnv, state: string): string {
-  return `${runtimeEnv.APP_URL.replace(/\/$/, "")}/app/admin?integrations=${encodeURIComponent(state)}`;
+  return `${runtimeEnv.APP_URL.replace(/\/$/, "")}/app/settings?integrations=${encodeURIComponent(state)}#admin-quickbooks`;
 }
 
 export function verifyQuickBooksWebhookSignature(

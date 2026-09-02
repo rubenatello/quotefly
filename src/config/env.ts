@@ -52,6 +52,7 @@ const EnvSchema = z.object({
   APP_URL: z.string().url().default("http://localhost:5173"),
   API_URL: z.string().url().default("http://localhost:4000"),
   CORS_ALLOWED_ORIGINS: z.string().default(""),
+  PUBLIC_SIGNUP_ENABLED: BooleanFromEnv.default(true),
   RESEND_API_KEY: z.string().default(""),
   PASSWORD_RESET_EMAIL_FROM: z.string().default(""),
   SUPPORT_EMAIL: z.string().trim().email().default("support@quotefly.us"),
@@ -64,6 +65,7 @@ const EnvSchema = z.object({
   QUICKBOOKS_ENVIRONMENT: z.enum(["sandbox", "production"]).default("production"),
   QUICKBOOKS_SANDBOX_STAGING_ORIGINS: z.string().max(4_096).default(""),
   QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: BooleanFromEnv.default(false),
+  QUICKBOOKS_OAUTH_ONLY_MODE: BooleanFromEnv.default(false),
   QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: BooleanFromEnv.default(false),
   QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: BooleanFromEnv.default(false),
   QUICKBOOKS_CDC_WORKER_ENABLED: BooleanFromEnv.default(false),
@@ -184,6 +186,109 @@ const EnvSchema = z.object({
       path: ["QUICKBOOKS_WEBHOOK_VERIFIER"],
       message: "A QuickBooks webhook verifier is required for hosted payments and reconciliation workers.",
     });
+  }
+  if (value.QUICKBOOKS_OAUTH_ONLY_MODE && !value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_OAUTH_ONLY_MODE"],
+      message: "QuickBooks OAuth-only mode requires provider workflows so the connection handshake can run.",
+    });
+  }
+  if (value.QUICKBOOKS_OAUTH_ONLY_MODE && value.QUICKBOOKS_ENVIRONMENT === "production") {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_OAUTH_ONLY_MODE"],
+      message: "QuickBooks OAuth-only mode is restricted to sandbox staging; production connections require autonomous revocation recovery.",
+    });
+  }
+  if (
+    value.QUICKBOOKS_OAUTH_ONLY_MODE
+    && (
+      value.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED
+      || value.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED
+      || value.QUICKBOOKS_CDC_WORKER_ENABLED
+    )
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_OAUTH_ONLY_MODE"],
+      message: "QuickBooks hosted payments and workers must remain disabled in OAuth-only mode.",
+    });
+  }
+  if (value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) {
+    const expectedRedirectUri = new URL(
+      "/v1/integrations/quickbooks/callback",
+      value.API_URL,
+    ).toString();
+    const effectiveRedirectUri = value.QUICKBOOKS_REDIRECT_URI.trim() || expectedRedirectUri;
+    if (effectiveRedirectUri !== expectedRedirectUri) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["QUICKBOOKS_REDIRECT_URI"],
+        message: `QUICKBOOKS_REDIRECT_URI must exactly match ${expectedRedirectUri} when QuickBooks provider workflows are enabled.`,
+      });
+    }
+  }
+  const quickBooksEncryptionKey = value.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim();
+  const quickBooksPreviousEncryptionKey = value.QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS.trim();
+  if (value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED && quickBooksEncryptionKey.length < 32) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY"],
+      message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY must be at least 32 characters and independent from JWT_SECRET when QuickBooks provider workflows are enabled.",
+    });
+  }
+  if (quickBooksEncryptionKey && quickBooksEncryptionKey === value.JWT_SECRET) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY"],
+      message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY must be independent from JWT_SECRET.",
+    });
+  }
+  if (quickBooksPreviousEncryptionKey) {
+    if (quickBooksPreviousEncryptionKey.length < 32) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS"],
+        message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS must be at least 32 characters when provided.",
+      });
+    }
+    if (!quickBooksEncryptionKey) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY"],
+        message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY is required when a previous rotation key is configured.",
+      });
+    }
+    if (
+      quickBooksPreviousEncryptionKey === quickBooksEncryptionKey
+      || quickBooksPreviousEncryptionKey === value.JWT_SECRET
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS"],
+        message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS must be independent from current encryption and JWT keys.",
+      });
+    }
+  }
+  if (
+    value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED
+    && value.QUICKBOOKS_ENVIRONMENT === "sandbox"
+  ) {
+    const quoteFlyProductionHosts = new Set([
+      "quotefly.us",
+      "www.quotefly.us",
+      "app.quotefly.us",
+      "api.quotefly.us",
+    ]);
+    const runtimeOrigins = [new URL(value.APP_URL).origin, new URL(value.API_URL).origin];
+    if (runtimeOrigins.some((origin) => quoteFlyProductionHosts.has(new URL(origin).hostname))) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["QUICKBOOKS_ENVIRONMENT"],
+        message: "QuickBooks sandbox workflows are forbidden on QuoteFly production origins.",
+      });
+    }
   }
   if (value.NODE_ENV !== "production") return;
 
@@ -333,57 +438,8 @@ const EnvSchema = z.object({
     }
   }
 
-  const quickBooksEncryptionKey = value.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim();
-  const quickBooksPreviousEncryptionKey = value.QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS.trim();
-  if (quickBooksClientConfigured && quickBooksSecretConfigured && quickBooksEncryptionKey.length < 32) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY"],
-      message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY must be at least 32 characters when QuickBooks is configured.",
-    });
-  }
-  if (quickBooksEncryptionKey && quickBooksEncryptionKey === value.JWT_SECRET) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY"],
-      message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY must be independent from JWT_SECRET.",
-    });
-  }
-  if (quickBooksPreviousEncryptionKey) {
-    if (quickBooksPreviousEncryptionKey.length < 32) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS"],
-        message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS must be at least 32 characters when provided.",
-      });
-    }
-    if (!quickBooksEncryptionKey) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY"],
-        message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY is required when a previous rotation key is configured.",
-      });
-    }
-    if (
-      quickBooksPreviousEncryptionKey === quickBooksEncryptionKey ||
-      quickBooksPreviousEncryptionKey === value.JWT_SECRET
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS"],
-        message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS must be independent from current encryption and JWT keys.",
-      });
-    }
-  }
-
   if (value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED && value.NODE_ENV === "production") {
     if (value.QUICKBOOKS_ENVIRONMENT === "sandbox") {
-      const quoteFlyProductionHosts = new Set([
-        "quotefly.us",
-        "www.quotefly.us",
-        "app.quotefly.us",
-        "api.quotefly.us",
-      ]);
       const runtimeOrigins = [new URL(value.APP_URL).origin, new URL(value.API_URL).origin];
       const sandboxStagingOrigins = new Set(
         value.QUICKBOOKS_SANDBOX_STAGING_ORIGINS
@@ -406,13 +462,7 @@ const EnvSchema = z.object({
           message: "QUICKBOOKS_SANDBOX_STAGING_ORIGINS must contain only comma-separated bare HTTPS origins.",
         });
       }
-      if (runtimeOrigins.some((origin) => quoteFlyProductionHosts.has(new URL(origin).hostname))) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["QUICKBOOKS_ENVIRONMENT"],
-          message: "QuickBooks sandbox workflows are forbidden on QuoteFly production origins.",
-        });
-      } else if (runtimeOrigins.some((origin) => !sandboxStagingOrigins.has(origin))) {
+      if (runtimeOrigins.some((origin) => !sandboxStagingOrigins.has(origin))) {
         ctx.addIssue({
           code: "custom",
           path: ["QUICKBOOKS_SANDBOX_STAGING_ORIGINS"],

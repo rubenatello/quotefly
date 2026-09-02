@@ -9,6 +9,8 @@ const PREVIOUS_KEY = "quickbooks-previous-token-key-00000000001";
 let parseEnv: typeof import("../../src/config/env.js").parseEnv;
 let decryptQuickBooksSecret: typeof import("../../src/services/quickbooks.js").decryptQuickBooksSecret;
 let encryptQuickBooksSecret: typeof import("../../src/services/quickbooks.js").encryptQuickBooksSecret;
+let createSignedQuickBooksState: typeof import("../../src/services/quickbooks.js").createSignedQuickBooksState;
+let verifySignedQuickBooksState: typeof import("../../src/services/quickbooks.js").verifySignedQuickBooksState;
 let fetchQuickBooksCdc: typeof import("../../src/services/quickbooks.js").fetchQuickBooksCdc;
 let fetchQuickBooksCompanyInfo: typeof import("../../src/services/quickbooks.js").fetchQuickBooksCompanyInfo;
 let fetchQuickBooksCustomer: typeof import("../../src/services/quickbooks.js").fetchQuickBooksCustomer;
@@ -29,6 +31,7 @@ before(async () => {
   ({
     decryptQuickBooksSecret,
     encryptQuickBooksSecret,
+    createSignedQuickBooksState,
     fetchQuickBooksCdc,
     fetchQuickBooksCompanyInfo,
     fetchQuickBooksCustomer,
@@ -39,6 +42,7 @@ before(async () => {
     QUICKBOOKS_INVOICE_LINK_MINOR_VERSION,
     QuickBooksProviderError,
     searchQuickBooksCustomers,
+    verifySignedQuickBooksState,
   } = await import("../../src/services/quickbooks.js"));
   ({ classifyQuickBooksWorkerFailure } = await import("../../src/services/quickbooks-worker-failures.js"));
   ({ QuickBooksReconciliationError } = await import("../../src/services/quickbooks-reconciliation.js"));
@@ -60,6 +64,19 @@ function encryptLegacyJwtEnvelope(value: string) {
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   return [
+    iv.toString("base64url"),
+    cipher.getAuthTag().toString("base64url"),
+    encrypted.toString("base64url"),
+  ].join(".");
+}
+
+function encryptVersionedEnvelope(value: string, secret: string) {
+  const key = createHash("sha256").update(secret).digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  return [
+    "v2",
     iv.toString("base64url"),
     cipher.getAuthTag().toString("base64url"),
     encrypted.toString("base64url"),
@@ -91,6 +108,24 @@ describe("QuickBooks token encryption", () => {
     );
   });
 
+  it("never writes or reads current envelopes through the JWT key", () => {
+    const envWithoutDedicatedKey = runtimeEnv({ QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "" });
+    const jwtEncryptedCurrentEnvelope = encryptVersionedEnvelope("must-not-decrypt", JWT_SECRET);
+
+    assert.throws(
+      () => encryptQuickBooksSecret(envWithoutDedicatedKey, "must-not-encrypt"),
+      /token encryption key is not configured/i,
+    );
+    assert.throws(
+      () => decryptQuickBooksSecret(envWithoutDedicatedKey, jwtEncryptedCurrentEnvelope),
+      /payload is invalid/i,
+    );
+    assert.throws(
+      () => decryptQuickBooksSecret(runtimeEnv(), jwtEncryptedCurrentEnvelope),
+      /payload is invalid/i,
+    );
+  });
+
   it("retains read compatibility for legacy JWT-derived ciphertext", () => {
     const legacyCiphertext = encryptLegacyJwtEnvelope("legacy-refresh-token");
     assert.equal(decryptQuickBooksSecret(runtimeEnv(), legacyCiphertext), "legacy-refresh-token");
@@ -103,6 +138,31 @@ describe("QuickBooks token encryption", () => {
 
     assert.throws(() => decryptQuickBooksSecret(env, tampered), /payload is invalid/i);
     assert.throws(() => decryptQuickBooksSecret(env, "v2.not-valid"), /payload is invalid/i);
+  });
+});
+
+describe("QuickBooks OAuth state", () => {
+  it("encrypts internal actor data and fails closed for tampering", () => {
+    const env = runtimeEnv();
+    const input = {
+      tenantId: "tenant-internal-identity",
+      userId: "user-internal-identity",
+      role: "owner",
+    };
+    const state = createSignedQuickBooksState(env, input);
+
+    assert.equal(state.startsWith("qbo2."), true);
+    assert.equal(state.includes(input.tenantId), false);
+    assert.equal(state.includes(input.userId), false);
+    const verified = verifySignedQuickBooksState(env, state);
+    assert.equal(verified?.tenantId, input.tenantId);
+    assert.equal(verified?.userId, input.userId);
+    assert.equal(verified?.role, input.role);
+    assert.match(verified?.nonce ?? "", /^[a-f0-9]{24}$/);
+    assert.equal(typeof verified?.exp, "number");
+
+    const tampered = `${state.slice(0, -1)}${state.endsWith("A") ? "B" : "A"}`;
+    assert.equal(verifySignedQuickBooksState(env, tampered), null);
   });
 });
 
@@ -143,6 +203,59 @@ describe("QuickBooks runtime feature dependencies", () => {
       QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
       QUICKBOOKS_CDC_WORKER_ENABLED: "true",
     }));
+  });
+
+  it("allows connection-only validation and rejects accounting workers in OAuth-only mode", () => {
+    assert.doesNotThrow(() => runtimeEnv({
+      ...providerBase,
+      QUICKBOOKS_ENVIRONMENT: "sandbox",
+      QUICKBOOKS_WEBHOOK_VERIFIER: "",
+      QUICKBOOKS_OAUTH_ONLY_MODE: "true",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "false",
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "false",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "false",
+    }));
+    assert.throws(
+      () => runtimeEnv({
+        ...providerBase,
+        QUICKBOOKS_ENVIRONMENT: "sandbox",
+        QUICKBOOKS_OAUTH_ONLY_MODE: "true",
+        QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+      }),
+      /must remain disabled in OAuth-only mode/i,
+    );
+  });
+
+  it("restricts OAuth-only mode to sandbox staging", () => {
+    assert.throws(
+      () => runtimeEnv({
+        ...providerBase,
+        QUICKBOOKS_ENVIRONMENT: "production",
+        QUICKBOOKS_OAUTH_ONLY_MODE: "true",
+      }),
+      /restricted to sandbox staging/i,
+    );
+  });
+
+  it("requires an explicit redirect override to exactly match the API callback", () => {
+    assert.doesNotThrow(() => runtimeEnv({
+      ...providerBase,
+      QUICKBOOKS_REDIRECT_URI: "http://localhost:4000/v1/integrations/quickbooks/callback",
+    }));
+    for (const redirectUri of [
+      "http://other-host.test/v1/integrations/quickbooks/callback",
+      "http://localhost:4000/v1/integrations/quickbooks/connect",
+      "http://localhost:4000/v1/integrations/quickbooks/callback?source=test",
+      "http://localhost:4000/v1/integrations/quickbooks/callback#fragment",
+    ]) {
+      assert.throws(
+        () => runtimeEnv({
+          ...providerBase,
+          QUICKBOOKS_REDIRECT_URI: redirectUri,
+        }),
+        /must exactly match/i,
+      );
+    }
   });
 });
 

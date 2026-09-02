@@ -11,6 +11,7 @@ export type QuickBooksSetupPhase =
 export type QuickBooksSetupCheckKey =
   | "PROVIDER_CONFIGURED"
   | "PROVIDER_WORKFLOWS_ENABLED"
+  | "ACCOUNTING_WORKFLOWS_ENABLED"
   | "WEBHOOK_CONFIGURED"
   | "HOSTED_PAYMENTS_ENABLED"
   | "RECONCILIATION_WORKER_ENABLED"
@@ -45,6 +46,7 @@ export type QuickBooksSetupConnectionState = Readonly<{
 export type QuickBooksSetupRuntime = Readonly<{
   providerConfigured: boolean;
   providerWorkflowsEnabled: boolean;
+  oauthOnlyMode?: boolean;
   webhookConfigured: boolean;
   hostedPaymentsEnabled: boolean;
   reconciliationWorkerEnabled: boolean;
@@ -89,6 +91,7 @@ export function deriveQuickBooksSetupReadiness(
 ): QuickBooksSetupReadiness {
   const providerConfigured = runtime.providerConfigured;
   const providerWorkflowsEnabled = runtime.providerWorkflowsEnabled;
+  const accountingWorkflowsEnabled = !runtime.oauthOnlyMode;
   const webhookConfigured = runtime.webhookConfigured;
   const hostedPaymentsEnabled = runtime.hostedPaymentsEnabled;
   const reconciliationWorkerEnabled = runtime.reconciliationWorkerEnabled;
@@ -112,6 +115,7 @@ export function deriveQuickBooksSetupReadiness(
   const checks = [
     { key: "PROVIDER_CONFIGURED", passed: providerConfigured, managedBy: "QUOTEFLY" },
     { key: "PROVIDER_WORKFLOWS_ENABLED", passed: providerWorkflowsEnabled, managedBy: "QUOTEFLY" },
+    { key: "ACCOUNTING_WORKFLOWS_ENABLED", passed: accountingWorkflowsEnabled, managedBy: "QUOTEFLY" },
     { key: "WEBHOOK_CONFIGURED", passed: webhookConfigured, managedBy: "QUOTEFLY" },
     { key: "HOSTED_PAYMENTS_ENABLED", passed: hostedPaymentsEnabled, managedBy: "QUOTEFLY" },
     { key: "RECONCILIATION_WORKER_ENABLED", passed: reconciliationWorkerEnabled, managedBy: "QUOTEFLY" },
@@ -132,6 +136,7 @@ export function deriveQuickBooksSetupReadiness(
 
   const optionalOperationChecks = new Set<QuickBooksSetupCheckKey>([
     "WEBHOOK_CONFIGURED",
+    "ACCOUNTING_WORKFLOWS_ENABLED",
     "HOSTED_PAYMENTS_ENABLED",
     "RECONCILIATION_WORKER_ENABLED",
     "RECONCILIATION_WORKER_HEALTHY",
@@ -152,7 +157,7 @@ export function deriveQuickBooksSetupReadiness(
           ? "CONFIRMED"
           : "READY_FOR_CONFIRMATION";
 
-  const coreConnectionReady = requiredChecksPassed && confirmed;
+  const coreConnectionReady = requiredChecksPassed && confirmed && accountingWorkflowsEnabled;
   const reconciliationReady = coreConnectionReady
     && webhookConfigured
     && reconciliationWorkerEnabled
@@ -170,7 +175,7 @@ export function deriveQuickBooksSetupReadiness(
     capabilities: {
       canConnect: platformAvailable && (!connection || connection.status === "DISCONNECTED"),
       canReconnect: platformAvailable && Boolean(connection && connection.status !== "DISCONNECTED"),
-      canConfirm: requiredChecksPassed,
+      canConfirm: requiredChecksPassed && accountingWorkflowsEnabled,
       canDisconnect: Boolean(connection && connection.status !== "DISCONNECTED"),
     },
     operations: {

@@ -287,9 +287,12 @@ function routeFallback(path: PublicRoutePath): string {
 function renderPublicRoute(path: PublicRoutePath): string {
   const route = PUBLIC_ROUTE_SEO[path];
   const canonical = publicCanonicalUrl(path);
+  const robots = process.env.VITE_PUBLIC_SEARCH_INDEXING?.trim() === "disabled"
+    ? "noindex,nofollow,noarchive"
+    : "index,follow";
   let html = replaceTitle(baseHtml, route.title);
   html = replaceNamedMeta(html, "description", route.description);
-  html = replaceNamedMeta(html, "robots", "index,follow");
+  html = replaceNamedMeta(html, "robots", robots);
   html = replaceNamedMeta(html, "twitter:card", "summary_large_image");
   html = replaceNamedMeta(html, "twitter:title", route.title);
   html = replaceNamedMeta(html, "twitter:description", route.description);

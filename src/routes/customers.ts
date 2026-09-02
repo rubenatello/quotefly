@@ -898,7 +898,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         });
 
         return createdCustomer;
-      });
+      }, { maxWait: 5_000, timeout: 15_000 });
 
       if (!customer) {
         return reply.code(409).send({

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { buildQuickBooksInvoiceCsv } from "../src/services/quickbooks-csv";
 import {
   createSignedQuickBooksState,
@@ -15,6 +17,7 @@ process.env.JWT_SECRET = "security-test-jwt-secret-that-is-long-enough";
 process.env.APP_URL = "http://localhost:5173";
 process.env.API_URL = "http://localhost:4000";
 process.env.CORS_ALLOWED_ORIGINS = "http://127.0.0.1:5173";
+process.env.PUBLIC_SIGNUP_ENABLED = "true";
 process.env.ENABLE_TWILIO_SMS = "false";
 process.env.RESEND_API_KEY = "re_security_test";
 process.env.PASSWORD_RESET_EMAIL_FROM = "QuoteFly <support@quotefly.us>";
@@ -221,6 +224,238 @@ test("QuickBooks signatures reject malformed or tampered values without throwing
   );
 });
 
+test("isolated staging can disable public tenant registration before request parsing", async () => {
+  const { buildServer } = await import("../src/app");
+  const app = buildServer();
+  app.env.PUBLIC_SIGNUP_ENABLED = false;
+  await app.ready();
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { intentionally: "invalid" },
+    });
+    assert.equal(response.statusCode, 503);
+    assert.deepEqual(response.json(), {
+      error: "New account registration is temporarily unavailable.",
+      code: "PUBLIC_SIGNUP_DISABLED",
+    });
+  } finally {
+    await app.close();
+  }
+});
+
+test("QuickBooks provider workflows require an independent token-encryption key in every environment", async () => {
+  const { parseEnv } = await import("../src/config/env");
+  const base = {
+    ...process.env,
+    NODE_ENV: "development",
+    DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/quotefly_test?schema=public",
+    JWT_SECRET: "quickbooks-workflow-jwt-secret-that-is-long-enough",
+    APP_URL: "http://localhost:5173",
+    API_URL: "http://localhost:4000",
+    QUICKBOOKS_CLIENT_ID: "quickbooks-development-client",
+    QUICKBOOKS_CLIENT_SECRET: "quickbooks-development-secret",
+    QUICKBOOKS_ENVIRONMENT: "sandbox",
+    QUICKBOOKS_REDIRECT_URI: "http://localhost:4000/v1/integrations/quickbooks/callback",
+    QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+    QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "false",
+    QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "false",
+    QUICKBOOKS_CDC_WORKER_ENABLED: "false",
+    QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "",
+    QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS: "",
+  } satisfies NodeJS.ProcessEnv;
+
+  assert.throws(
+    () => parseEnv(base),
+    /must be at least 32 characters and independent from JWT_SECRET when QuickBooks provider workflows are enabled/i,
+  );
+  assert.throws(
+    () => parseEnv({ ...base, QUICKBOOKS_TOKEN_ENCRYPTION_KEY: base.JWT_SECRET }),
+    /must be independent from JWT_SECRET/i,
+  );
+  assert.doesNotThrow(() => parseEnv({
+    ...base,
+    QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-encryption-key-000001",
+  }));
+  assert.throws(
+    () => parseEnv({
+      ...base,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-encryption-key-000001",
+      APP_URL: "https://www.quotefly.us",
+      API_URL: "https://api.quotefly.us",
+    }),
+    /QuickBooks sandbox workflows are forbidden on QuoteFly production origins/i,
+  );
+});
+
+test("QuickBooks OAuth routes set no-store and no-referrer before callback parsing", () => {
+  const source = readFileSync(new URL("../src/routes/quickbooks.ts", import.meta.url), "utf8");
+  const connectStart = source.indexOf('"/integrations/quickbooks/connect"');
+  const callbackStart = source.indexOf('app.get("/integrations/quickbooks/callback"', connectStart);
+  assert.ok(connectStart >= 0 && callbackStart > connectStart, "QuickBooks OAuth connect route must remain discoverable");
+  const connectSource = source.slice(connectStart, callbackStart);
+  assert.match(connectSource, /reply\.header\("Cache-Control", "private, no-store"\)/);
+
+  const callbackEnd = source.indexOf("let issuedRefreshToken", callbackStart);
+  assert.ok(callbackEnd > callbackStart, "QuickBooks OAuth callback parser must remain discoverable");
+  const callbackPreamble = source.slice(callbackStart, callbackEnd);
+  assert.match(callbackPreamble, /reply\.header\("Cache-Control", "private, no-store"\)/);
+  assert.match(callbackPreamble, /reply\.header\("Referrer-Policy", "no-referrer"\)/);
+  assert.ok(
+    callbackPreamble.indexOf('reply.header("Cache-Control", "private, no-store")')
+      < callbackPreamble.indexOf("QuickBooksCallbackQuerySchema.parse(request.query)"),
+    "callback cache policy must be set before parsing",
+  );
+});
+
+test("infrastructure variable audit uses fixed profiles and never emits secret values", () => {
+  const auditPath = fileURLToPath(new URL("../scripts/infrastructure-variable-audit.mjs", import.meta.url));
+  const allSecretNames = [
+    "DATABASE_URL", "DIRECT_DATABASE_URL", "RATE_LIMIT_REDIS_URL", "JWT_SECRET", "OPENAI_API_KEY",
+    "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "RESEND_API_KEY", "TWILIO_AUTH_TOKEN",
+    "TWILIO_WEBHOOK_AUTH_TOKEN", "QUICKBOOKS_CLIENT_SECRET", "QUICKBOOKS_WEBHOOK_VERIFIER",
+    "QUICKBOOKS_TOKEN_ENCRYPTION_KEY", "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS",
+  ];
+  const clearedSecrets = Object.fromEntries(allSecretNames.map((name) => [name, ""]));
+  const runAudit = (profile, env) => spawnSync(
+    process.execPath,
+    [auditPath, "--profile", profile],
+    { encoding: "utf8", env: { ...process.env, ...clearedSecrets, ...env } },
+  );
+  const requiredEnvironment = {
+    api: {
+      NODE_ENV: "test", DATABASE_URL: "database-sentinel", JWT_SECRET: "jwt-sentinel",
+      APP_URL: "https://app.example.test", API_URL: "https://api.example.test",
+    },
+    worker: { NODE_ENV: "test", DATABASE_URL: "database-sentinel", JWT_SECRET: "jwt-sentinel" },
+    migrations: { NODE_ENV: "test", DIRECT_DATABASE_URL: "direct-database-sentinel" },
+    web: { VITE_API_BASE_URL: "https://api.example.test" },
+    quickbooks: {
+      NODE_ENV: "test", DATABASE_URL: "database-sentinel", JWT_SECRET: "jwt-sentinel",
+      QUICKBOOKS_CLIENT_ID: "client-id", QUICKBOOKS_CLIENT_SECRET: "client-secret-sentinel",
+      QUICKBOOKS_ENVIRONMENT: "sandbox", QUICKBOOKS_REDIRECT_URI: "https://api.example.test/callback",
+      QUICKBOOKS_WEBHOOK_VERIFIER: "verifier-sentinel", QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "encryption-key-sentinel",
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+      QUICKBOOKS_OAUTH_ONLY_MODE: "false",
+    },
+    "quickbooks-oauth": {
+      NODE_ENV: "test", DATABASE_URL: "database-sentinel", JWT_SECRET: "jwt-sentinel",
+      QUICKBOOKS_CLIENT_ID: "client-id", QUICKBOOKS_CLIENT_SECRET: "client-secret-sentinel",
+      QUICKBOOKS_ENVIRONMENT: "sandbox", QUICKBOOKS_REDIRECT_URI: "https://api.example.test/callback",
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "encryption-key-sentinel",
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true", QUICKBOOKS_OAUTH_ONLY_MODE: "true",
+    },
+  };
+
+  for (const [profile, env] of Object.entries(requiredEnvironment)) {
+    const result = runAudit(profile, env);
+    assert.equal(result.status, 0, `${profile}: ${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.deepEqual(Object.keys(report), ["schema", "evidenceScope", "profile", "outcome", "required", "forbidden"]);
+    assert.equal(report.schema, "quotefly.infrastructure-variable-audit/v1");
+    assert.equal(report.evidenceScope, "current-runtime-only");
+    assert.equal(report.profile, profile);
+    assert.equal(report.outcome, "pass");
+    assert.ok(report.required.every((entry) => entry.status === "configured"));
+    assert.ok(report.forbidden.every((entry) => entry.status === "missing"));
+  }
+
+  const secretEnvironment = Object.fromEntries(allSecretNames.map((name, index) => [name, `secret-sentinel-${index}`]));
+  const webResult = runAudit("web", { VITE_API_BASE_URL: "https://api.example.test", ...secretEnvironment });
+  assert.equal(webResult.status, 1);
+  const webReport = JSON.parse(webResult.stdout);
+  assert.equal(webReport.outcome, "fail");
+  assert.deepEqual(webReport.forbidden.map((entry) => entry.name), allSecretNames);
+  assert.ok(webReport.forbidden.every((entry) => entry.classification === "secret" && entry.status === "configured"));
+  for (const value of Object.values(secretEnvironment)) {
+    assert.doesNotMatch(webResult.stdout, new RegExp(value));
+    assert.doesNotMatch(webResult.stderr, new RegExp(value));
+  }
+
+  for (const [profile, forbiddenName] of Object.entries({
+    api: "DIRECT_DATABASE_URL",
+    worker: "DIRECT_DATABASE_URL",
+    migrations: "DATABASE_URL",
+    quickbooks: "DIRECT_DATABASE_URL",
+    "quickbooks-oauth": "QUICKBOOKS_WEBHOOK_VERIFIER",
+  })) {
+    const result = runAudit(profile, { ...requiredEnvironment[profile], [forbiddenName]: "forbidden-sentinel" });
+    assert.equal(result.status, 1, profile);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, "fail");
+    assert.deepEqual(
+      report.forbidden.find((entry) => entry.name === forbiddenName),
+      { name: forbiddenName, classification: "secret", status: "configured" },
+    );
+  }
+
+  const unknownProfile = "untrusted-profile-sentinel";
+  const unknown = spawnSync(process.execPath, [auditPath, "--profile", unknownProfile], { encoding: "utf8" });
+  assert.equal(unknown.status, 2);
+  assert.doesNotMatch(unknown.stdout, new RegExp(unknownProfile));
+  assert.doesNotMatch(unknown.stderr, new RegExp(unknownProfile));
+
+  const gitignore = readFileSync(new URL("../.gitignore", import.meta.url), "utf8");
+  assert.match(gitignore, /^\.env\.\*$/m);
+  assert.match(gitignore, /^\.railway\/$/m);
+  assert.match(gitignore, /^\.vercel\/$/m);
+  assert.match(gitignore, /^\.neon\/$/m);
+
+  const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
+  assert.equal(
+    spawnSync("git", ["check-ignore", "-q", "--", ".env.staging.local"], { cwd: repositoryRoot }).status,
+    0,
+    ".env.staging.local must be ignored",
+  );
+  assert.equal(
+    spawnSync("git", ["check-ignore", "-q", "--", ".env.example"], { cwd: repositoryRoot }).status,
+    1,
+    ".env.example must remain trackable",
+  );
+  assert.equal(
+    spawnSync("git", ["check-ignore", "-q", "--", ".neon/local-state.json"], { cwd: repositoryRoot }).status,
+    0,
+    ".neon local state must be ignored",
+  );
+  assert.equal(
+    spawnSync("git", ["check-ignore", "-q", "--", ".neon"], { cwd: repositoryRoot }).status,
+    0,
+    ".neon local state file must be ignored",
+  );
+});
+
+test("integration setup replaces ambient provider credentials with deterministic fixtures", () => {
+  const source = readFileSync(new URL("../tests/setup-env.ts", import.meta.url), "utf8");
+  const overwrittenNames = [
+    "JWT_SECRET",
+    "APP_URL",
+    "API_URL",
+    "CORS_ALLOWED_ORIGINS",
+    "OPENAI_API_KEY",
+    "RESEND_API_KEY",
+    "STRIPE_SECRET_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "QUICKBOOKS_CLIENT_ID",
+    "QUICKBOOKS_CLIENT_SECRET",
+    "QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED",
+    "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED",
+    "QUICKBOOKS_HOSTED_PAYMENTS_ENABLED",
+    "QUICKBOOKS_CDC_WORKER_ENABLED",
+    "QUICKBOOKS_WEBHOOK_VERIFIER",
+    "QUICKBOOKS_TOKEN_ENCRYPTION_KEY",
+    "TWILIO_ACCOUNT_SID",
+    "TWILIO_AUTH_TOKEN",
+    "TWILIO_WEBHOOK_AUTH_TOKEN",
+    "RATE_LIMIT_REDIS_URL",
+  ];
+
+  for (const name of overwrittenNames) {
+    assert.match(source, new RegExp(`process\\.env\\.${name}\\s*=`), `${name} must be overwritten for integration tests`);
+    assert.doesNotMatch(source, new RegExp(`process\\.env\\.${name}\\s*\\|\\|=`), `${name} must not inherit ambient credentials`);
+  }
+});
+
 test("QuickBooks quote preview keeps protected reads inside its tenant RLS transaction", () => {
   const source = readFileSync(new URL("../src/routes/quickbooks.ts", import.meta.url), "utf8");
   const contextStart = source.indexOf("async function loadQuickBooksSyncContext");
@@ -230,4 +465,27 @@ test("QuickBooks quote preview keeps protected reads inside its tenant RLS trans
   const contextSource = source.slice(contextStart, contextEnd);
   assert.match(contextSource, /const quote = await transaction\.quote\.findFirst\(/);
   assert.doesNotMatch(contextSource, /app\.prisma\.quote\./);
+});
+
+test("QuickBooks OAuth actor migration restores forced RLS before its transaction commits", () => {
+  const source = readFileSync(
+    new URL(
+      "../prisma/migrations/20260831213000_bind_quickbooks_oauth_state_actor/migration.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const begin = source.indexOf("BEGIN;");
+  const relax = source.indexOf('ALTER TABLE "QuickBooksOAuthState" NO FORCE ROW LEVEL SECURITY;');
+  const cleanup = source.indexOf('DELETE FROM "QuickBooksOAuthState"');
+  const foreignKey = source.indexOf('ADD CONSTRAINT "QuickBooksOAuthState_tenantId_userId_fkey"');
+  const restore = source.indexOf('ALTER TABLE "QuickBooksOAuthState" FORCE ROW LEVEL SECURITY;');
+  const commit = source.indexOf("COMMIT;");
+
+  assert.ok(begin >= 0);
+  assert.ok(begin < relax);
+  assert.ok(relax < cleanup);
+  assert.ok(cleanup < foreignKey);
+  assert.ok(foreignKey < restore);
+  assert.ok(restore < commit);
 });

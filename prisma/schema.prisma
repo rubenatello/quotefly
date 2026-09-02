@@ -569,6 +569,7 @@ model TenantUser {
   reviewedQuickBooksItemMaps     QuickBooksItemMap[]          @relation("QuickBooksItemMapReviewer")
   confirmedQuickBooksSetups      QuickBooksConnection[]       @relation("QuickBooksSetupConfirmer")
   quickBooksConnectionEvents     QuickBooksConnectionEvent[]  @relation("QuickBooksConnectionEventActor")
+  quickBooksOAuthStates          QuickBooksOAuthState[]       @relation("QuickBooksOAuthStateActor")
   assignedActivityTasks          ActivityTask[]               @relation("ActivityTaskAssignee")
   createdActivityTasks           ActivityTask[]               @relation("ActivityTaskCreator")
   completedActivityTasks         ActivityTask[]               @relation("ActivityTaskCompleter")
@@ -1843,9 +1844,11 @@ model QuickBooksOAuthState {
   consumedAtUtc          DateTime?             @db.Timestamptz(3)
   createdAt              DateTime              @default(now()) @db.Timestamptz(3)
   tenant                 Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actorTenantUser        TenantUser            @relation("QuickBooksOAuthStateActor", fields: [tenantId, userId], references: [tenantId, userId], onDelete: Cascade)
   connection             QuickBooksConnection? @relation(fields: [quickBooksConnectionId, tenantId], references: [id, tenantId], onDelete: Restrict)
 
   @@unique([id, tenantId])
+  @@index([tenantId, userId])
   @@index([tenantId, expiresAtUtc, consumedAtUtc])
   @@index([tenantId, consumedAtUtc, expiresAtUtc, id], map: "QuickBooksOAuthState_retention_idx")
 }
