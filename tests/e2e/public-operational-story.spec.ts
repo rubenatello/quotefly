@@ -117,7 +117,11 @@ test("public pages tell the verified quote-to-internal-invoice story", async ({ 
 });
 
 test("operational marketing pages stay responsive at release widths", async ({ page }) => {
-  test.setTimeout(120_000);
+  // This test performs 35 full-page navigations before its post-loop touch-target
+  // checks. Cold Node/Docker launch runners can legitimately exceed two minutes
+  // without a failed assertion, so keep enough headroom to report the actual
+  // responsive result instead of timing out inside an active overflow poll.
+  test.setTimeout(300_000);
   for (const width of RESPONSIVE_WIDTHS) {
     await page.setViewportSize({ width, height: width < 1000 ? 844 : 900 });
     for (const route of PUBLIC_OPERATIONAL_ROUTES) {

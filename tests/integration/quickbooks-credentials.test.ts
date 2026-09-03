@@ -479,6 +479,113 @@ describe("QuickBooks credential-operation claim", () => {
       });
   });
 
+  test("durably queues a rotated credential and fails closed when refresh finalization loses its fence", async () => {
+    const { tenant, connection } = await createConnection("refresh-finalization-stale");
+    const refreshBarrier = deferred<{
+      access_token: string;
+      refresh_token: string;
+      token_type: string;
+      expires_in: number;
+    }>();
+    const rotatedRefreshToken = "rotated-refresh-finalization-stale-secret";
+    providerMocks.refreshToken.mockImplementation(() => refreshBarrier.promise);
+    providerMocks.revokeToken.mockRejectedValue(new Error(`synthetic revoke outage ${rotatedRefreshToken}`));
+
+    const refresh = getSerializedQuickBooksAccessToken({
+      prisma,
+      runtimeEnv: env,
+      connection: {
+        id: connection.id,
+        tenantId: tenant.id,
+        realmId: connection.realmId,
+      },
+    });
+    await waitFor(async () => {
+      const row = await prisma.quickBooksConnection.findUnique({ where: { id: connection.id } });
+      return providerMocks.refreshToken.mock.calls.length === 1 && Boolean(row?.tokenRefreshClaimHash);
+    }, "refresh claim before stale finalization");
+
+    await prisma.quickBooksConnection.update({
+      where: { id: connection.id },
+      data: { tokenRefreshClaimHash: null, tokenRefreshClaimExpiresAtUtc: null },
+    });
+    refreshBarrier.resolve({
+      access_token: "rotated-access-finalization-stale",
+      refresh_token: rotatedRefreshToken,
+      token_type: "bearer",
+      expires_in: 3_600,
+    });
+
+    await expect(refresh).rejects.toMatchObject({ code: "QUICKBOOKS_TOKEN_REFRESH_STALE" });
+    expect(providerMocks.revokeToken).toHaveBeenCalledWith(env, rotatedRefreshToken);
+
+    const orphanRows = await prisma.quickBooksOrphanCredentialRevocation.findMany({
+      where: { tenantId: tenant.id },
+    });
+    expect(orphanRows).toHaveLength(1);
+    expect(orphanRows[0]).toMatchObject({ status: "PENDING", attemptCount: 1 });
+    expect(orphanRows[0]!.refreshTokenEncrypted).not.toBe(rotatedRefreshToken);
+    expect(JSON.stringify(orphanRows)).not.toContain(rotatedRefreshToken);
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } }))
+      .resolves.toMatchObject({
+        status: "NEEDS_REAUTH",
+        accessTokenEncrypted: null,
+        refreshTokenEncrypted: null,
+        setupConfirmedAtUtc: null,
+        tokenRefreshClaimHash: null,
+      });
+  });
+
+  test("does not overwrite a newer refresh claimant while cleaning up an issued rotated credential", async () => {
+    const { tenant, connection } = await createConnection("refresh-finalization-new-claim");
+    const refreshBarrier = deferred<{
+      access_token: string;
+      refresh_token: string;
+      token_type: string;
+      expires_in: number;
+    }>();
+    const newerClaimHash = "e".repeat(64);
+    providerMocks.refreshToken.mockImplementation(() => refreshBarrier.promise);
+    providerMocks.revokeToken.mockResolvedValue(undefined);
+
+    const refresh = getSerializedQuickBooksAccessToken({
+      prisma,
+      runtimeEnv: env,
+      connection: {
+        id: connection.id,
+        tenantId: tenant.id,
+        realmId: connection.realmId,
+      },
+    });
+    await waitFor(async () => {
+      const row = await prisma.quickBooksConnection.findUnique({ where: { id: connection.id } });
+      return providerMocks.refreshToken.mock.calls.length === 1 && Boolean(row?.tokenRefreshClaimHash);
+    }, "refresh claim before replacement");
+    await prisma.quickBooksConnection.update({
+      where: { id: connection.id },
+      data: {
+        tokenRefreshClaimHash: newerClaimHash,
+        tokenRefreshClaimExpiresAtUtc: new Date(Date.now() + 120_000),
+      },
+    });
+    refreshBarrier.resolve({
+      access_token: "rotated-access-new-claim",
+      refresh_token: "rotated-refresh-new-claim",
+      token_type: "bearer",
+      expires_in: 3_600,
+    });
+
+    await expect(refresh).rejects.toMatchObject({ code: "QUICKBOOKS_TOKEN_REFRESH_STALE" });
+    expect(providerMocks.revokeToken).toHaveBeenCalledWith(env, "rotated-refresh-new-claim");
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } }))
+      .resolves.toMatchObject({
+        status: "CONNECTED",
+        tokenRefreshClaimHash: newerClaimHash,
+        accessTokenEncrypted: connection.accessTokenEncrypted,
+        refreshTokenEncrypted: connection.refreshTokenEncrypted,
+      });
+  });
+
   test("serializes duplicate disconnects and performs provider revocation once", async () => {
     const { tenant, connection } = await createConnection("duplicate-disconnect");
     const revokeBarrier = deferred<void>();

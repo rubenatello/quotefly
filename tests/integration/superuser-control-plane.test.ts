@@ -116,7 +116,7 @@ describe("superuser data-governance control plane", () => {
       where: { id: other.tenant.id },
       data: { stripeCustomerId: privateProviderId },
     });
-    await prisma.customer.create({
+    const privateCustomer = await prisma.customer.create({
       data: {
         tenantId: other.tenant.id,
         fullName: "Private Customer Sentinel",
@@ -147,6 +147,66 @@ describe("superuser data-governance control plane", () => {
         setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
         realmBinding: { create: { realmId: quickBooksRealm, active: true } },
         cdcCursor: { create: { changedSinceUtc: new Date() } },
+      },
+    });
+    const privateQuote = await prisma.quote.create({
+      data: {
+        tenantId: other.tenant.id,
+        customerId: privateCustomer.id,
+        serviceType: "ROOFING",
+        status: "ACCEPTED",
+        title: "Private QuickBooks invoice source",
+        scopeText: "Private scope that must not render in the control plane.",
+        internalCostSubtotal: 50,
+        customerPriceSubtotal: 100,
+        taxAmount: 0,
+        totalAmount: 100,
+      },
+    });
+    const privateJob = await prisma.job.create({
+      data: {
+        tenantId: other.tenant.id,
+        customerId: privateCustomer.id,
+        sourceQuoteId: privateQuote.id,
+        jobNumber: 1,
+        title: privateQuote.title,
+        scopeSnapshot: privateQuote.scopeText,
+        serviceType: privateQuote.serviceType,
+        acceptedAtUtc: new Date(),
+      },
+    });
+    const privateInvoice = await prisma.invoice.create({
+      data: {
+        tenantId: other.tenant.id,
+        customerId: privateCustomer.id,
+        jobId: privateJob.id,
+        sourceQuoteId: privateQuote.id,
+        invoiceNumber: 1,
+        titleSnapshot: privateQuote.title,
+        subtotalAmount: 100,
+        taxAmount: 0,
+        totalAmount: 100,
+        balanceDue: 100,
+      },
+    });
+    const privateOperationProviderId = "quickbooks-operation-provider-id-must-not-render";
+    const privateOperationRequestId = "quickbooks-operation-request-id-must-not-render";
+    await prisma.quickBooksInvoiceOperation.create({
+      data: {
+        tenantId: other.tenant.id,
+        invoiceId: privateInvoice.id,
+        quickBooksConnectionId: quickBooksConnection.id,
+        requestedByTenantUserId: otherMembership.id,
+        status: "SUCCEEDED",
+        commandKeyHash: "c".repeat(64),
+        payloadHash: "d".repeat(64),
+        providerRealmId: quickBooksRealm,
+        providerRequestId: privateOperationRequestId,
+        providerInvoiceId: privateOperationProviderId,
+        providerDocNumber: "QF-000001",
+        processingStartedAtUtc: new Date(),
+        lastAttemptAtUtc: new Date(),
+        succeededAtUtc: new Date(),
       },
     });
     const operationalNow = new Date();
@@ -256,6 +316,7 @@ describe("superuser data-governance control plane", () => {
         status: "CONNECTED",
         setupPhase: "CONFIRMED",
         environment: "sandbox",
+        counts: { invoiceSyncs: 1 },
       },
     });
     expect(tenantBody.fieldsExcluded).toContain("customer records");
@@ -268,6 +329,8 @@ describe("superuser data-governance control plane", () => {
     expect(tenantsResponse.body).not.toContain("encrypted-access-superuser-sentinel");
     expect(tenantsResponse.body).not.toContain("encrypted-refresh-superuser-sentinel");
     expect(tenantsResponse.body).not.toContain("com.intuit.quickbooks.accounting");
+    expect(tenantsResponse.body).not.toContain(privateOperationProviderId);
+    expect(tenantsResponse.body).not.toContain(privateOperationRequestId);
 
     const summaryResponse = await app.inject({
       method: "GET",

@@ -761,7 +761,7 @@ test("a delayed QuickBooks mapping review cannot replace or publish a newly acti
   await addSessionCookie(context, owner);
   await page.goto(`/app/quotes/${firstQuote.id}`);
   const firstPanel = page.getByTestId("quickbooks-invoice-panel");
-  const customerSearchButton = firstPanel.getByRole("button", { name: "invoices.quickBooks.search", exact: true }).first();
+  const customerSearchButton = firstPanel.getByRole("button", { name: "Search", exact: true }).first();
   await expect(customerSearchButton).toBeVisible({ timeout: 30_000 });
   await customerSearchButton.click();
   await firstPanel.getByRole("button", { name: /QuickBooks Customer A/ }).click();
@@ -832,13 +832,17 @@ test("QuickBooks customer and item reviews refresh a no-email invoice for offlin
   };
 
   let customerReviewed = false;
-  let itemReviewed = false;
+  const itemMappings = [
+    { itemKey: `${quote.title.toLowerCase()}-first`, description: `${quote.title} first`, quickBooksItemId: "qb-no-email-item-first", quickBooksItemName: "QuickBooks no-email service first" },
+    { itemKey: `${quote.title.toLowerCase()}-second`, description: `${quote.title} second`, quickBooksItemId: "qb-no-email-item-second", quickBooksItemName: "QuickBooks no-email service second" },
+  ];
+  const reviewedItemKeys = new Set<string>();
   const previewBodies: Array<Record<string, unknown>> = [];
   await page.route(`**/v1/integrations/quickbooks/invoices/${invoice.invoice.id}/sync-preview`, async (route) => {
     previewBodies.push((route.request().postDataJSON() ?? {}) as Record<string, unknown>);
     const blockers = [
       ...(!customerReviewed ? ["QUICKBOOKS_CUSTOMER_MAPPING_REQUIRED"] : []),
-      ...(!itemReviewed ? ["QUICKBOOKS_ITEM_MAPPING_REQUIRED"] : []),
+      ...(reviewedItemKeys.size !== itemMappings.length ? ["QUICKBOOKS_ITEM_MAPPING_REQUIRED"] : []),
     ];
     await route.fulfill({
       status: 200,
@@ -868,17 +872,20 @@ test("QuickBooks customer and item reviews refresh a no-email invoice for offlin
           } : null,
           quickBooksCustomerName: customerReviewed ? "QuickBooks no-email customer" : null,
           providerDocNumber: `QF-${String(invoice.invoice.invoiceNumber).padStart(6, "0")}`,
-          lineItems: [{
-            description: quote.title,
-            quantity: 1,
-            unitPrice: 150,
-            amount: 150,
-            itemKey: quote.title.toLowerCase(),
-            mapped: itemReviewed,
-            quickBooksItemId: itemReviewed ? "qb-no-email-item" : null,
-            quickBooksItemName: itemReviewed ? "QuickBooks no-email service" : null,
-            reviewedAtUtc: itemReviewed ? "2026-08-27T12:00:00.000Z" : null,
-          }],
+          lineItems: itemMappings.map((item) => {
+            const reviewed = reviewedItemKeys.has(item.itemKey);
+            return {
+              description: item.description,
+              quantity: 1,
+              unitPrice: 75,
+              amount: 75,
+              itemKey: item.itemKey,
+              mapped: reviewed,
+              quickBooksItemId: reviewed ? item.quickBooksItemId : null,
+              quickBooksItemName: reviewed ? item.quickBooksItemName : null,
+              reviewedAtUtc: reviewed ? "2026-08-27T12:00:00.000Z" : null,
+            };
+          }),
           blockers,
           ready: blockers.length === 0,
           reviewBinding: blockers.length === 0 ? "N".repeat(43) : null,
@@ -905,11 +912,11 @@ test("QuickBooks customer and item reviews refresh a no-email invoice for offlin
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
-        candidates: [{
-          quickBooksItemId: "qb-no-email-item",
-          name: "QuickBooks no-email service",
+        candidates: itemMappings.map((item) => ({
+          quickBooksItemId: item.quickBooksItemId,
+          name: item.quickBooksItemName,
           type: "Service",
-        }],
+        })),
       }),
     });
   });
@@ -930,15 +937,18 @@ test("QuickBooks customer and item reviews refresh a no-email invoice for offlin
     });
   });
   await page.route("**/v1/integrations/quickbooks/mappings/item/review", async (route) => {
-    itemReviewed = true;
+    const body = route.request().postDataJSON() as { itemKey: string; quickBooksItemId: string };
+    reviewedItemKeys.add(body.itemKey);
+    const item = itemMappings.find((candidate) => candidate.itemKey === body.itemKey);
+    expect(item).toBeDefined();
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         mapping: {
-          itemKey: quote.title.toLowerCase(),
-          quickBooksItemId: "qb-no-email-item",
-          quickBooksItemName: "QuickBooks no-email service",
+          itemKey: body.itemKey,
+          quickBooksItemId: body.quickBooksItemId,
+          quickBooksItemName: item?.quickBooksItemName,
           workPresetId: null,
           reviewedAtUtc: "2026-08-27T12:00:00.000Z",
           reviewVersion: 1,
@@ -961,23 +971,38 @@ test("QuickBooks customer and item reviews refresh a no-email invoice for offlin
   await addSessionCookie(context, owner);
   await page.goto(`/app/quotes/${quote.id}`);
   const panel = page.getByTestId("quickbooks-invoice-panel");
-  const customerSearchButton = panel.getByRole("button", { name: "invoices.quickBooks.search", exact: true });
-  const itemSearchButton = panel.getByRole("button", { name: "invoices.quickBooks.searchItemsFor", exact: true });
+  const customerSearchButton = panel.getByRole("button", { name: "Search", exact: true });
+  const firstItemDetails = panel.locator("details").filter({ hasText: itemMappings[0].description }).first();
+  const secondItemDetails = panel.locator("details").filter({ hasText: itemMappings[1].description }).first();
+  const firstItemSearchButton = firstItemDetails.getByRole("button", { name: `Search QuickBooks items for ${itemMappings[0].description}`, exact: true });
+  const secondItemSearchButton = secondItemDetails.getByRole("button", { name: `Search QuickBooks items for ${itemMappings[1].description}`, exact: true });
   await expect(customerSearchButton).toBeVisible({ timeout: 30_000 });
-  await expect(itemSearchButton).toBeVisible();
+  await expect(firstItemSearchButton).toBeVisible();
+  await expect(secondItemSearchButton).toBeVisible();
+  await expect(panel.getByText(/^invoices\.quickBooks\./)).toHaveCount(0);
+  await expect(panel.locator('[aria-label^="invoices.quickBooks."]')).toHaveCount(0);
   await customerSearchButton.click();
   await panel.getByRole("button", { name: /QuickBooks no-email customer/ }).click();
   await panel.getByRole("button", { name: "Review mapping", exact: true }).first().click();
   await expect.poll(() => previewBodies.length).toBeGreaterThanOrEqual(2);
 
-  await itemSearchButton.click();
-  await panel.getByRole("button", { name: /QuickBooks no-email service/ }).click();
-  await panel.getByRole("button", { name: `Review item mapping for ${quote.title}` }).click();
+  await firstItemSearchButton.click();
+  await firstItemDetails.getByRole("button").filter({ hasText: itemMappings[0].quickBooksItemName }).click();
+  await secondItemSearchButton.click();
+  const secondSelection = secondItemDetails.getByRole("button").filter({ hasText: itemMappings[1].quickBooksItemName });
+  await secondSelection.click();
+  const firstReviewButton = firstItemDetails.getByRole("button", { name: `Review item mapping for ${itemMappings[0].description}`, exact: true });
+  await firstReviewButton.click();
+  await expect(firstItemDetails.locator(":scope > summary")).toBeFocused();
+  await expect(secondSelection).toHaveAttribute("aria-pressed", "true");
+  await expect(panel.getByText("Review or reset these changes before opening the final QuickBooks draft.")).toBeVisible();
+  await secondItemDetails.getByRole("button", { name: `Review item mapping for ${itemMappings[1].description}`, exact: true }).click();
   await expect(panel.getByRole("button", { name: "Review QuickBooks draft" })).toBeVisible();
 
   const reviewedRefreshBodies = previewBodies.filter((body) => Object.hasOwn(body, "billingEmail"));
-  expect(reviewedRefreshBodies).toHaveLength(2);
+  expect(reviewedRefreshBodies).toHaveLength(3);
   expect(reviewedRefreshBodies).toEqual([
+    { billingEmail: null, allowOnlineAchPayment: false, allowOnlineCardPayment: false },
     { billingEmail: null, allowOnlineAchPayment: false, allowOnlineCardPayment: false },
     { billingEmail: null, allowOnlineAchPayment: false, allowOnlineCardPayment: false },
   ]);
@@ -991,6 +1016,81 @@ test("QuickBooks customer and item reviews refresh a no-email invoice for offlin
     allowOnlineAchPayment: false,
     allowOnlineCardPayment: false,
   });
+});
+
+test("QuickBooks review guards navigation and announces a failed customer search once", async ({ context, page, request }) => {
+  test.setTimeout(120_000);
+  await context.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+  const owner = await signUpViaApi(request, "quickbooks-review-navigation-guard");
+  const customer = await createCustomerViaApi(request, owner, {
+    fullName: "QuickBooks review guard customer",
+    phone: "555-014-7811",
+    email: "quickbooks-review-guard@example.com",
+  });
+  const quote = await createQuoteViaApi(request, owner, customer.id, { title: "QuickBooks review guard work" });
+  const accepted = await request.patch(`${apiBaseUrl}/v1/quotes/${quote.id}`, {
+    headers: { Cookie: owner.cookieHeader },
+    data: { status: "ACCEPTED" },
+  });
+  expect(accepted.status()).toBe(200);
+  const created = await request.post(`${apiBaseUrl}/v1/invoices`, {
+    headers: { Cookie: owner.cookieHeader, "Idempotency-Key": `quickbooks-review-guard-${Date.now()}` },
+    data: { sourceQuoteId: quote.id, dueAtUtc: "2026-10-01T17:00:00.000Z" },
+  });
+  expect(created.status()).toBe(201);
+  const invoice = (await created.json()) as { invoice: { id: string; version: number; invoiceNumber: number } };
+
+  await page.route(`**/v1/integrations/quickbooks/invoices/${invoice.invoice.id}/sync-preview`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        providerWorkflowsEnabled: true,
+        preview: {
+          invoice: { id: invoice.invoice.id, invoiceNumber: invoice.invoice.invoiceNumber, version: invoice.invoice.version, status: "DRAFT", customerName: customer.fullName, currency: "USD", subtotalAmount: 150, taxAmount: 0, totalAmount: 150, dueAtUtc: "2026-10-01T17:00:00.000Z" },
+          connection: { companyName: "Review guard QuickBooks", status: "CONNECTED" },
+          billingEmail: customer.email,
+          paymentMethods: { ach: false, card: false },
+          customerMapping: null,
+          quickBooksCustomerName: null,
+          providerDocNumber: "QF-REVIEW-GUARD",
+          lineItems: [{ description: quote.title, quantity: 1, unitPrice: 150, amount: 150, itemKey: quote.title.toLowerCase(), mapped: false, quickBooksItemId: null, quickBooksItemName: null, reviewedAtUtc: null }],
+          blockers: ["QUICKBOOKS_CUSTOMER_MAPPING_REQUIRED", "QUICKBOOKS_ITEM_MAPPING_REQUIRED"],
+          ready: false,
+          reviewBinding: null,
+          operation: null,
+        },
+      }),
+    });
+  });
+  await page.route("**/v1/integrations/quickbooks/mappings/customers/search", async (route) => {
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Unavailable" }) });
+  });
+
+  await addSessionCookie(context, owner);
+  await page.goto(`/app/quotes/${quote.id}`);
+  const panel = page.getByTestId("quickbooks-invoice-panel");
+  const customerSearch = panel.getByLabel("Search QuickBooks customers");
+  await expect(customerSearch).toBeVisible({ timeout: 60_000 });
+  await customerSearch.fill("Acme");
+  await panel.getByRole("button", { name: "Search", exact: true }).click();
+  const searchError = "QuickBooks search could not be completed. Try again.";
+  await expect(panel.getByRole("alert")).toHaveText(searchError);
+  await expect(panel.locator("p.sr-only[aria-live='polite']").first()).not.toContainText(searchError);
+
+  const customerFallback = panel.locator("details").first();
+  await customerFallback.locator(":scope > summary").click();
+  const customerId = panel.getByLabel("QuickBooks customer ID");
+  await customerId.fill("qb-review-guard-customer");
+  await panel.getByRole("button", { name: "Open QuickBooks settings" }).click();
+  const leaveDialog = page.getByRole("dialog", { name: "Leave QuickBooks review?" });
+  await expect(leaveDialog).toBeVisible();
+  await leaveDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(customerId).toHaveValue("qb-review-guard-customer");
+
+  await panel.getByRole("button", { name: "Open QuickBooks settings" }).click();
+  await page.getByRole("dialog", { name: "Leave QuickBooks review?" }).getByRole("button", { name: "Leave review" }).click();
+  await expect(page).toHaveURL(/\/app\/settings#admin-quickbooks$/);
 });
 
 test("QuickBooks blocker actions remain usable in Spanish at 320px", async ({

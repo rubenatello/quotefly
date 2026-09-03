@@ -11,6 +11,11 @@ import {
   isTrustedQuickBooksAuthorizationUrl,
   normalizeQuickBooksStatusPayload,
 } from "../../web/src/lib/quickbooks.js";
+import {
+  compareRuntimeReleaseShas,
+  releaseShaFromMetrics,
+  resolveRuntimeReleaseSha,
+} from "../../src/lib/release-identity.js";
 
 const runtime: QuickBooksSetupRuntime = {
   providerConfigured: true,
@@ -22,6 +27,26 @@ const runtime: QuickBooksSetupRuntime = {
   cdcWorkerEnabled: true,
   environment: "sandbox",
 };
+
+describe("QuickBooks runtime release identity", () => {
+  const releaseSha = "a".repeat(40);
+
+  it("uses only valid explicit or provider-injected commit identities", () => {
+    assert.equal(resolveRuntimeReleaseSha({ RAILWAY_GIT_COMMIT_SHA: releaseSha.toUpperCase() }), releaseSha);
+    assert.equal(resolveRuntimeReleaseSha({ RENDER_GIT_COMMIT: releaseSha }), releaseSha);
+    assert.equal(resolveRuntimeReleaseSha({ QUOTEFLY_RELEASE_SHA: "not-a-sha", RAILWAY_GIT_COMMIT_SHA: releaseSha }), releaseSha);
+    assert.equal(resolveRuntimeReleaseSha({ GITHUB_SHA: releaseSha }), null);
+  });
+
+  it("compares the API and worker heartbeat without trusting malformed metrics", () => {
+    assert.equal(releaseShaFromMetrics({ releaseSha }), releaseSha);
+    assert.equal(releaseShaFromMetrics({ releaseSha: "short" }), null);
+    assert.equal(releaseShaFromMetrics([releaseSha]), null);
+    assert.equal(compareRuntimeReleaseShas(releaseSha, releaseSha), true);
+    assert.equal(compareRuntimeReleaseShas(releaseSha, "b".repeat(40)), false);
+    assert.equal(compareRuntimeReleaseShas(releaseSha, null), null);
+  });
+});
 
 function connection(overrides: Partial<QuickBooksSetupConnectionState> = {}): QuickBooksSetupConnectionState {
   return {

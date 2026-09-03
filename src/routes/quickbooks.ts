@@ -5,6 +5,11 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { buildAccessContext } from "../lib/access-policy";
 import { getJwtClaims } from "../lib/auth";
+import {
+  compareRuntimeReleaseShas,
+  releaseShaFromMetrics,
+  resolveRuntimeReleaseSha,
+} from "../lib/release-identity";
 import { buildTenantEntitlements } from "../lib/subscription";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
@@ -272,6 +277,8 @@ function normalizeQuickBooksWebhookNotifications(
 }
 
 const QUICKBOOKS_WEBHOOK_BODY_LIMIT_BYTES = 256 * 1024;
+const QUICKBOOKS_WEBHOOK_MAX_DISTINCT_REALMS = 25;
+const QUICKBOOKS_WEBHOOK_ACK_BUDGET_MS = 3_000;
 
 function canManageQuickBooks(role: string): boolean {
   const normalized = role.trim().toLowerCase();
@@ -349,7 +356,7 @@ const QuickBooksSetupConnectionSelect = Prisma.validator<Prisma.QuickBooksConnec
     select: {
       customerMaps: { where: { deletedAtUtc: null } },
       itemMaps: { where: { deletedAtUtc: null } },
-      invoiceSyncs: { where: { deletedAtUtc: null } },
+      invoiceOperations: { where: { archivedAtUtc: null } },
     },
   },
 });
@@ -429,6 +436,7 @@ function sendQuickBooksInvoiceOperationError(reply: FastifyReply, error: unknown
 }
 
 export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
+  const apiReleaseSha = resolveRuntimeReleaseSha();
   const QuickBooksConnectRateLimit = {
     config: {
       rateLimit: {
@@ -477,6 +485,38 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(503).send({ error: QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE });
   }
 
+  function approvedQuickBooksMutationOrigin(request: FastifyRequest): boolean {
+    const requestOrigin = request.headers.origin;
+    if (!requestOrigin) return true;
+    let normalizedOrigin: string;
+    try {
+      normalizedOrigin = new URL(requestOrigin).origin;
+    } catch {
+      return false;
+    }
+    const approvedOrigins = new Set([
+      app.env.APP_URL,
+      app.env.API_URL,
+      ...app.env.CORS_ALLOWED_ORIGINS.split(","),
+    ].flatMap((value) => {
+      try {
+        return value.trim() ? [new URL(value.trim()).origin] : [];
+      } catch {
+        return [];
+      }
+    }));
+    return approvedOrigins.has(normalizedOrigin);
+  }
+
+  function rejectUnapprovedQuickBooksMutationOrigin(request: FastifyRequest, reply: FastifyReply): boolean {
+    if (approvedQuickBooksMutationOrigin(request)) return false;
+    reply.code(403).send({
+      error: "This QuickBooks action must be started from the QuoteFly application.",
+      code: "QUICKBOOKS_ORIGIN_NOT_ALLOWED",
+    });
+    return true;
+  }
+
   function accountingWorkflowsAvailable(): boolean {
     return app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED && !app.env.QUICKBOOKS_OAUTH_ONLY_MODE;
   }
@@ -491,14 +531,38 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     });
   }
 
-  function reconciliationRuntimeAvailable(): boolean {
-    return accountingWorkflowsAvailable()
-      && app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED
-      && isQuickBooksWebhookConfigured(app.env);
+  async function reconciliationRuntimeAvailable(): Promise<boolean> {
+    if (
+      !accountingWorkflowsAvailable()
+      || !app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED
+      || !isQuickBooksWebhookConfigured(app.env)
+    ) return false;
+    const heartbeat = await loadWorkerHeartbeat(app.prisma, QUICKBOOKS_RECONCILIATION_WORKER_KEY);
+    return quickBooksWorkerHealthy(heartbeat);
   }
 
-  function hostedPaymentsRuntimeAvailable(): boolean {
-    return reconciliationRuntimeAvailable() && app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED;
+  function quickBooksWorkerReleaseIdentity(
+    heartbeat: Awaited<ReturnType<typeof loadWorkerHeartbeat>>,
+  ) {
+    const workerReleaseSha = releaseShaFromMetrics(heartbeat?.metrics);
+    return {
+      apiReleaseSha,
+      workerReleaseSha,
+      matches: compareRuntimeReleaseShas(apiReleaseSha, workerReleaseSha),
+    };
+  }
+
+  function quickBooksWorkerHealthy(
+    heartbeat: Awaited<ReturnType<typeof loadWorkerHeartbeat>>,
+  ): boolean {
+    if (!heartbeat?.fresh) return false;
+    const workerReleaseSha = releaseShaFromMetrics(heartbeat.metrics);
+    return !apiReleaseSha || workerReleaseSha === apiReleaseSha;
+  }
+
+  async function hostedPaymentsRuntimeAvailable(): Promise<boolean> {
+    return app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED
+      && await reconciliationRuntimeAvailable();
   }
 
   function reconciliationRuntimeUnavailable(reply: FastifyReply) {
@@ -761,19 +825,38 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       } catch {
         return reply.code(400).send({ error: "Invalid QuickBooks webhook payload." });
       }
+      if (new Set(notifications.map((notification) => notification.realmId)).size > QUICKBOOKS_WEBHOOK_MAX_DISTINCT_REALMS) {
+        return reply.code(400).send({
+          error: "QuickBooks webhook payloads may contain at most 25 distinct companies.",
+          code: "QUICKBOOKS_WEBHOOK_REALM_LIMIT_EXCEEDED",
+        });
+      }
 
       // Validate ingress even while paused, then deliberately return a
       // retryable error instead of acknowledging and discarding a provider
       // change that may need a later refresh after workflows are re-enabled.
       if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
 
+      const persistenceStartedAt = Date.now();
       const persisted = await persistQuickBooksWebhookNotifications(app.prisma, notifications);
+      const persistenceDurationMs = Date.now() - persistenceStartedAt;
+      if (persistenceDurationMs >= QUICKBOOKS_WEBHOOK_ACK_BUDGET_MS) {
+        request.log.warn(
+          {
+            eventCode: "QUICKBOOKS_WEBHOOK_ACK_BUDGET_EXCEEDED",
+            persistenceDurationMs,
+            notificationCount: notifications.length,
+          },
+          "QuickBooks webhook persistence exceeded its acknowledgement budget.",
+        );
+      }
       request.log.info(
         {
           notificationCount: notifications.length,
           persistedCount: persisted.persisted,
           duplicateCount: persisted.duplicate,
           unknownRealmCount: persisted.unknownRealm,
+          persistenceDurationMs,
         },
         "QuickBooks webhook notifications persisted",
       );
@@ -802,8 +885,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         ),
         loadWorkerHeartbeat(app.prisma, QUICKBOOKS_RECONCILIATION_WORKER_KEY),
       ]);
+      const workerHealthy = quickBooksWorkerHealthy(workerHeartbeat);
+      const serializedWorkerHeartbeat = serializeWorkerHeartbeat(workerHeartbeat);
       const setup = deriveQuickBooksSetupReadiness(
-        quickBooksSetupRuntime(workerHeartbeat?.fresh ?? false),
+        quickBooksSetupRuntime(workerHealthy),
         connection,
       );
 
@@ -815,7 +900,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         webhookConfigured: isQuickBooksWebhookConfigured(app.env),
         canManage: true,
         environment: app.env.QUICKBOOKS_ENVIRONMENT,
-        reconciliationWorker: serializeWorkerHeartbeat(workerHeartbeat),
+        reconciliationWorker: serializedWorkerHeartbeat
+          ? { ...serializedWorkerHeartbeat, fresh: workerHealthy }
+          : null,
+        releaseIdentity: quickBooksWorkerReleaseIdentity(workerHeartbeat),
         setup,
         connection: connection
           ? {
@@ -830,7 +918,11 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
               counts: {
                 customerMaps: connection._count.customerMaps,
                 itemMaps: connection._count.itemMaps,
-                invoiceSyncs: connection._count.invoiceSyncs,
+                // Preserve the public field name while reporting the current,
+                // Invoice-owned publish/reconciliation workflow. The retired
+                // Quote-owned QuickBooksInvoiceSync table is not release
+                // readiness evidence for modern invoice publishing.
+                invoiceSyncs: connection._count.invoiceOperations,
               },
             }
           : null,
@@ -867,7 +959,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           SELECT 1::int AS "locked"
           FROM (
             SELECT pg_advisory_xact_lock(
-              hashtextextended(${`quickbooks-oauth-init:${claims.tenantId}:${claims.userId}`}, 0)
+              hashtextextended(${`quickbooks-oauth-init:${claims.tenantId}`}, 0)
             )
           ) acquired
         `);
@@ -886,7 +978,6 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         await transaction.quickBooksOAuthState.updateMany({
           where: {
             tenantId: claims.tenantId,
-            userId: claims.userId,
             consumedAtUtc: null,
           },
           data: { consumedAtUtc: now },
@@ -958,6 +1049,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     }
 
     let issuedRefreshToken: string | null = null;
+    let callbackStage = "STATE_LOOKUP";
     try {
       const stateHash = createHash("sha256").update(query.state, "utf8").digest("hex");
       const stateExists = await withTenantRlsContext(
@@ -979,6 +1071,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       // the exact initiating HttpOnly browser session before consuming its
       // one-time state so a missing or wrong session cannot burn an owner's
       // legitimate OAuth attempt.
+      callbackStage = "SESSION_VALIDATION";
       await app.authenticate(request, reply);
       if (reply.sent) return reply;
       const callbackClaims = getJwtClaims(request);
@@ -1002,6 +1095,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       // Consume every session-bound callback state exactly once, including
       // denied and malformed terminal callbacks. A canceled authorization
       // must never leave a replayable one-time state behind for its TTL.
+      callbackStage = "STATE_CONSUMPTION";
       const stateConsumed = await withTenantRlsContext(
         app.prisma,
         verifiedState.tenantId,
@@ -1047,6 +1141,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       // OAuth state proves the callback originated from QuoteFly, but its role
       // claim can be stale for ten minutes. Revalidate the signed actor and
       // tenant before exchanging the one-time code or writing credentials.
+      callbackStage = "AUTHORIZATION_REVALIDATION";
       const hasManagerAccess = await hasLiveQuickBooksManagerAccess(
         verifiedState.tenantId,
         verifiedState.userId,
@@ -1055,6 +1150,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         return failureRedirect("quickbooks_error");
       }
 
+      callbackStage = "REALM_OWNERSHIP_CHECK";
       const existingRealmConnection = await resolveQuickBooksWebhookRealm(app.prisma, callbackRealmId);
 
       if (existingRealmConnection && existingRealmConnection.tenantId !== verifiedState.tenantId) {
@@ -1064,6 +1160,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       // A used connection remains permanently bound to its original company.
       // The only supported correction is an unused, unconfirmed connection
       // that has completed token revocation and has no accounting history.
+      callbackStage = "TENANT_CONNECTION_LOOKUP";
       const existingTenantConnection = await withTenantRlsContext(
         app.prisma,
         verifiedState.tenantId,
@@ -1113,8 +1210,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         throw new QuickBooksCredentialLifecycleBlockedError();
       }
 
+      callbackStage = "TOKEN_EXCHANGE";
       const tokenResponse = await exchangeQuickBooksAuthorizationCode(app.env, query.code);
       issuedRefreshToken = tokenResponse.refresh_token;
+      callbackStage = "COMPANY_LOOKUP";
       const companyInfo = await fetchQuickBooksCompanyInfo(app.env, callbackRealmId, tokenResponse.access_token);
       if (companyInfo.realmId !== callbackRealmId) {
         throw new QuickBooksProviderError("QUICKBOOKS_COMPANY_REALM_MISMATCH", false);
@@ -1123,6 +1222,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       // Provider calls intentionally stay outside database transactions. Check
       // authorization again so a revocation during the exchange cannot persist
       // newly issued credentials.
+      callbackStage = "AUTHORIZATION_RECHECK";
       const stillHasManagerAccess = await hasLiveQuickBooksManagerAccess(
         verifiedState.tenantId,
         verifiedState.userId,
@@ -1134,7 +1234,16 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const now = new Date();
       const accessTokenExpiresAtUtc = new Date(now.getTime() + tokenResponse.expires_in * 1000);
 
+      callbackStage = "CREDENTIAL_PERSISTENCE";
       await withTenantRlsContext(app.prisma, verifiedState.tenantId, async (transaction) => {
+        await transaction.$queryRaw(Prisma.sql`
+          SELECT 1::int AS "locked"
+          FROM (
+            SELECT pg_advisory_xact_lock(
+              hashtextextended(${`quickbooks-oauth-init:${verifiedState.tenantId}`}, 0)
+            )
+          ) acquired
+        `);
         await transaction.$queryRaw(Prisma.sql`
           SELECT 1::int AS "locked"
           FROM (
@@ -1142,7 +1251,15 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
               hashtextextended(${`quickbooks-connection:${verifiedState.tenantId}`}, 0)
             )
           ) acquired
-        `);
+          `);
+        const latestOAuthState = await transaction.quickBooksOAuthState.findFirst({
+          where: { tenantId: verifiedState.tenantId },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          select: { id: true },
+        });
+        if (latestOAuthState?.id !== stateConsumed.id) {
+          throw new QuickBooksOAuthStateReplayError();
+        }
         const currentConnection = await transaction.quickBooksConnection.findUnique({
           where: { tenantId: verifiedState.tenantId },
           select: {
@@ -1388,7 +1505,29 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       if (error instanceof QuickBooksCredentialLifecycleBlockedError) {
         return failureRedirect("quickbooks_disconnect_pending");
       }
-      request.log.error("QuickBooks OAuth callback failed.");
+      const callbackFailure = error instanceof QuickBooksProviderError
+        ? {
+            eventCode: error.code,
+            errorName: "QuickBooksProviderError",
+          }
+        : error instanceof Prisma.PrismaClientKnownRequestError
+          ? {
+              eventCode: "QUICKBOOKS_OAUTH_DATABASE_WRITE_FAILED",
+              errorName: "PrismaClientKnownRequestError",
+            }
+          : error instanceof Prisma.PrismaClientInitializationError
+            ? {
+                eventCode: "QUICKBOOKS_OAUTH_DATABASE_UNAVAILABLE",
+                errorName: "PrismaClientInitializationError",
+              }
+            : {
+                eventCode: "QUICKBOOKS_OAUTH_CALLBACK_UNKNOWN",
+                errorName: "UnknownError",
+              };
+      request.log.error(
+        { ...callbackFailure, callbackStage },
+        "QuickBooks OAuth callback failed.",
+      );
       return failureRedirect("quickbooks_error");
     }
   });
@@ -1397,6 +1536,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     "/integrations/quickbooks/disconnect",
     { preHandler: [app.authenticate] },
     async (request, reply) => {
+      if (rejectUnapprovedQuickBooksMutationOrigin(request, reply)) return;
       const claims = getJwtClaims(request);
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       const access = buildAccessContext(request);
@@ -1422,6 +1562,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
 
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
+      reply.header("Cache-Control", "private, no-store");
       const { quoteId } = QuickBooksQuotePreviewParamsSchema.parse(request.params);
 
       try {
@@ -1475,8 +1616,13 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           sync: context.existingSync,
         };
       } catch (error) {
-        const message = error instanceof Error ? error.message : "QuickBooks sync preview failed.";
-        return reply.code(message === "Quote not found." ? 404 : 409).send({ error: message });
+        const notFound = error instanceof Error && error.message === "Quote not found.";
+        return reply.code(notFound ? 404 : 409).send({
+          error: notFound
+            ? "Quote not found."
+            : "QuickBooks sync preview is not available.",
+          code: notFound ? "QUOTE_NOT_FOUND" : "QUICKBOOKS_SYNC_PREVIEW_UNAVAILABLE",
+        });
       }
     },
   );
@@ -1707,7 +1853,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       if (
         (paymentReview.allowOnlineAchPayment || paymentReview.allowOnlineCardPayment)
-        && !hostedPaymentsRuntimeAvailable()
+        && !(await hostedPaymentsRuntimeAvailable())
       ) {
         return hostedPaymentsRuntimeUnavailable(reply);
       }
@@ -1745,10 +1891,11 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const body = QuickBooksInvoicePublishBodySchema.parse(request.body);
       const key = quickBooksIdempotencyKey(request);
       if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
-      if (!reconciliationRuntimeAvailable()) return reconciliationRuntimeUnavailable(reply);
+      const reconciliationAvailable = await reconciliationRuntimeAvailable();
+      if (!reconciliationAvailable) return reconciliationRuntimeUnavailable(reply);
       if (
         (body.allowOnlineAchPayment || body.allowOnlineCardPayment)
-        && !hostedPaymentsRuntimeAvailable()
+        && !app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED
       ) {
         return hostedPaymentsRuntimeUnavailable(reply);
       }
@@ -2304,7 +2451,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const { invoiceId } = QuickBooksInvoiceParamsSchema.parse(request.params);
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       if (
-        !hostedPaymentsRuntimeAvailable()
+        !(await hostedPaymentsRuntimeAvailable())
       ) {
         return hostedPaymentsRuntimeUnavailable(reply);
       }

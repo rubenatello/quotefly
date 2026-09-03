@@ -56,4 +56,33 @@ describe("worker heartbeat evidence", () => {
     await expect(loadWorkerHeartbeat(prisma, QUICKBOOKS_RECONCILIATION_WORKER_KEY, now))
       .resolves.toMatchObject({ status: "FAILED", fresh: false });
   });
+
+  test("an independent refresh keeps a long-running worker healthy beyond the stale window", async () => {
+    const startedAtUtc = new Date("2026-09-03T14:00:00.000Z");
+    await recordWorkerHeartbeat(prisma, {
+      workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+      instanceRefHash: "c".repeat(64),
+      status: "RUNNING",
+      startedAtUtc,
+      cycleStartedAtUtc: startedAtUtc,
+      heartbeatAtUtc: startedAtUtc,
+      metrics: { phase: "provider_work" },
+    });
+    const refreshedAtUtc = new Date(startedAtUtc.getTime() + 75_000);
+    await recordWorkerHeartbeat(prisma, {
+      workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+      instanceRefHash: "c".repeat(64),
+      status: "RUNNING",
+      startedAtUtc,
+      cycleStartedAtUtc: startedAtUtc,
+      heartbeatAtUtc: refreshedAtUtc,
+      metrics: { phase: "provider_work" },
+    });
+
+    await expect(loadWorkerHeartbeat(
+      prisma,
+      QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+      new Date(startedAtUtc.getTime() + 120_000),
+    )).resolves.toMatchObject({ status: "RUNNING", fresh: true });
+  });
 });

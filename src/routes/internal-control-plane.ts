@@ -204,10 +204,10 @@ async function loadQuickBooksControlPlaneRow(
             AND item_map."deletedAtUtc" IS NULL
         ) AS "itemMaps",
         (
-          SELECT count(*)::int FROM "QuickBooksInvoiceSync" invoice_sync
-          WHERE invoice_sync."tenantId" = connection."tenantId"
-            AND invoice_sync."quickBooksConnectionId" = connection."id"
-            AND invoice_sync."deletedAtUtc" IS NULL
+          SELECT count(*)::int FROM "QuickBooksInvoiceOperation" invoice_operation
+          WHERE invoice_operation."tenantId" = connection."tenantId"
+            AND invoice_operation."quickBooksConnectionId" = connection."id"
+            AND invoice_operation."archivedAtUtc" IS NULL
         ) AS "invoiceSyncs"
       FROM "QuickBooksConnection" connection
       WHERE connection."tenantId" = ${tenantId}

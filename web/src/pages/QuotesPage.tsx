@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { Archive, BadgeCheck, CircleDot, Eye, FileText, MoreHorizontal, ReceiptText, Send, Share2, Trash2, XCircle } from "lucide-react";
+import { Archive, BadgeCheck, CircleDot, Download, Eye, FileText, MoreHorizontal, ReceiptText, Send, Share2, Trash2, XCircle } from "lucide-react";
 import {
   Alert,
   Badge,
@@ -276,6 +276,8 @@ function QuoteActionsMenu({
 
 function QuoteDesktopRow({
   quote,
+  exportSelected,
+  onExportSelectedChange,
   onOpenQuote,
   onOpenPdfActions,
   onRetentionAction,
@@ -284,6 +286,8 @@ function QuoteDesktopRow({
   timezone,
 }: {
   quote: Quote;
+  exportSelected: boolean;
+  onExportSelectedChange: (quoteId: string, selected: boolean) => void;
   onOpenQuote: (quoteId: string) => void;
   onOpenPdfActions: (quote: Quote) => void;
   onRetentionAction: (action: QuoteRetentionAction) => void;
@@ -293,9 +297,20 @@ function QuoteDesktopRow({
 }) {
   return (
     <div className={`hidden ${QUOTE_BOARD_GRID_COLUMNS} gap-3 px-4 py-3 xl:grid xl:items-center`}>
-      <div className="space-y-1">
-        <p className="text-sm font-semibold text-[var(--qf-text)]">{quoteNumber(quote.id)}</p>
-        <p className="text-xs text-[var(--qf-text-muted)]">{i18n.t("customers.updated", { date: formatDateTime(quote.updatedAt, i18n.resolvedLanguage, timezone) })}</p>
+      <div className="flex items-center gap-2">
+        <label className="inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-lg focus-within:ring-2 focus-within:ring-[var(--qf-focus)]">
+          <input
+            type="checkbox"
+            className="h-5 w-5 accent-[var(--qf-primary)]"
+            checked={exportSelected}
+            onChange={(event) => onExportSelectedChange(quote.id, event.target.checked)}
+          />
+          <span className="sr-only">{i18n.t("quotes.quickBooksCsv.selectQuote", { number: quoteNumber(quote.id) })}</span>
+        </label>
+        <div className="min-w-0 space-y-1">
+          <p className="text-sm font-semibold text-[var(--qf-text)]">{quoteNumber(quote.id)}</p>
+          <p className="text-xs text-[var(--qf-text-muted)]">{i18n.t("customers.updated", { date: formatDateTime(quote.updatedAt, i18n.resolvedLanguage, timezone) })}</p>
+        </div>
       </div>
 
       <div className="min-w-0">
@@ -329,6 +344,8 @@ function QuoteDesktopRow({
 
 function QuoteMobileCard({
   quote,
+  exportSelected,
+  onExportSelectedChange,
   onOpenQuote,
   onOpenPdfActions,
   onRetentionAction,
@@ -336,6 +353,8 @@ function QuoteMobileCard({
   canManageRecordRetention,
 }: {
   quote: Quote;
+  exportSelected: boolean;
+  onExportSelectedChange: (quoteId: string, selected: boolean) => void;
   onOpenQuote: (quoteId: string) => void;
   onOpenPdfActions: (quote: Quote) => void;
   onRetentionAction: (action: QuoteRetentionAction) => void;
@@ -345,10 +364,21 @@ function QuoteMobileCard({
   return (
     <div className="space-y-3 px-4 py-4 xl:hidden">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        <div className="flex min-w-0 items-start gap-2">
+          <label className="inline-flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg focus-within:ring-2 focus-within:ring-[var(--qf-focus)]">
+            <input
+              type="checkbox"
+              className="h-5 w-5 accent-[var(--qf-primary)]"
+              checked={exportSelected}
+              onChange={(event) => onExportSelectedChange(quote.id, event.target.checked)}
+            />
+            <span className="sr-only">{i18n.t("quotes.quickBooksCsv.selectQuote", { number: quoteNumber(quote.id) })}</span>
+          </label>
+          <div className="min-w-0 pt-1">
           <p className="text-sm font-semibold text-[var(--qf-text)]">{quoteNumber(quote.id)}</p>
           <p className="mt-1 truncate text-sm text-[var(--qf-text-soft)]">{quote.customer?.fullName ?? i18n.t("quotes.columns.customer")}</p>
           <p className="mt-1 truncate text-xs text-[var(--qf-text-muted)]">{quote.title}</p>
+          </div>
         </div>
         <QuoteLifecycleMini quote={quote} />
       </div>
@@ -388,6 +418,7 @@ export function QuotesPage() {
     branding,
     canViewInternalCosts,
     canManageRecordRetention,
+    exportQuotesAsInvoicesCsv,
     session,
   } = useDashboard();
   const [searchTerm, setSearchTerm] = useState("");
@@ -413,6 +444,9 @@ export function QuotesPage() {
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false);
   const [quoteRetentionAction, setQuoteRetentionAction] = useState<QuoteRetentionAction>(null);
   const [quoteRetentionSaving, setQuoteRetentionSaving] = useState(false);
+  const [quickBooksCsvQuoteIds, setQuickBooksCsvQuoteIds] = useState<Set<string>>(() => new Set());
+  const [quickBooksCsvDueInDays, setQuickBooksCsvDueInDays] = useState(14);
+  const [quickBooksCsvExporting, setQuickBooksCsvExporting] = useState(false);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -457,10 +491,52 @@ export function QuotesPage() {
   const awaitingAmount = quoteSummary.awaitingResponseAmount;
   const acceptedAmount = quoteSummary.acceptedAmount;
   const totalQuotePages = Math.max(1, Math.ceil(quoteTotal / quotePageSize));
+  const pageQuoteIds = useMemo(() => filteredQuotes.map((quote) => quote.id), [filteredQuotes]);
+  const allPageQuotesSelected = pageQuoteIds.length > 0
+    && pageQuoteIds.every((quoteId) => quickBooksCsvQuoteIds.has(quoteId));
 
   useEffect(() => {
     if (quotePage > totalQuotePages) setQuotePage(totalQuotePages);
   }, [quotePage, totalQuotePages]);
+
+  const setQuickBooksCsvQuoteSelected = useCallback((quoteId: string, selected: boolean) => {
+    setQuickBooksCsvQuoteIds((current) => {
+      if (selected && !current.has(quoteId) && current.size >= 100) {
+        setError(t("quotes.quickBooksCsv.selectionLimitReached", { count: 100 }));
+        return current;
+      }
+      const next = new Set(current);
+      if (selected) next.add(quoteId);
+      else next.delete(quoteId);
+      return next;
+    });
+  }, [setError, t]);
+
+  const setCurrentPageQuickBooksCsvSelected = useCallback((selected: boolean) => {
+    setQuickBooksCsvQuoteIds((current) => {
+      const next = new Set(current);
+      if (!selected) {
+        for (const quoteId of pageQuoteIds) next.delete(quoteId);
+        return next;
+      }
+      if (next.size + pageQuoteIds.filter((quoteId) => !next.has(quoteId)).length > 100) {
+        setError(t("quotes.quickBooksCsv.selectionLimitReached", { count: 100 }));
+        return current;
+      }
+      for (const quoteId of pageQuoteIds) next.add(quoteId);
+      return next;
+    });
+  }, [pageQuoteIds, setError, t]);
+
+  async function exportSelectedQuickBooksCsv() {
+    if (quickBooksCsvExporting || quickBooksCsvQuoteIds.size === 0) return;
+    setQuickBooksCsvExporting(true);
+    try {
+      await exportQuotesAsInvoicesCsv([...quickBooksCsvQuoteIds], { dueInDays: quickBooksCsvDueInDays });
+    } finally {
+      setQuickBooksCsvExporting(false);
+    }
+  }
 
   async function getPdfBlob(quoteId: string, options?: { inline?: boolean }) {
     return api.quotes.downloadPdf(quoteId, { inline: options?.inline });
@@ -761,6 +837,49 @@ export function QuotesPage() {
           </div>
         </div>
 
+        <div className="mt-4 flex flex-col gap-3 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-lg px-1 text-sm font-medium text-[var(--qf-text)] focus-within:ring-2 focus-within:ring-[var(--qf-focus)]">
+            <input
+              type="checkbox"
+              className="h-5 w-5 accent-[var(--qf-primary)]"
+              checked={allPageQuotesSelected}
+              onChange={(event) => setCurrentPageQuickBooksCsvSelected(event.target.checked)}
+              disabled={pageQuoteIds.length === 0 || quoteLoading}
+            />
+            <span>{t("quotes.quickBooksCsv.selectAllCurrentPage")}</span>
+          </label>
+          <div className="min-w-[150px] flex-1 sm:max-w-[190px]">
+            <label htmlFor="quickbooks-csv-due-days" className="mb-1 block text-xs font-semibold text-[var(--qf-text-muted)]">
+              {t("quotes.quickBooksCsv.dueDays")}
+            </label>
+            <Input
+              id="quickbooks-csv-due-days"
+              type="number"
+              min={0}
+              max={365}
+              inputMode="numeric"
+              value={quickBooksCsvDueInDays}
+              onChange={(event) => setQuickBooksCsvDueInDays(Math.min(365, Math.max(0, Number(event.target.value) || 0)))}
+            />
+          </div>
+          <div className="min-w-0 flex-1 sm:min-w-[260px]">
+            <p className="text-sm font-semibold text-[var(--qf-text)]">
+              {t("quotes.quickBooksCsv.selectedCount", { count: quickBooksCsvQuoteIds.size })}
+            </p>
+            <p className="mt-1 text-xs text-[var(--qf-text-muted)]">{t("quotes.quickBooksCsv.help")}</p>
+          </div>
+          <Button
+            type="button"
+            className="min-h-11 sm:ml-auto"
+            icon={<Download size={16} />}
+            disabled={quickBooksCsvQuoteIds.size === 0}
+            loading={quickBooksCsvExporting}
+            onClick={() => void exportSelectedQuickBooksCsv()}
+          >
+            {quickBooksCsvExporting ? t("quotes.quickBooksCsv.exporting") : t("quotes.quickBooksCsv.export")}
+          </Button>
+        </div>
+
         <div className="mt-4 overflow-hidden rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)]">
           {quoteLoading ? (
             <div className="p-4">
@@ -802,6 +921,8 @@ export function QuotesPage() {
                   <div key={quote.id} className="transition-colors hover:bg-[var(--qf-interactive-hover)]">
                     <QuoteDesktopRow
                       quote={quote}
+                      exportSelected={quickBooksCsvQuoteIds.has(quote.id)}
+                      onExportSelectedChange={setQuickBooksCsvQuoteSelected}
                       onOpenQuote={navigateToQuote}
                       onOpenPdfActions={setPdfActionQuote}
                       onRetentionAction={setQuoteRetentionAction}
@@ -811,6 +932,8 @@ export function QuotesPage() {
                     />
                     <QuoteMobileCard
                       quote={quote}
+                      exportSelected={quickBooksCsvQuoteIds.has(quote.id)}
+                      onExportSelectedChange={setQuickBooksCsvQuoteSelected}
                       onOpenQuote={navigateToQuote}
                       onOpenPdfActions={setPdfActionQuote}
                       onRetentionAction={setQuoteRetentionAction}

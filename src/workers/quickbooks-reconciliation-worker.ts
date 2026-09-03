@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { env } from "../config/env";
 import { prisma } from "../lib/prisma";
+import { resolveRuntimeReleaseSha } from "../lib/release-identity";
 import { assertAiRetrievalRlsReady, withTenantRlsContext } from "../lib/tenant-rls";
 import {
   fetchQuickBooksPayment,
@@ -36,6 +37,7 @@ import {
   claimQuickBooksWebhookEvent,
   completeQuickBooksWebhookEvent,
   failQuickBooksWebhookEvent,
+  renewQuickBooksWebhookClaim,
 } from "../services/quickbooks-webhook-inbox";
 
 let stopping = false;
@@ -48,10 +50,12 @@ const QUICKBOOKS_RETENTION_SCAN_INTERVAL_MS = 60 * 60 * 1_000;
 const QUICKBOOKS_ACTIVE_TICK_PAUSE_MS = 100;
 const QUICKBOOKS_IDLE_TICK_PAUSE_MS = 1_000;
 const QUICKBOOKS_HEARTBEAT_REFRESH_MS = 15_000;
+const QUICKBOOKS_WEBHOOK_CLAIM_RENEW_MS = 30_000;
 const WORKER_STARTED_AT_UTC = new Date();
 const WORKER_INSTANCE_REF_HASH = createHash("sha256")
   .update(randomUUID(), "utf8")
   .digest("hex");
+const WORKER_RELEASE_SHA = resolveRuntimeReleaseSha();
 let currentCycleStartedAtUtc = WORKER_STARTED_AT_UTC;
 let lastHeartbeatWriteAt = 0;
 
@@ -70,9 +74,62 @@ async function persistWorkerHeartbeat(
     cycleStartedAtUtc: currentCycleStartedAtUtc,
     heartbeatAtUtc: now,
     lastCycleDurationMs: options.lastCycleDurationMs,
-    metrics,
+    metrics: WORKER_RELEASE_SHA && metrics && typeof metrics === "object" && !Array.isArray(metrics)
+      ? { releaseSha: WORKER_RELEASE_SHA, ...metrics }
+      : metrics,
   });
   lastHeartbeatWriteAt = now.getTime();
+}
+
+function startWorkerHeartbeatRefreshLoop() {
+  let stopped = false;
+  let pending = Promise.resolve();
+  const timer = setInterval(() => {
+    if (stopped) return;
+    pending = pending
+      .then(() => persistWorkerHeartbeat("RUNNING", { phase: "active_work" }))
+      .catch((error) => {
+        writeWorkerLog("warn", "quickbooks_worker_heartbeat_refresh_failed", {
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        });
+      });
+  }, QUICKBOOKS_HEARTBEAT_REFRESH_MS);
+  timer.unref();
+  return async () => {
+    stopped = true;
+    clearInterval(timer);
+    await pending;
+  };
+}
+
+function startQuickBooksWebhookClaimRenewal(
+  claim: NonNullable<Awaited<ReturnType<typeof claimQuickBooksWebhookEvent>>>,
+) {
+  let stopped = false;
+  let current = true;
+  let pending = Promise.resolve();
+  const renew = () => {
+    pending = pending
+      .then(async () => {
+        if (stopped || !current) return;
+        current = await renewQuickBooksWebhookClaim(prisma, claim);
+      })
+      .catch((error) => {
+        current = false;
+        writeWorkerLog("warn", "quickbooks_webhook_claim_renewal_failed", {
+          tenantRefHash: tenantRefHash(claim.tenantId),
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        });
+      });
+  };
+  const timer = setInterval(renew, QUICKBOOKS_WEBHOOK_CLAIM_RENEW_MS);
+  timer.unref();
+  return async () => {
+    stopped = true;
+    clearInterval(timer);
+    await pending;
+    return current;
+  };
 }
 
 function pause(milliseconds: number) {
@@ -370,6 +427,7 @@ type QuickBooksTenantProcessOutcome = Readonly<{
 async function processTenant(tenantId: string): Promise<QuickBooksTenantProcessOutcome> {
   const claim = await claimQuickBooksWebhookEvent(prisma, tenantId);
   if (!claim) return { status: "idle" };
+  const stopClaimRenewal = startQuickBooksWebhookClaimRenewal(claim);
   try {
     const work = await invoiceIdsForClaim(claim);
     for (const invoiceId of work.invoiceIds) {
@@ -384,6 +442,9 @@ async function processTenant(tenantId: string): Promise<QuickBooksTenantProcessO
       });
     }
     if (work.remainingProviderInvoiceIds.length > 0 || work.remainingInvoiceIds.length > 0) {
+      if (!(await stopClaimRenewal())) {
+        return { status: "failed", failureCode: "QUICKBOOKS_WEBHOOK_CLAIM_STALE" };
+      }
       return (await requeueQuickBooksWebhookClaim(
         claim,
         work.payload,
@@ -391,11 +452,15 @@ async function processTenant(tenantId: string): Promise<QuickBooksTenantProcessO
         work.remainingInvoiceIds,
       )) ? { status: "processed" } : { status: "failed", failureCode: "QUICKBOOKS_WEBHOOK_CLAIM_STALE" };
     }
+    if (!(await stopClaimRenewal())) {
+      return { status: "failed", failureCode: "QUICKBOOKS_WEBHOOK_CLAIM_STALE" };
+    }
     if (!(await completeQuickBooksWebhookEvent(prisma, claim))) {
       return { status: "failed", failureCode: "QUICKBOOKS_WEBHOOK_CLAIM_STALE" };
     }
     return { status: "processed" };
   } catch (error) {
+    await stopClaimRenewal();
     const failure = classifyQuickBooksWorkerFailure(error);
     const outcome = await failQuickBooksWebhookEvent(prisma, claim, failure.code, {
       retryable: failure.retryable,
@@ -445,6 +510,7 @@ async function run() {
   }
   await assertAiRetrievalRlsReady(prisma, { requireRuntimeRole: env.NODE_ENV === "production" });
   await persistWorkerHeartbeat("STARTING", { rolloutEnabled: true }, { force: true });
+  const stopHeartbeatRefreshLoop = startWorkerHeartbeatRefreshLoop();
   let webhookAfterTenantId: string | null = null;
   let revocationAfterTenantId: string | null = null;
   let cdcAfterTenantId: string | null = null;
@@ -462,6 +528,7 @@ async function run() {
     take,
   });
 
+  try {
   while (!stopping) {
     const tickStartedAt = Date.now();
     currentCycleStartedAtUtc = new Date(tickStartedAt);
@@ -663,6 +730,9 @@ async function run() {
     await pause(metrics.dueEventCount > 0
       ? QUICKBOOKS_ACTIVE_TICK_PAUSE_MS
       : QUICKBOOKS_IDLE_TICK_PAUSE_MS);
+  }
+  } finally {
+    await stopHeartbeatRefreshLoop();
   }
   await persistWorkerHeartbeat("STOPPED", { stopping: true }, { force: true });
 }

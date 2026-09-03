@@ -1,6 +1,6 @@
 # QuickBooks API Progress
 
-Last updated: 2026-09-02
+Last updated: 2026-09-03
 
 Status: Hosted-payment and reconciliation engineering candidate in progress. Provider workflows remain default-off, unavailable to customers, and unapproved for sandbox or production enablement.
 
@@ -93,7 +93,7 @@ sandbox refund/reversal checkbox below.
 
 ## Migration risks to carry into review
 
-The uncommitted migration `20260827120000_add_quickbooks_hosted_payment_reconciliation` is additive but coordinated:
+The committed migration `20260827120000_add_quickbooks_hosted_payment_reconciliation` is additive but coordinated:
 
 - it enables and forces RLS on existing QuickBooks tables, so a binary that does not set `app.tenant_id` for those paths cannot safely run after migration;
 - it backfills `Invoice.billingEmailSnapshot`, changes the InvoicePayment provider-application uniqueness rule, and adds indexes/foreign keys that require production-like lock and data-shape rehearsal;

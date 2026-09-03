@@ -207,11 +207,19 @@ export function QuickBooksSetupPanel({
         </div>
       ) : null}
 
-      {connection?.status === "CONNECTED" && platformFailures.length ? (
+      {platformFailures.length ? (
         <div className="mt-5">
           <Alert tone="warning">
-            <p className="font-semibold">{t("admin.quickBooksSetup.platformWaitingTitle")}</p>
-            <p className="mt-1">{t("admin.quickBooksSetup.platformWaitingDescription")}</p>
+            <p className="font-semibold">
+              {connection?.status === "CONNECTED"
+                ? t("admin.quickBooksSetup.platformWaitingTitle")
+                : t("admin.quickBooksSetup.platformUnavailableTitle")}
+            </p>
+            <p className="mt-1">
+              {connection?.status === "CONNECTED"
+                ? t("admin.quickBooksSetup.platformWaitingDescription")
+                : t("admin.quickBooksSetup.platformUnavailableDescription")}
+            </p>
           </Alert>
         </div>
       ) : null}

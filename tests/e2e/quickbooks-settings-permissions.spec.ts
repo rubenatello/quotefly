@@ -132,6 +132,33 @@ test("legacy or malformed QuickBooks status keeps Settings usable with a local r
   await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
 });
 
+test("QuoteFly-managed unavailable setup explains responsibility before a company is connected", async ({ context, page, request }) => {
+  const owner = await signUpViaApi(request, "quickbooks-settings-unavailable");
+  await addSessionCookie(context, owner);
+  const unavailable = quickBooksStatus();
+  unavailable.setup.phase = "UNAVAILABLE";
+  unavailable.connection = null;
+  unavailable.setup.checks = [
+    { key: "PROVIDER_CONFIGURED", passed: false, managedBy: "QUOTEFLY" },
+  ];
+  unavailable.setup.capabilities = {
+    canConnect: false,
+    canReconnect: false,
+    canConfirm: false,
+    canDisconnect: false,
+  };
+
+  await page.route(`**${quickBooksStatusPath}`, async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(unavailable) });
+  });
+
+  await page.goto("/app/settings#admin-quickbooks");
+  const alert = page.getByRole("status").filter({ hasText: "QuoteFly-managed QuickBooks setup needs attention" });
+  await expect(alert).toBeVisible({ timeout: 20_000 });
+  await expect(alert).toContainText("No QuickBooks changes were made.");
+  await expect(alert).toContainText("contact QuoteFly support");
+});
+
 test("QuickBooks setup remains usable at a narrow mobile viewport", async ({ context, page, request }) => {
   const owner = await signUpViaApi(request, "quickbooks-settings-mobile");
   await addSessionCookie(context, owner);

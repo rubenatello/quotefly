@@ -45,6 +45,7 @@ npm run verify:launch
 | `APP_URL` | Required | No | `https://staging.quotefly.us` | Production web URL, for redirects and CORS inputs |
 | `API_URL` | Required | No | `https://api-staging.quotefly.us` | Production API URL |
 | `CORS_ALLOWED_ORIGINS` | Required | No | `https://staging.quotefly.us` | Comma-separated exact web origins |
+| `QUOTEFLY_RELEASE_SHA` | Optional | No | exact 40-character Git SHA | Explicit release identity for non-Git deploys; Railway/Render Git deploys use their provider-injected commit SHA automatically. API and QuickBooks worker values must match |
 | `SESSION_COOKIE_NAME` | Required | No | `qf_session` | Keep stable unless rotating sessions |
 | `SESSION_COOKIE_DOMAIN` | Optional | No | empty | Prefer host-only for `api.quotefly.us`; use `.quotefly.us` only when sharing across API hostnames |
 | `SESSION_COOKIE_SAME_SITE` | Required | No | `lax` | Production default: `lax` for same-site `app.quotefly.us` + `api.quotefly.us` |

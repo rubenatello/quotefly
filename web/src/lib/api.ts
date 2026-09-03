@@ -2063,6 +2063,11 @@ export type QuickBooksStatusPayload = {
   canManage: boolean;
   environment: "sandbox" | "production";
   reconciliationWorker: WorkerHeartbeatPayload | null;
+  releaseIdentity?: {
+    apiReleaseSha: string | null;
+    workerReleaseSha: string | null;
+    matches: boolean | null;
+  };
   setup: QuickBooksSetupReadiness;
   connection: null | {
     environment: string;
@@ -2125,42 +2130,6 @@ export type QuickBooksSyncPreview = {
     lastAttemptedAtUtc?: string | null;
     syncedAtUtc?: string | null;
   } | null;
-};
-
-export type QuickBooksInvoiceStatusPayload = {
-  invoiceId: string;
-  docNumber?: string | null;
-  txnDate?: string | null;
-  dueDate?: string | null;
-  totalAmount: number;
-  balance: number;
-  currency?: string | null;
-  emailStatus?: string | null;
-  linkedPayments: Array<{ txnId: string; txnType: string }>;
-  paid: boolean;
-};
-
-export type QuickBooksInvoiceSyncRecord = {
-  id: string;
-  quickBooksInvoiceId?: string | null;
-  quickBooksDocNumber?: string | null;
-  requestId?: string | null;
-  status: "PENDING" | "SYNCED" | "FAILED";
-  lastError?: string | null;
-  lastAttemptedAtUtc?: string | null;
-  syncedAtUtc?: string | null;
-};
-
-export type QuickBooksPushInvoiceResult = {
-  sync: QuickBooksInvoiceSyncRecord;
-  invoice: QuickBooksInvoiceStatusPayload;
-  warnings: string[];
-  customer: {
-    quickBooksCustomerId: string;
-    quickBooksDisplayName: string;
-    created: boolean;
-  };
-  createdItems: number;
 };
 
 export type FeatureRequestInput = {
@@ -2516,21 +2485,6 @@ export const api = {
 
       syncPreview: (quoteId: string) =>
         request<QuickBooksSyncPreview>(`/v1/integrations/quickbooks/quotes/${quoteId}/sync-preview`),
-
-      pushInvoice: (
-        quoteId: string,
-        body?: { createCustomerIfMissing?: boolean; createItemsIfMissing?: boolean; dueInDays?: number },
-      ) =>
-        request<QuickBooksPushInvoiceResult>(`/v1/integrations/quickbooks/quotes/${quoteId}/push-invoice`, {
-          method: "POST",
-          body: JSON.stringify(body ?? {}),
-        }),
-
-      invoiceStatus: (quoteId: string) =>
-        request<{
-          sync: QuickBooksInvoiceSyncRecord;
-          invoice: QuickBooksInvoiceStatusPayload;
-        }>(`/v1/integrations/quickbooks/quotes/${quoteId}/invoice-status`),
 
       invoiceSyncPreview: (invoiceId: string, options?: QuickBooksInvoiceReviewOptions) =>
         request<{

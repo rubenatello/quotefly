@@ -1824,8 +1824,8 @@ model QuickBooksWebhookEvent {
   processedAtUtc         DateTime?                    @db.Timestamptz(3)
   deadAtUtc              DateTime?                    @db.Timestamptz(3)
   lastError              String?
-  tenant                 Tenant?                      @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  connection             QuickBooksConnection?        @relation(fields: [quickBooksConnectionId, tenantId], references: [id, tenantId], onDelete: SetNull)
+  tenant                 Tenant?                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connection             QuickBooksConnection?        @relation(fields: [quickBooksConnectionId, tenantId], references: [id, tenantId], onDelete: Cascade)
 
   @@unique([webhookEventId, realmId])
   @@index([realmId, receivedAtUtc])

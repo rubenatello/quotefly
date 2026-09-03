@@ -3,7 +3,9 @@ import { prisma } from "../../src/lib/prisma";
 import { QuickBooksReconciliationError } from "../../src/services/quickbooks-reconciliation";
 import {
   claimQuickBooksWebhookEvent,
+  completeQuickBooksWebhookEvent,
   failQuickBooksWebhookEvent,
+  renewQuickBooksWebhookClaim,
 } from "../../src/services/quickbooks-webhook-inbox";
 import { classifyQuickBooksWorkerFailure } from "../../src/services/quickbooks-worker-failures";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
@@ -100,5 +102,33 @@ describe("QuickBooks reconciliation dead-letter policy", () => {
       deadAtUtc: null,
     });
     expect(failed.nextAttemptAtUtc).not.toBeNull();
+  });
+
+  test("renews a long-running claim and fences the original worker after a later reclaim", async () => {
+    const { tenant, event, claim } = await createClaim("RenewableLease");
+    const claimedAtUtc = new Date("2026-09-03T12:00:00.000Z");
+    await prisma.quickBooksWebhookEvent.update({
+      where: { id: event.id },
+      data: { claimExpiresAtUtc: new Date(claimedAtUtc.getTime() + 120_000) },
+    });
+
+    const renewalAtUtc = new Date(claimedAtUtc.getTime() + 90_000);
+    await expect(renewQuickBooksWebhookClaim(prisma, claim, renewalAtUtc)).resolves.toBe(true);
+    await expect(claimQuickBooksWebhookEvent(
+      prisma,
+      tenant.id,
+      new Date(claimedAtUtc.getTime() + 121_000),
+    )).resolves.toBeNull();
+
+    const reclaimed = await claimQuickBooksWebhookEvent(
+      prisma,
+      tenant.id,
+      new Date(renewalAtUtc.getTime() + 120_001),
+    );
+    expect(reclaimed).not.toBeNull();
+    await expect(completeQuickBooksWebhookEvent(prisma, claim)).resolves.toBe(false);
+    await expect(completeQuickBooksWebhookEvent(prisma, reclaimed!)).resolves.toBe(true);
+    await expect(prisma.quickBooksWebhookEvent.findUniqueOrThrow({ where: { id: event.id } }))
+      .resolves.toMatchObject({ status: "PROCESSED", attemptCount: 2 });
   });
 });

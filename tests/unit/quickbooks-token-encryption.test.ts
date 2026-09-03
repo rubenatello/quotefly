@@ -20,6 +20,7 @@ let fetchQuickBooksInvoice: typeof import("../../src/services/quickbooks.js").fe
 let fetchQuickBooksItem: typeof import("../../src/services/quickbooks.js").fetchQuickBooksItem;
 let fetchQuickBooksPayment: typeof import("../../src/services/quickbooks.js").fetchQuickBooksPayment;
 let fetchQuickBooksRefundReceipt: typeof import("../../src/services/quickbooks.js").fetchQuickBooksRefundReceipt;
+let exchangeQuickBooksAuthorizationCode: typeof import("../../src/services/quickbooks.js").exchangeQuickBooksAuthorizationCode;
 let refreshQuickBooksAccessToken: typeof import("../../src/services/quickbooks.js").refreshQuickBooksAccessToken;
 let QuickBooksProviderError: typeof import("../../src/services/quickbooks.js").QuickBooksProviderError;
 let QUICKBOOKS_INVOICE_LINK_MINOR_VERSION: typeof import("../../src/services/quickbooks.js").QUICKBOOKS_INVOICE_LINK_MINOR_VERSION;
@@ -45,6 +46,7 @@ before(async () => {
     fetchQuickBooksItem,
     fetchQuickBooksPayment,
     fetchQuickBooksRefundReceipt,
+    exchangeQuickBooksAuthorizationCode,
     refreshQuickBooksAccessToken,
     QUICKBOOKS_INVOICE_LINK_MINOR_VERSION,
     QuickBooksProviderError,
@@ -89,6 +91,16 @@ function encryptVersionedEnvelope(value: string, secret: string) {
     cipher.getAuthTag().toString("base64url"),
     encrypted.toString("base64url"),
   ].join(".");
+}
+
+function nonCanonicalBase64UrlVariant(value: string): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const lastCharacter = value.at(-1);
+  assert.ok(lastCharacter);
+  const index = alphabet.indexOf(lastCharacter);
+  assert.notEqual(index, -1);
+  const replacementIndex = (index & 0b110000) | ((index + 1) & 0b001111);
+  return `${value.slice(0, -1)}${alphabet[replacementIndex]}`;
 }
 
 describe("QuickBooks token encryption", () => {
@@ -216,8 +228,20 @@ describe("QuickBooks OAuth state", () => {
     assert.match(verified?.nonce ?? "", /^[a-f0-9]{24}$/);
     assert.equal(typeof verified?.exp, "number");
 
-    const tampered = `${state.slice(0, -1)}${state.endsWith("A") ? "B" : "A"}`;
-    assert.equal(verifySignedQuickBooksState(env, tampered), null);
+    const stateParts = state.split(".");
+    const originalAuthTag = stateParts[2];
+    assert.ok(originalAuthTag);
+    const alternateAuthTag = nonCanonicalBase64UrlVariant(originalAuthTag);
+    assert.notEqual(alternateAuthTag, originalAuthTag);
+    assert.deepEqual(
+      Buffer.from(alternateAuthTag, "base64url"),
+      Buffer.from(originalAuthTag, "base64url"),
+    );
+    stateParts[2] = alternateAuthTag;
+    assert.equal(verifySignedQuickBooksState(env, stateParts.join(".")), null);
+
+    const tamperedCiphertext = `${state.slice(0, -2)}${state.at(-2) === "A" ? "B" : "A"}${state.at(-1)}`;
+    assert.equal(verifySignedQuickBooksState(env, tamperedCiphertext), null);
   });
 });
 
@@ -355,6 +379,84 @@ describe("QuickBooks provider response validation", () => {
           && error.statusCode === 400
           && !error.message.includes("provider detail"),
       );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("classifies OAuth token exchange failures without retaining Intuit response details", async () => {
+    const env = runtimeEnv({
+      QUICKBOOKS_CLIENT_ID: "sandbox-client-id",
+      QUICKBOOKS_CLIENT_SECRET: "sandbox-client-secret",
+      QUICKBOOKS_REDIRECT_URI: "http://localhost:4000/v1/integrations/quickbooks/callback",
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      error: "invalid_grant",
+      error_description: "authorization code and sensitive provider detail",
+    }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+    try {
+      await assert.rejects(
+        () => exchangeQuickBooksAuthorizationCode(env, "one-time-code"),
+        (error: unknown) => error instanceof QuickBooksProviderError
+          && error.code === "QUICKBOOKS_TOKEN_EXCHANGE_INVALID_GRANT"
+          && error.statusCode === 400
+          && error.message === "QUICKBOOKS_TOKEN_EXCHANGE_INVALID_GRANT"
+          && !error.message.includes("sensitive provider detail"),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses a status-only OAuth token exchange code for unknown or malformed provider errors", async () => {
+    const env = runtimeEnv({
+      QUICKBOOKS_CLIENT_ID: "sandbox-client-id",
+      QUICKBOOKS_CLIENT_SECRET: "sandbox-client-secret",
+      QUICKBOOKS_REDIRECT_URI: "http://localhost:4000/v1/integrations/quickbooks/callback",
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response("not-json and must not be retained", {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+    try {
+      await assert.rejects(
+        () => exchangeQuickBooksAuthorizationCode(env, "one-time-code"),
+        (error: unknown) => error instanceof QuickBooksProviderError
+          && error.code === "QUICKBOOKS_TOKEN_EXCHANGE_HTTP_503"
+          && error.statusCode === 503
+          && !error.message.includes("not-json"),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses the requested OAuth realm when Intuit returns its realm-local CompanyInfo entity id", async () => {
+    const env = runtimeEnv();
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    globalThis.fetch = async (input) => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify({
+        CompanyInfo: {
+          Id: "1",
+          CompanyName: "QuoteFly Sandbox",
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      const company = await fetchQuickBooksCompanyInfo(env, "123456", "access-token");
+      assert.equal(company.realmId, "123456");
+      assert.equal(company.companyName, "QuoteFly Sandbox");
+      assert.match(requestedUrl, /\/v3\/company\/123456\/companyinfo\/123456$/);
     } finally {
       globalThis.fetch = originalFetch;
     }

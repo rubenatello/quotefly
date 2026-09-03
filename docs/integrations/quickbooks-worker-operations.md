@@ -31,7 +31,7 @@ The worker receives only the least-privileged runtime `DATABASE_URL`; never give
 - `QUICKBOOKS_CDC_WORKER_ENABLED=false` for the first connection/reconciliation stage;
 - `QUICKBOOKS_HOSTED_PAYMENTS_ENABLED=false` until InvoiceLink and payment eligibility evidence is approved.
 
-The API and worker must run the same checked-in migrations and exact candidate SHA. The worker has no HTTP server; process supervision is liveness, while its content-free structured heartbeat is the operational readiness signal.
+The API and worker must run the same checked-in migrations and exact candidate SHA. Git-based Railway and Render deployments use the provider-injected commit SHA automatically; non-Git/image deployments must set the same full 40-character `QUOTEFLY_RELEASE_SHA` on both processes. The worker includes this non-secret identity in `WorkerHeartbeat.metrics`, and the authenticated QuickBooks status response reports API/worker identity and match state. When the API has a release identity, a missing or mismatched worker identity makes reconciliation readiness fail closed. The worker has no HTTP server; process supervision is liveness, while its content-free structured heartbeat is the operational readiness signal.
 
 ## Required monitoring
 

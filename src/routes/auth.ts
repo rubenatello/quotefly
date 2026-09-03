@@ -214,7 +214,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           await enqueueTenantWorkPresetAiIndexJobs(tx, { tenantId: newTenant.id });
 
           return [newUser, newTenant] as const;
-        });
+        }, { maxWait: 5_000, timeout: 15_000 });
 
         const token = app.jwt.sign(
           {

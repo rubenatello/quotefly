@@ -4822,14 +4822,67 @@ describe("QuoteFly API integration", () => {
         refreshTokenEncrypted: "opaque-refresh-token",
       },
     });
-    await prisma.quickBooksInvoiceSync.create({
+    const ownerMembership = await prisma.tenantUser.findUniqueOrThrow({
+      where: {
+        tenantId_userId: {
+          tenantId: session.tenant.id,
+          userId: session.user.id,
+        },
+      },
+      select: { id: true },
+    });
+    const job = await prisma.job.create({
       data: {
         tenantId: session.tenant.id,
-        quickBooksConnectionId: connection.id,
-        quoteId: quote.id,
-        quickBooksInvoiceId: "paused-invoice-id",
+        customerId: customer.id,
+        sourceQuoteId: quote.id,
+        jobNumber: 1,
+        title: quote.title,
+        scopeSnapshot: "A provider-capable job used only to prove containment.",
+        serviceType: ServiceCategory.ROOFING,
+        acceptedAtUtc: new Date(),
       },
     });
+    const invoice = await prisma.invoice.create({
+      data: {
+        tenantId: session.tenant.id,
+        customerId: customer.id,
+        jobId: job.id,
+        sourceQuoteId: quote.id,
+        invoiceNumber: 1,
+        titleSnapshot: quote.title,
+        subtotalAmount: 200,
+        taxAmount: 0,
+        totalAmount: 200,
+        balanceDue: 200,
+      },
+    });
+    await prisma.quickBooksInvoiceOperation.create({
+      data: {
+        tenantId: session.tenant.id,
+        invoiceId: invoice.id,
+        quickBooksConnectionId: connection.id,
+        requestedByTenantUserId: ownerMembership.id,
+        status: "SUCCEEDED",
+        commandKeyHash: createHash("sha256").update("paused-provider-command").digest("hex"),
+        payloadHash: createHash("sha256").update("paused-provider-payload").digest("hex"),
+        providerRealmId: connection.realmId,
+        providerRequestId: "paused-provider-request",
+        providerInvoiceId: "paused-invoice-id",
+        providerDocNumber: "QF-000001",
+        processingStartedAtUtc: new Date(),
+        lastAttemptAtUtc: new Date(),
+        succeededAtUtc: new Date(),
+      },
+    });
+
+    const status = await app.inject({
+      method: "GET",
+      url: "/v1/integrations/quickbooks/status",
+      headers: authHeaders(session.cookie),
+    });
+    expect(status.statusCode).toBe(200);
+    expect(parseJson<{ connection: { counts: { invoiceSyncs: number } } | null }>(status).connection?.counts.invoiceSyncs).toBe(1);
     const workflowFlag = app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED;
     app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED = false;
     for (const providerMock of Object.values(quickBooksProviderMocks)) providerMock.mockReset();

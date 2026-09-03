@@ -4,6 +4,9 @@ config({ quiet: true });
 
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
+// Migration credentials must not leak into the API runtime fixtures exercised by
+// integration tests. Tests that verify the production rejection add it explicitly.
+delete process.env.DIRECT_DATABASE_URL;
 process.env.JWT_SECRET = "test-jwt-secret-for-quotefly-integration-suite";
 process.env.APP_URL = "http://localhost:5173";
 process.env.API_URL = "http://localhost:4000";
