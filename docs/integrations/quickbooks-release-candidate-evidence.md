@@ -14,10 +14,10 @@ The release candidate is the commit that contains the QuickBooks remediation and
 | Previous exact-SHA CI | Passed for `1d987c16ec07804a9404c47648d28e0f5ca3be11` | Baseline only; it does not validate the remediation. |
 | First pushed candidate SHA | `5379c29327c7e4785aae05ec71e86c40f924591a` on `agent/consumer-launch-readiness` | Historical candidate only. Exact-SHA CI exposed one stale-preview recovery race, so this SHA is superseded and must not be promoted. |
 | First candidate CI | GitHub Actions run `33807445833`: 132 Playwright tests passed, one intentionally skipped, and one failed twice | Clean install and all 86 migrations passed, but the required launch gate failed. The UI reloaded the refreshed invoice preview and erased the localized version-conflict warning. |
-| Superseding candidate implementation SHA | `e02589a41f9400b06f2e0e6dcc825bf917ac4fae` on `agent/consumer-launch-readiness` | Contains the CI race fix, complete programmatic-navigation guard, correct pre-connect guidance, CSV-selection retention fix, environment-audit fix, and rollout-safe per-instance worker parity. This follow-up changes only the CI runtime alignment and release evidence; its immutable tip is recorded by PR #5 and the corresponding GitHub check because a commit cannot contain its own SHA. |
+| Superseding candidate implementation SHA | `e02589a41f9400b06f2e0e6dcc825bf917ac4fae` on `agent/consumer-launch-readiness` | Contains the CI race fix, complete programmatic-navigation guard, correct pre-connect guidance, CSV-selection retention fix, environment-audit fix, and rollout-safe per-instance worker parity. The commits after it change only CI runtime alignment and release evidence; the immutable branch tip is recorded by PR #5 and its corresponding GitHub check because a commit cannot contain its own SHA. |
 | Superseding `npm run verify` | Subsumed by the passing 2026-09-03 worktree `npm run verify:launch` | Supporting local evidence only; committed exact-SHA CI remains authoritative. |
 | Remediated database-backed `npm run verify:launch` | Passed on the superseding Docker/Node 24.18.1 worktree: 125 routes inventoried, 13/13 security, 244/244 unit, 379/379 integration, all deterministic evaluations and both dependency audits, then 139 Playwright passed, one intentional capture-regeneration skip, and zero failures | Qualifies the executable worktree; exact-SHA CI and Node 22 evidence remain pending. |
-| Replacement exact-SHA Node 22 CI | Pending the check triggered by this runtime-alignment/evidence follow-up | Must clean-install, generate Prisma, apply all 87 migrations, and pass `npm run verify:launch`; a Node 24 result for `e02589a` is supporting evidence only. |
+| Replacement exact-SHA Node 22 CI | Pending the check triggered by the current branch tip | Must clean-install, generate Prisma, apply all 87 migrations, and pass `npm run verify:launch`; a Node 24 result for `e02589a` is supporting evidence only. |
 | Exact-SHA staging OAuth proof | Pending authorized deployment and owner browser action | Must connect the expected sandbox company and stop before setup confirmation in OAuth-only mode. |
 | Full accounting sandbox proof | Not started | Requires separate approval for provider mutations, a live worker, signed webhooks, CDC, monitoring, and the owner checklist. |
 | Production pilot | Not authorized | Requires the code, staging, operations, owner, and Intuit gates below. |
@@ -61,7 +61,7 @@ The following 2026-09-03 results qualified the executable worktree before the fi
 - Migration rehearsal: all 86 migrations applied from zero to a newly created, isolated test-named PostgreSQL database.
 - Webhook lifecycle: the complete QuickBooks retention file passed 7/7, including hard tenant deletion, hard connection deletion, cross-tenant preservation, and unbound-quarantine preservation.
 - The exact worker-to-retention cleanup sequence that originally exposed the foreign-key ordering defect passed 3/3 followed by 5/5 after the cascade migration.
-- The first exact-SHA CI then reproduced a timing-dependent frontend defect that the local run did not expose. Automated review also found a singleton-worker parity race plus three UX/recovery gaps. Those findings are being remediated and invalidate earlier provisional specialist approvals until all specialists and Opera review the superseding exact SHA.
+- The first exact-SHA CI then reproduced a timing-dependent frontend defect that the local run did not expose. Automated review also found a singleton-worker parity race plus three UX/recovery gaps. Those findings required the later remediation and invalidated earlier provisional specialist approvals until all specialists and Opera review the superseding exact SHA.
 
 Pre-BCP focused evidence for the superseding worktree on 2026-09-03:
 
@@ -107,7 +107,7 @@ A post-validation owner/admin view should expose a paginated, tenant-scoped, rea
 
 These are QuoteFly engineering obligations. They can be completed without claiming that Intuit or the owner has approved production:
 
-- [x] The immutable implementation SHA `e02589a41f9400b06f2e0e6dcc825bf917ac4fae`, plus the current CI-runtime/evidence-only follow-up, contains only the intended QuickBooks code, tests, UX, release configuration, and evidence changes; the PR records the follow-up tip.
+- [x] The immutable implementation SHA `e02589a41f9400b06f2e0e6dcc825bf917ac4fae`, plus the CI-runtime/evidence-only follow-ups, contains only the intended QuickBooks code, tests, UX, release configuration, and evidence changes; the PR records the current tip.
 - [ ] Clean installs, Prisma generation/validation, `npm run verify`, and database-backed `npm run verify:launch` pass for that exact SHA.
 - [x] Fresh-schema migration and a synthetic nonempty upgrade/RLS/least-privilege/forward-fix rehearsal pass with recorded duration; this does not claim owner-managed backup, restore, RPO, or RTO evidence.
 - [x] Callback, credential cleanup, tenant-wide OAuth serialization, worker health, renewable claims, webhook bounds, CSV export, and paused-provider containment tests pass.
@@ -144,7 +144,7 @@ Do not advertise direct QuickBooks Online sync, hosted payment, or automatic rec
 ## Promotion sequence
 
 1. Stabilize and BCP the scoped candidate.
-2. Pass exact-SHA CI and the production-like migration/least-privilege rehearsal.
+2. Pass exact-SHA CI and the synthetic nonempty migration/RLS/least-privilege/forward-fix rehearsal; retain production-like backup/restore proof for the owner-controlled gate.
 3. Obtain specialist re-review and independent Opera approval of the exact evidence.
 4. Deploy the same SHA to OAuth-only staging in strict migration-job, API, readiness, worker-off, web order; then complete the owner browser proof.
 5. Under separate mutation authorization, advance through `quickbooks-reconciliation`, `quickbooks-cdc`, and `quickbooks-hosted-payments`; for each applicable phase confirm API readiness before starting the same-SHA worker and exposing the phase in web, then complete the full owner sandbox checklist.
