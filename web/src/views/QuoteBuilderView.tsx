@@ -2827,6 +2827,7 @@ export function QuoteBuilderView() {
         description={t("quoteBuilder.leaveDescription")}
         confirmLabel={t("quoteBuilder.leaveConfirm")}
         confirmVariant="warning"
+        layer="navigationGuard"
       />
     </div>
   );

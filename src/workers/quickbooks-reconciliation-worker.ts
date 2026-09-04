@@ -31,6 +31,7 @@ import { visitQuickBooksWorkerTenantPage } from "../services/quickbooks-worker-s
 import {
   QUICKBOOKS_RECONCILIATION_WORKER_KEY,
   recordWorkerHeartbeat,
+  runWorkerHeartbeatInstanceRetention,
   type WorkerHeartbeatStatus,
 } from "../services/worker-heartbeats";
 import {
@@ -641,7 +642,17 @@ async function run() {
     let unknownRealmQuarantineDeletedCount = 0;
     let unknownRealmQuarantineHasMore = false;
     let unknownRealmQuarantineRetentionFailed = false;
+    let workerHeartbeatInstanceDeletedCount = 0;
+    let workerHeartbeatInstanceRetentionFailed = false;
     if (!stopping && tickStartedAt >= nextRetentionScanAt) {
+      try {
+        workerHeartbeatInstanceDeletedCount = await runWorkerHeartbeatInstanceRetention(prisma);
+      } catch (error) {
+        workerHeartbeatInstanceRetentionFailed = true;
+        writeWorkerLog("warn", "worker_heartbeat_instance_retention_failed", {
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        });
+      }
       try {
         const quarantineResult = await runQuickBooksUnknownRealmQuarantineRetention(prisma);
         unknownRealmQuarantineDeletedCount = quarantineResult.deletedCount;
@@ -706,6 +717,8 @@ async function run() {
         unknownRealmQuarantineDeletedCount,
         unknownRealmQuarantineHasMore,
         unknownRealmQuarantineRetentionFailed,
+        workerHeartbeatInstanceDeletedCount,
+        workerHeartbeatInstanceRetentionFailed,
         maxRetentionRowsPerTenant: 100,
         maxWebhookEventsPerTenant: 1,
         maxReconciliationsPerWorkItem: QUICKBOOKS_RECONCILIATIONS_PER_WORK_ITEM,
@@ -726,6 +739,8 @@ async function run() {
       cdcTenantCount,
       retentionFailedTenantCount,
       unknownRealmQuarantineRetentionFailed,
+      workerHeartbeatInstanceDeletedCount,
+      workerHeartbeatInstanceRetentionFailed,
     }, { force: true, lastCycleDurationMs: Date.now() - tickStartedAt });
     await pause(metrics.dueEventCount > 0
       ? QUICKBOOKS_ACTIVE_TICK_PAUSE_MS

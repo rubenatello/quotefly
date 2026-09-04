@@ -753,6 +753,12 @@ export function QuotesPage() {
           description: t("quotes.deleteDescription"),
         });
       }
+      setQuickBooksCsvQuoteIds((current) => {
+        if (!current.has(action.quote.id)) return current;
+        const next = new Set(current);
+        next.delete(action.quote.id);
+        return next;
+      });
       setPdfActionQuote((current) => (current?.id === action.quote.id ? null : current));
       await Promise.all([loadQuotes(), loadQuotePage()]);
       setQuoteRetentionAction(null);

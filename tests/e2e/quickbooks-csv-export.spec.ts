@@ -111,3 +111,60 @@ test("the QuickBooks CSV controls stay localized and usable at 320px in Spanish"
   await expect(page.locator("body")).not.toContainText(/quotes\.quickBooksCsv|\{\{count\}\}/);
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
 });
+
+test("successful quote retention removes only that CSV selection while a failed action preserves it", async ({
+  context,
+  page,
+  request,
+}) => {
+  const account = await signUpViaApi(request, "quickbooks-csv-retention-selection");
+  const customer = await createCustomerViaApi(request, account, { fullName: "CSV Retention Customer" });
+  const archivedQuote = await createQuoteViaApi(request, account, customer.id, { title: "Archive selected CSV quote" });
+  const retainedQuote = await createQuoteViaApi(request, account, customer.id, { title: "Keep selected CSV quote" });
+
+  await addSessionCookie(context, account);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/app/quotes");
+
+  const quoteRow = (title: string) => page.getByText(title, { exact: true })
+    .filter({ visible: true })
+    .locator("xpath=ancestor::div[.//input[@type='checkbox']][1]");
+  const archivedRow = quoteRow(archivedQuote.title);
+  const retainedRow = quoteRow(retainedQuote.title);
+  await expect(archivedRow).toBeVisible({ timeout: 30_000 });
+  await archivedRow.getByRole("checkbox").check();
+  await retainedRow.getByRole("checkbox").check();
+  await expect(page.getByText("2 quotes selected", { exact: true })).toBeVisible();
+
+  await archivedRow.getByRole("button", { name: `Actions QF-${archivedQuote.id.slice(0, 8).toUpperCase()}` }).click();
+  await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
+  await page.getByRole("dialog", { name: "Archive quote?" })
+    .getByRole("button", { name: "Archive quote", exact: true })
+    .click();
+
+  await expect(page.getByText(archivedQuote.title, { exact: true })).toHaveCount(0);
+  await expect(page.getByText("1 quote selected", { exact: true })).toBeVisible();
+  await expect(retainedRow.getByRole("checkbox")).toBeChecked();
+
+  await page.route(`**/v1/quotes/${retainedQuote.id}`, async (route) => {
+    if (route.request().method() === "DELETE") {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Synthetic retention failure" }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  await retainedRow.getByRole("button", { name: `Actions QF-${retainedQuote.id.slice(0, 8).toUpperCase()}` }).click();
+  await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
+  const deleteDialog = page.getByRole("dialog", { name: "Delete quote?" });
+  await deleteDialog.getByRole("button", { name: "Delete quote", exact: true }).click();
+
+  await expect(page.getByText(retainedQuote.title, { exact: true }).filter({ visible: true })).toBeVisible();
+  await expect(page.getByText("1 quote selected", { exact: true })).toBeVisible();
+  await deleteDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(deleteDialog).toHaveCount(0);
+  await expect(quoteRow(retainedQuote.title).getByRole("checkbox")).toBeChecked();
+});

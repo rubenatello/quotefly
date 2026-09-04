@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBeforeUnload, useNavigate } from "react-router-dom";
+import { useOptionalWorkspaceNavigationGuardCoordinator } from "./workspace-navigation-guard-context";
 
-type PendingNavigation = (() => void) | null;
+type PendingNavigation = {
+  action: () => void;
+  onCancel?: () => void;
+  focusOrigin: HTMLElement | null;
+} | null;
 
 interface UnsavedChangesGuardOptions {
   historyPrompt?: string;
@@ -9,13 +14,10 @@ interface UnsavedChangesGuardOptions {
 
 export function useUnsavedChangesGuard(when: boolean, options: UnsavedChangesGuardOptions = {}) {
   const navigate = useNavigate();
-  const historyPrompt =
-    options.historyPrompt ?? "You have unsaved quote changes. Leave this page and keep the browser recovery draft?";
+  const coordinator = useOptionalWorkspaceNavigationGuardCoordinator();
+  const historyPrompt = options.historyPrompt ?? "";
+  const guardIdRef = useRef(Symbol("workspace-unsaved-changes-guard"));
   const pendingNavigationRef = useRef<PendingNavigation>(null);
-  const historyIndexRef = useRef<number | null>(
-    typeof window !== "undefined" && typeof window.history.state?.idx === "number" ? window.history.state.idx : null,
-  );
-  const reversingPopRef = useRef(false);
   const [navigationPromptOpen, setNavigationPromptOpen] = useState(false);
 
   useBeforeUnload(
@@ -23,22 +25,50 @@ export function useUnsavedChangesGuard(when: boolean, options: UnsavedChangesGua
       (event) => {
         if (!when) return;
         event.preventDefault();
-        event.returnValue = "";
+        event.returnValue = historyPrompt;
       },
-      [when],
+      [historyPrompt, when],
     ),
   );
 
-  const requestNavigation = useCallback(
-    (action: () => void) => {
+  const openNavigationPrompt = useCallback(
+    (action: () => void, onCancel?: () => void) => {
       if (!when) {
         action();
         return;
       }
-      pendingNavigationRef.current = action;
+      const activeElement = document.activeElement;
+      pendingNavigationRef.current = {
+        action,
+        onCancel,
+        focusOrigin: activeElement instanceof HTMLElement ? activeElement : null,
+      };
       setNavigationPromptOpen(true);
     },
     [when],
+  );
+
+  useEffect(() => {
+    if (!when || !coordinator) return;
+    return coordinator.registerGuard(guardIdRef.current, openNavigationPrompt);
+  }, [coordinator, openNavigationPrompt, when]);
+
+  useEffect(() => {
+    if (when) return;
+    pendingNavigationRef.current?.onCancel?.();
+    pendingNavigationRef.current = null;
+    setNavigationPromptOpen(false);
+  }, [when]);
+
+  const requestNavigation = useCallback(
+    (action: () => void) => {
+      if (coordinator) {
+        coordinator.requestNavigation(action);
+        return;
+      }
+      openNavigationPrompt(action);
+    },
+    [coordinator, openNavigationPrompt],
   );
 
   useEffect(() => {
@@ -66,52 +96,27 @@ export function useUnsavedChangesGuard(when: boolean, options: UnsavedChangesGua
     return () => document.removeEventListener("click", interceptLinkNavigation, true);
   }, [navigate, requestNavigation, when]);
 
-  useEffect(() => {
-    if (!when) {
-      historyIndexRef.current = typeof window.history.state?.idx === "number" ? window.history.state.idx : null;
-      return;
-    }
-
-    const interceptHistoryTraversal = (event: PopStateEvent) => {
-      const nextIndex = typeof window.history.state?.idx === "number" ? window.history.state.idx : null;
-      if (reversingPopRef.current) {
-        event.stopImmediatePropagation();
-        reversingPopRef.current = false;
-        historyIndexRef.current = nextIndex;
-        return;
-      }
-
-      const leave = window.confirm(historyPrompt);
-      if (leave) {
-        historyIndexRef.current = nextIndex;
-        return;
-      }
-
-      const previousIndex = historyIndexRef.current;
-      event.stopImmediatePropagation();
-      if (previousIndex !== null && nextIndex !== null && previousIndex !== nextIndex) {
-        reversingPopRef.current = true;
-        window.history.go(previousIndex - nextIndex);
-      } else {
-        reversingPopRef.current = true;
-        window.history.forward();
-      }
-    };
-
-    window.addEventListener("popstate", interceptHistoryTraversal, true);
-    return () => window.removeEventListener("popstate", interceptHistoryTraversal, true);
-  }, [historyPrompt, when]);
-
   const cancelNavigation = useCallback(() => {
+    const pendingNavigation = pendingNavigationRef.current;
     pendingNavigationRef.current = null;
     setNavigationPromptOpen(false);
+    if (pendingNavigation?.onCancel) {
+      pendingNavigation.onCancel();
+      return;
+    }
+    const focusOrigin = pendingNavigation?.focusOrigin;
+    window.requestAnimationFrame(() => {
+      if (focusOrigin?.isConnected) {
+        focusOrigin.focus({ preventScroll: true });
+      }
+    });
   }, []);
 
   const continueNavigation = useCallback(() => {
     const pendingNavigation = pendingNavigationRef.current;
     pendingNavigationRef.current = null;
     setNavigationPromptOpen(false);
-    pendingNavigation?.();
+    pendingNavigation?.action();
   }, []);
 
   return { navigationPromptOpen, requestNavigation, cancelNavigation, continueNavigation };

@@ -63,6 +63,7 @@ const REVIEWED_SCHEMA_FIELD_TEXT = {
   QuickBooksRealmBinding: "active createdAt id quickBooksConnectionId realmId tenantId updatedAt",
   QuickBooksCdcCursor: "attemptCount changedSinceUtc createdAt id lastAttemptAtUtc lastErrorCode lastSucceededAtUtc nextAttemptAtUtc quickBooksConnectionId tenantId terminalAtUtc updatedAt",
   WorkerHeartbeat: "cycleStartedAtUtc heartbeatAtUtc instanceRefHash lastCycleDurationMs metrics startedAtUtc status updatedAt workerKey",
+  WorkerHeartbeatInstance: "cycleStartedAtUtc heartbeatAtUtc instanceRefHash lastCycleDurationMs metrics observedAtUtc releaseSha startedAtUtc status updatedAt workerKey",
   QuoteOutboundEvent: "actorEmail actorName actorUserId bodyPreview channel createdAt customerId deletedAtUtc destination id idempotencyKey quoteId subject tenantId",
   WorkPreset: "catalogContentHash catalogCustomizedAtUtc catalogKey catalogVersion category createdAt defaultQuantity deletedAtUtc description id isDefault name serviceType tenantId unitCost unitPrice unitType updatedAt",
 } as const;
@@ -132,6 +133,7 @@ const MODEL_POLICIES = {
   QuickBooksRealmBinding: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Minimal tenant-safe QuickBooks webhook realm routing" },
   QuickBooksCdcCursor: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "QuickBooks change-data-capture recovery cursor and retry state" },
   WorkerHeartbeat: { defaultClassification: "C1_BUSINESS_INTERNAL", tenantScope: "platform", purpose: "Content-free background worker liveness and bounded operational metrics" },
+  WorkerHeartbeatInstance: { defaultClassification: "C1_BUSINESS_INTERNAL", tenantScope: "platform", purpose: "Content-free per-process worker liveness used for rollout-safe fleet readiness" },
   QuoteOutboundEvent: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Quote delivery and sharing audit" },
   WorkPreset: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "Tenant product catalog, prices, and internal costs" },
 } as const satisfies Record<ReviewedModel, ModelPolicy>;
@@ -150,6 +152,8 @@ const FIELD_CLASSIFICATION_OVERRIDES = {
   "QuickBooksInvoiceOperation.providerInvoiceLink": "C4_RESTRICTED",
   "QuickBooksOrphanCredentialRevocation.refreshTokenEncrypted": "C4_RESTRICTED",
   "QuickBooksOrphanCredentialRevocation.dedupeKeyHash": "C4_RESTRICTED",
+  "WorkerHeartbeat.instanceRefHash": "C4_RESTRICTED",
+  "WorkerHeartbeatInstance.instanceRefHash": "C4_RESTRICTED",
   "User.id": "C1_BUSINESS_INTERNAL",
   "User.email": "C2_CUSTOMER_CONFIDENTIAL",
   "User.fullName": "C2_CUSTOMER_CONFIDENTIAL",

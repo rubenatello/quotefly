@@ -9,6 +9,7 @@ import {
   getDataClassificationCatalog,
   validateDataGovernanceSchema,
 } from "../lib/data-governance-catalog";
+import { resolveRuntimeReleaseSha } from "../lib/release-identity";
 import {
   recordSuperuserAuditEvent,
   requireSuperuserAccess,
@@ -20,9 +21,9 @@ import {
 } from "../services/quickbooks-setup";
 import { isQuickBooksConfigured, isQuickBooksWebhookConfigured } from "../services/quickbooks";
 import {
-  loadWorkerHeartbeat,
+  loadWorkerHeartbeatFleet,
   QUICKBOOKS_RECONCILIATION_WORKER_KEY,
-  serializeWorkerHeartbeat,
+  serializeWorkerHeartbeatFleet,
 } from "../services/worker-heartbeats";
 
 const TenantLifecycleSchema = z.enum(["active", "deleted", "all"]);
@@ -371,6 +372,8 @@ function aggregateQuickBooksOperationalRows(
 }
 
 export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
+  const apiReleaseSha = resolveRuntimeReleaseSha();
+
   app.get("/internal/control-plane/summary", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = requireSuperuserAccess(request, reply);
     if (!claims) return reply;
@@ -386,7 +389,7 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
       aiAggregate,
       observedModels,
       latestValidation,
-      quickBooksWorkerHeartbeat,
+      quickBooksWorkerFleet,
     ] = await Promise.all([
       app.prisma.tenant.count({ where: { deletedAtUtc: null } }),
       app.prisma.tenant.count({ where: { deletedAtUtc: { not: null } } }),
@@ -419,7 +422,11 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
           createdAt: true,
         },
       }),
-      loadWorkerHeartbeat(app.prisma, QUICKBOOKS_RECONCILIATION_WORKER_KEY),
+      loadWorkerHeartbeatFleet(
+        app.prisma,
+        QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+        { apiReleaseSha, requireReleaseIdentity: app.env.NODE_ENV === "production" || apiReleaseSha !== null },
+      ),
     ]);
     const quickBooksRuntime = {
       providerConfigured: isQuickBooksConfigured(app.env),
@@ -428,7 +435,7 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
       webhookConfigured: isQuickBooksWebhookConfigured(app.env),
       hostedPaymentsEnabled: app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED,
       reconciliationWorkerEnabled: app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED,
-      reconciliationWorkerHealthy: quickBooksWorkerHeartbeat?.fresh ?? false,
+      reconciliationWorkerHealthy: quickBooksWorkerFleet.ready,
       cdcWorkerEnabled: app.env.QUICKBOOKS_CDC_WORKER_ENABLED,
       environment: app.env.QUICKBOOKS_ENVIRONMENT,
     } as const;
@@ -505,7 +512,7 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
       liveValidation,
       latestValidation,
       workers: {
-        quickBooksReconciliation: serializeWorkerHeartbeat(quickBooksWorkerHeartbeat),
+        quickBooksReconciliation: serializeWorkerHeartbeatFleet(quickBooksWorkerFleet),
         quickBooksOperations,
       },
       mutationPolicy: {
@@ -554,9 +561,10 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
           take: 5_000,
           select: ControlPlaneTenantSelect,
         });
-    const quickBooksWorkerHeartbeat = await loadWorkerHeartbeat(
+    const quickBooksWorkerFleet = await loadWorkerHeartbeatFleet(
       app.prisma,
       QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+      { apiReleaseSha, requireReleaseIdentity: app.env.NODE_ENV === "production" || apiReleaseSha !== null },
     );
     const quickBooksRuntime = {
       providerConfigured: isQuickBooksConfigured(app.env),
@@ -564,7 +572,7 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
       webhookConfigured: isQuickBooksWebhookConfigured(app.env),
       hostedPaymentsEnabled: app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED,
       reconciliationWorkerEnabled: app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED,
-      reconciliationWorkerHealthy: quickBooksWorkerHeartbeat?.fresh ?? false,
+      reconciliationWorkerHealthy: quickBooksWorkerFleet.ready,
       cdcWorkerEnabled: app.env.QUICKBOOKS_CDC_WORKER_ENABLED,
       environment: app.env.QUICKBOOKS_ENVIRONMENT,
     } as const;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, type NavigateOptions, type To } from "react-router-dom";
 import {
   BarChart3,
   CalendarClock,
@@ -1131,6 +1131,7 @@ export function KodyAssistant({
   aiUsageAccountingUnavailable = false,
   aiUsageRenewsAtUtc,
   displayTimeZone,
+  requestWorkspaceNavigation,
 }: {
   currentPage?: WorkspacePage;
   canViewInternalCosts?: boolean;
@@ -1139,6 +1140,7 @@ export function KodyAssistant({
   aiUsageAccountingUnavailable?: boolean;
   aiUsageRenewsAtUtc?: string | null;
   displayTimeZone?: string | null;
+  requestWorkspaceNavigation?: (action: () => void) => void;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -1163,6 +1165,14 @@ export function KodyAssistant({
   const originFocusRef = useRef<HTMLElement | null>(null);
   const panelRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const navigateWithGuard = useCallback((to: To, options?: NavigateOptions, beforeNavigation?: () => void) => {
+    const action = () => {
+      beforeNavigation?.();
+      navigate(to, options);
+    };
+    if (requestWorkspaceNavigation) requestWorkspaceNavigation(action);
+    else action();
+  }, [navigate, requestWorkspaceNavigation]);
   const conversationRef = useRef<HTMLDivElement>(null);
   const quickPromptsRef = useRef<HTMLDetailsElement>(null);
   const pendingMessageIdRef = useRef<string | null>(null);
@@ -1649,8 +1659,11 @@ export function KodyAssistant({
     if (action.type === "OPEN_CUSTOMER") {
       const customerId = getString(action.payload.customerId);
       if (!customerId) return rejectInvalidAction(t("kody.errors.openCustomer"), action);
-      collapseForMobileHandoff(action.type);
-      navigate("/app/customers", { state: { kodyCustomerId: customerId } });
+      navigateWithGuard(
+        "/app/customers",
+        { state: { kodyCustomerId: customerId } },
+        () => collapseForMobileHandoff(action.type),
+      );
       return;
     }
 
@@ -1660,8 +1673,7 @@ export function KodyAssistant({
       if (!fullName || !phone) {
         return rejectInvalidAction(t("kody.errors.customerDraft"), action);
       }
-      collapseForMobileHandoff(action.type);
-      navigate("/app/customers", {
+      navigateWithGuard("/app/customers", {
         state: {
           kodyCustomerDraft: {
             fullName,
@@ -1670,19 +1682,33 @@ export function KodyAssistant({
             notes: getString(action.payload.notes) ?? "",
           },
         },
-      });
+      }, () => collapseForMobileHandoff(action.type));
       return;
     }
 
     if (action.type === "OPEN_QUOTE_DRAFT") {
-      collapseForMobileHandoff(action.type);
-      navigate("/app/build", { state: { kodyQuoteDraft: action.payload } });
+      if (location.pathname === "/app/build") {
+        collapseForMobileHandoff(action.type);
+        navigate(`${location.pathname}${location.search}${location.hash}`, {
+          replace: true,
+          state: { kodyQuoteDraft: action.payload },
+        });
+        return;
+      }
+      navigateWithGuard(
+        "/app/build",
+        { state: { kodyQuoteDraft: action.payload } },
+        () => collapseForMobileHandoff(action.type),
+      );
       return;
     }
 
     if (action.type === "OPEN_PRODUCT_DRAFT") {
-      collapseForMobileHandoff(action.type);
-      navigate("/app/products", { state: { kodyProductDraft: action.payload } });
+      navigateWithGuard(
+        "/app/products",
+        { state: { kodyProductDraft: action.payload } },
+        () => collapseForMobileHandoff(action.type),
+      );
       return;
     }
 
@@ -1692,10 +1718,11 @@ export function KodyAssistant({
       if (!quoteId || (channel !== "email" && channel !== "sms" && channel !== "copy")) {
         return rejectInvalidAction(t("kody.errors.quoteSend"), action);
       }
-      collapseForMobileHandoff(action.type);
-      navigate(`/app/quotes/${encodeURIComponent(quoteId)}`, {
-        state: { kodyQuoteSend: { quoteId, channel } },
-      });
+      navigateWithGuard(
+        `/app/quotes/${encodeURIComponent(quoteId)}`,
+        { state: { kodyQuoteSend: { quoteId, channel } } },
+        () => collapseForMobileHandoff(action.type),
+      );
       return;
     }
 
@@ -1709,8 +1736,7 @@ export function KodyAssistant({
       if (!customerId || !customerName || !title || !dueAtUtc || !type || !priority) {
         return rejectInvalidAction(t("kody.errors.activityDraft"), action);
       }
-      collapseForMobileHandoff(action.type);
-      navigate("/app/follow-up", {
+      navigateWithGuard("/app/follow-up", {
         state: {
           kodyActivityDraft: {
             customerId,
@@ -1723,7 +1749,7 @@ export function KodyAssistant({
             dueAtUtc,
           },
         },
-      });
+      }, () => collapseForMobileHandoff(action.type));
       return;
     }
 
@@ -1736,8 +1762,11 @@ export function KodyAssistant({
       if (!range || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || mine === null) {
         return rejectInvalidAction(t("kody.errors.schedule"), action);
       }
-      collapseForMobileHandoff(action.type);
-      navigate(`/app/jobs?${new URLSearchParams({ view: "schedule", range, date, assignee: mine ? "me" : "all" })}`);
+      navigateWithGuard(
+        `/app/jobs?${new URLSearchParams({ view: "schedule", range, date, assignee: mine ? "me" : "all" })}`,
+        undefined,
+        () => collapseForMobileHandoff(action.type),
+      );
       return;
     }
 
@@ -1748,25 +1777,33 @@ export function KodyAssistant({
       // Kody avoids stacking its review dialog with the booking surface. The
       // launcher persists across the route transition, so it is also a valid
       // return target when a Kody-initiated reschedule is canceled.
-      originFocusRef.current = null;
-      setOpen(false);
-      navigate(`/app/jobs/${encodeURIComponent(review.jobId)}`, {
-        state: { kodyBookingReview: review, kodyFocusReturnId: "kody-launcher" },
-      });
+      navigateWithGuard(
+        `/app/jobs/${encodeURIComponent(review.jobId)}`,
+        { state: { kodyBookingReview: review, kodyFocusReturnId: "kody-launcher" } },
+        () => {
+          originFocusRef.current = null;
+          setOpen(false);
+        },
+      );
       return;
     }
 
     if (action.type === "OPEN_DISPATCH_REVIEW") {
       const review = dispatchReviewFromAction(action);
       if (!review) return rejectInvalidAction(t("kody.errors.dispatchReview"), action);
-      originFocusRef.current = null;
-      setOpen(false);
-      navigate(`/app/jobs/${encodeURIComponent(review.jobId)}`, { state: { kodyDispatchReview: review } });
+      navigateWithGuard(
+        `/app/jobs/${encodeURIComponent(review.jobId)}`,
+        { state: { kodyDispatchReview: review } },
+        () => {
+          originFocusRef.current = null;
+          setOpen(false);
+        },
+      );
       return;
     }
 
     if (action.type === "OPEN_ANALYTICS") {
-      navigate("/app/analytics", { state: { kodyInsight: action.payload } });
+      navigateWithGuard("/app/analytics", { state: { kodyInsight: action.payload } });
       return;
     }
 
@@ -1786,7 +1823,7 @@ export function KodyAssistant({
       const path = page ? routes[page] : null;
       if (!path) return;
       if (page === "jobs") {
-        navigate(jobId ? `/app/jobs/${encodeURIComponent(jobId)}` : path, {
+        navigateWithGuard(jobId ? `/app/jobs/${encodeURIComponent(jobId)}` : path, {
           state: {
             ...(jobId ? { kodyJobId: jobId } : {}),
             ...(invoiceId ? { kodyInvoiceId: invoiceId } : {}),
@@ -1794,12 +1831,12 @@ export function KodyAssistant({
         });
         return;
       }
-      navigate(path);
+      navigateWithGuard(path);
       return;
     }
 
     if (action.type === "REQUEST_ADMIN_ACCESS") {
-      navigate("/app/settings/users");
+      navigateWithGuard("/app/settings/users");
     }
   }
 
@@ -1820,8 +1857,11 @@ export function KodyAssistant({
     }
 
     if (action.type === "OPEN_QUICKBOOKS_SETUP") {
-      collapseForMobileHandoff(action.type);
-      navigate("/app/settings#admin-quickbooks");
+      navigateWithGuard(
+        "/app/settings#admin-quickbooks",
+        undefined,
+        () => collapseForMobileHandoff(action.type),
+      );
       return;
     }
     executeAction(boundAction, "direct");

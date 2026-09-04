@@ -391,7 +391,9 @@ export function InvoicePanel({
 
   useEffect(() => {
     if (!invoice || !canCreate) return;
-    void loadQuickBooksPreview(invoice);
+    // Source changes explicitly clear provider errors above. A version refresh
+    // must not erase a conflict message that tells the user to review again.
+    void loadQuickBooksPreview(invoice, { clearError: false });
     return () => {
       quickBooksGenerationRef.current += 1;
     };
@@ -518,7 +520,7 @@ export function InvoicePanel({
     })) {
       setQuickBooksConfirmOpen(false);
       setQuickBooksError(t("invoices.quickBooks.reviewStale"));
-      void loadQuickBooksPreview(invoice);
+      void loadQuickBooksPreview(invoice, { clearError: false });
       return;
     }
     const reviewBinding = reviewedPreview.reviewBinding;
@@ -1489,6 +1491,7 @@ export function InvoicePanel({
         description={t("invoices.quickBooks.leaveDescription")}
         confirmLabel={t("invoices.quickBooks.leaveConfirm")}
         confirmVariant="warning"
+        layer="navigationGuard"
       />
     </section>
   );

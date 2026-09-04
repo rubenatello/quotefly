@@ -159,6 +159,54 @@ test("QuoteFly-managed unavailable setup explains responsibility before a compan
   await expect(alert).toContainText("contact QuoteFly support");
 });
 
+test("pre-connection guidance ignores downstream platform checks while diagnostics retain them", async ({ context, page, request }) => {
+  const owner = await signUpViaApi(request, "quickbooks-settings-preconnection-scope");
+  await addSessionCookie(context, owner);
+  const preConnection = quickBooksStatus();
+  preConnection.setup.phase = "NOT_CONNECTED";
+  preConnection.connection = null;
+  preConnection.setup.checks = [
+    { key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" },
+    { key: "PROVIDER_WORKFLOWS_ENABLED", passed: true, managedBy: "QUOTEFLY" },
+    { key: "ACCOUNTING_WORKFLOWS_ENABLED", passed: false, managedBy: "QUOTEFLY" },
+    { key: "WEBHOOK_CONFIGURED", passed: false, managedBy: "QUOTEFLY" },
+  ];
+  preConnection.setup.capabilities = {
+    canConnect: true,
+    canReconnect: false,
+    canConfirm: false,
+    canDisconnect: false,
+  };
+
+  await page.route(`**${quickBooksStatusPath}`, async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(preConnection) });
+  });
+
+  await page.goto("/app/settings#admin-quickbooks");
+  await expect(page.getByText("QuoteFly-managed QuickBooks setup needs attention", { exact: true })).toHaveCount(0);
+  await page.getByText("Setup checks & diagnostics", { exact: true }).click();
+  await expect(page.getByRole("listitem").filter({ hasText: "Provider-backed accounting actions enabled" })).toContainText("QuoteFly manages this check.");
+  await expect(page.getByRole("listitem").filter({ hasText: "Webhook verifier configured; signed delivery test pending" })).toContainText("QuoteFly manages this check.");
+});
+
+test("connected guidance retains downstream QuoteFly-managed readiness failures", async ({ context, page, request }) => {
+  const owner = await signUpViaApi(request, "quickbooks-settings-connected-scope");
+  await addSessionCookie(context, owner);
+  const connected = quickBooksStatus();
+  connected.setup.phase = "ACTION_REQUIRED";
+  connected.setup.checks = [
+    { key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" },
+    { key: "ACCOUNTING_WORKFLOWS_ENABLED", passed: false, managedBy: "QUOTEFLY" },
+  ];
+
+  await page.route(`**${quickBooksStatusPath}`, async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(connected) });
+  });
+
+  await page.goto("/app/settings#admin-quickbooks");
+  await expect(page.getByText("QuickBooks is connected, but automation is not ready yet", { exact: true })).toBeVisible();
+});
+
 test("QuickBooks setup remains usable at a narrow mobile viewport", async ({ context, page, request }) => {
   const owner = await signUpViaApi(request, "quickbooks-settings-mobile");
   await addSessionCookie(context, owner);

@@ -1927,6 +1927,24 @@ model WorkerHeartbeat {
   @@index([heartbeatAtUtc], map: "WorkerHeartbeat_heartbeat_idx")
 }
 
+model WorkerHeartbeatInstance {
+  workerKey           String   @db.VarChar(64)
+  instanceRefHash     String   @db.VarChar(64)
+  status              String   @db.VarChar(24)
+  startedAtUtc        DateTime @db.Timestamptz(3)
+  cycleStartedAtUtc   DateTime @db.Timestamptz(3)
+  heartbeatAtUtc      DateTime @db.Timestamptz(3)
+  observedAtUtc       DateTime @db.Timestamptz(3)
+  lastCycleDurationMs Int?
+  releaseSha          String?  @db.VarChar(40)
+  metrics             Json
+  updatedAt           DateTime @db.Timestamptz(3)
+
+  @@id([workerKey, instanceRefHash])
+  @@index([workerKey, observedAtUtc(sort: Desc)], map: "WorkerHeartbeatInstance_worker_observed_idx")
+  @@index([observedAtUtc], map: "WorkerHeartbeatInstance_observed_idx")
+}
+
 model QuoteOutboundEvent {
   id             String               @id @default(cuid())
   tenantId       String

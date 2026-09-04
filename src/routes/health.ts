@@ -69,6 +69,11 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
               SELECT "workerKey", "heartbeatAtUtc", "status"
               FROM "WorkerHeartbeat"
               LIMIT 0
+            ),
+            worker_heartbeat_instance_probe AS (
+              SELECT "workerKey", "heartbeatAtUtc", "status"
+              FROM "WorkerHeartbeatInstance"
+              LIMIT 0
             )
           SELECT true AS "ready"
           FROM user_probe
@@ -79,6 +84,7 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
           FULL JOIN ai_document_probe ON false
           FULL JOIN ai_chunk_probe ON false
           FULL JOIN worker_heartbeat_probe ON false
+          FULL JOIN worker_heartbeat_instance_probe ON false
         `;
         await assertAiRetrievalRlsReady(app.prisma, {
           requireRuntimeRole: app.env.NODE_ENV === "production",

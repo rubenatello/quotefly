@@ -410,7 +410,26 @@ describe("security boundary helpers", () => {
 
   it("audits fixed infrastructure profiles without emitting raw values", () => {
     const sentinel = "quickbooks-client-secret-must-never-appear-in-output";
-    const result = spawnSync(
+    const auditEnvironment = {
+      ...process.env,
+      NODE_ENV: "test",
+      DATABASE_URL: "database-audit-sentinel",
+      DIRECT_DATABASE_URL: "",
+      JWT_SECRET: "jwt-audit-sentinel",
+      QUICKBOOKS_CLIENT_ID: "quickbooks-client-id-safe-for-test",
+      QUICKBOOKS_CLIENT_SECRET: sentinel,
+      QUICKBOOKS_ENVIRONMENT: "sandbox",
+      QUICKBOOKS_SANDBOX_STAGING_ORIGINS: "https://app.example.test",
+      QUICKBOOKS_REDIRECT_URI: "https://api.example.test/v1/integrations/quickbooks/callback",
+      QUICKBOOKS_WEBHOOK_VERIFIER: "quickbooks-webhook-verifier-sentinel",
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: sentinel,
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+      QUICKBOOKS_OAUTH_ONLY_MODE: "false",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "true",
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "true",
+    } satisfies NodeJS.ProcessEnv;
+    const auditQuickBooksProfile = (rateLimitRedisUrl: string) => spawnSync(
       process.execPath,
       [
         fileURLToPath(new URL("../../scripts/infrastructure-variable-audit.mjs", import.meta.url)),
@@ -419,28 +438,15 @@ describe("security boundary helpers", () => {
       ],
       {
         encoding: "utf8",
-        env: {
-          ...process.env,
-          NODE_ENV: "test",
-          DATABASE_URL: "database-audit-sentinel",
-          DIRECT_DATABASE_URL: "",
-          JWT_SECRET: "jwt-audit-sentinel",
-          QUICKBOOKS_CLIENT_ID: "quickbooks-client-id-safe-for-test",
-          QUICKBOOKS_CLIENT_SECRET: sentinel,
-          QUICKBOOKS_ENVIRONMENT: "sandbox",
-          QUICKBOOKS_REDIRECT_URI: "https://api.example.test/v1/integrations/quickbooks/callback",
-          QUICKBOOKS_WEBHOOK_VERIFIER: "quickbooks-webhook-verifier-sentinel",
-          QUICKBOOKS_TOKEN_ENCRYPTION_KEY: sentinel,
-          QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
-          QUICKBOOKS_OAUTH_ONLY_MODE: "false",
-          QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "true",
-          QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
-          QUICKBOOKS_CDC_WORKER_ENABLED: "true",
-        },
+        env: { ...auditEnvironment, RATE_LIMIT_REDIS_URL: rateLimitRedisUrl },
       },
     );
+    const result = auditQuickBooksProfile("");
+    const localRedisUrl = "redis://redis:6379/15";
+    const localRedisResult = auditQuickBooksProfile(localRedisUrl);
 
     expect(result.status).toBe(0);
+    expect(localRedisResult.status).toBe(0);
     const report = JSON.parse(result.stdout) as {
       schema: string;
       evidenceScope: string;
@@ -460,6 +466,9 @@ describe("security boundary helpers", () => {
     });
     expect(result.stderr).not.toContain(sentinel);
     expect(result.stdout).not.toContain(sentinel);
+    expect(localRedisResult.stderr).not.toContain(sentinel);
+    expect(localRedisResult.stdout).not.toContain(sentinel);
+    expect(localRedisResult.stdout).not.toContain(localRedisUrl);
 
     const gitignore = readFileSync(new URL("../../.gitignore", import.meta.url), "utf8");
     expect(gitignore).toMatch(/^\.env\.\*$/m);

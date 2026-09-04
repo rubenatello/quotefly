@@ -464,6 +464,7 @@ export function Alert({ tone, children, onDismiss }: AlertProps) {
 }
 
 type ModalSize = "sm" | "md" | "lg" | "xl";
+type ModalLayer = "default" | "navigationGuard";
 
 interface ModalProps {
   open: boolean;
@@ -471,6 +472,7 @@ interface ModalProps {
   children: ReactNode;
   modal?: boolean;
   size?: ModalSize;
+  layer?: ModalLayer;
   closeOnBackdrop?: boolean;
   panelClassName?: string;
   ariaLabel?: string;
@@ -489,6 +491,7 @@ export function Modal({
   children,
   modal = true,
   size = "md",
+  layer = "default",
   closeOnBackdrop = true,
   panelClassName = "",
   ariaLabel,
@@ -504,8 +507,20 @@ export function Modal({
       }}
     >
       <DialogPrimitive.Portal>
-        {modal ? <DialogPrimitive.Overlay className="fixed inset-0 z-[100] bg-[var(--qf-overlay)] backdrop-blur-sm" /> : null}
+        {modal ? (
+          <DialogPrimitive.Overlay
+            className={cn(
+              "fixed inset-0 bg-[var(--qf-overlay)] backdrop-blur-sm",
+              layer === "navigationGuard" ? "z-[200]" : "z-[100]",
+            )}
+          />
+        ) : null}
         <DialogPrimitive.Content
+          onCloseAutoFocus={(event) => {
+            // Navigation guards restore the coordinator's captured initiating
+            // control after nested focus scopes unwind.
+            if (layer === "navigationGuard") event.preventDefault();
+          }}
           onPointerDownOutside={(event) => {
             if (!closeOnBackdrop) event.preventDefault();
           }}
@@ -513,7 +528,8 @@ export function Modal({
             if (!closeOnBackdrop) event.preventDefault();
           }}
           className={cn(
-            "qf-theme-scope fixed inset-x-0 bottom-0 z-[110] flex max-h-[calc(100dvh-0.75rem)] w-full flex-col overflow-hidden rounded-t-[28px] border border-b-0 border-[var(--qf-border)] bg-[var(--qf-panel)] pb-[env(safe-area-inset-bottom)] text-[var(--qf-text)] shadow-[var(--qf-shadow-md)] outline-none sm:bottom-auto sm:left-1/2 sm:right-auto sm:top-1/2 sm:max-h-[90vh] sm:w-[calc(100vw-2rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[24px] sm:border-b sm:pb-0",
+            "qf-theme-scope fixed inset-x-0 bottom-0 flex max-h-[calc(100dvh-0.75rem)] w-full flex-col overflow-hidden rounded-t-[28px] border border-b-0 border-[var(--qf-border)] bg-[var(--qf-panel)] pb-[env(safe-area-inset-bottom)] text-[var(--qf-text)] shadow-[var(--qf-shadow-md)] outline-none sm:bottom-auto sm:left-1/2 sm:right-auto sm:top-1/2 sm:max-h-[90vh] sm:w-[calc(100vw-2rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[24px] sm:border-b sm:pb-0",
+            layer === "navigationGuard" ? "z-[210]" : "z-[110]",
             MODAL_SIZES[size],
             panelClassName,
           )}
@@ -608,6 +624,7 @@ interface ConfirmModalProps {
   confirmVariant?: ButtonVariant;
   children?: ReactNode;
   size?: ModalSize;
+  layer?: ModalLayer;
 }
 
 export function ConfirmModal({
@@ -622,6 +639,7 @@ export function ConfirmModal({
   confirmVariant = "danger",
   children,
   size = "sm",
+  layer = "default",
 }: ConfirmModalProps) {
   const { t } = useTranslation();
   const resolvedConfirmLabel = confirmLabel ?? t("common.confirm");
@@ -656,7 +674,7 @@ export function ConfirmModal({
               };
 
   return (
-    <Modal open={open} onClose={closeIfIdle} closeOnBackdrop={!loading} size={size} ariaLabel={title}>
+    <Modal open={open} onClose={closeIfIdle} closeOnBackdrop={!loading} size={size} layer={layer} ariaLabel={title}>
       <ModalHeader title={title} onClose={loading ? undefined : onClose} />
       <ModalBody className="py-4 sm:py-5">
         <div className="flex items-start gap-3">

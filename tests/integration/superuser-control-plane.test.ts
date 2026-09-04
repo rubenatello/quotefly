@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { buildServer } from "../../src/app";
 import { env } from "../../src/config/env";
+import { getDataClassificationCatalog } from "../../src/lib/data-governance-catalog";
 import { prisma } from "../../src/lib/prisma";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
 
@@ -610,6 +611,9 @@ describe("superuser data-governance control plane", () => {
   });
 
   test("persists deterministic validation evidence and the operator audit atomically", async () => {
+    const catalog = getDataClassificationCatalog();
+    const expectedModelCount = catalog.models.length;
+    const expectedFieldCount = catalog.models.reduce((count, model) => count + model.fields.length, 0);
     const superuser = await signUp("superuser-integration@example.com", "Superuser");
     const response = await app.inject({
       method: "POST",
@@ -630,8 +634,8 @@ describe("superuser data-governance control plane", () => {
     };
     expect(body.run).toMatchObject({
       status: "PASSED",
-      modelCount: 57,
-      fieldCount: 880,
+      modelCount: expectedModelCount,
+      fieldCount: expectedFieldCount,
       issueCount: 0,
     });
     expect(body.run.schemaHash).toBe(body.run.baselineHash);

@@ -547,6 +547,9 @@ test.describe("quote builder secure server draft recovery", () => {
     await expect.poll(async () => (await getServerDraft(request, account))?.payload.quote?.title).toBe("Must disappear on sign out");
 
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    const leaveDraft = page.getByRole("dialog", { name: "Leave this quote draft?" });
+    await expect(leaveDraft).toBeVisible();
+    await leaveDraft.getByRole("button", { name: "Keep draft and leave", exact: true }).click();
     await expect(page).toHaveURL(/\/$/);
     await expect.poll(async () => persistentBrowserDraftKeys(page)).toHaveLength(0);
   });

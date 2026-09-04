@@ -2045,13 +2045,36 @@ export type QuickBooksSetupReadiness = {
   };
 };
 
-export type WorkerHeartbeatPayload = {
+export type TenantWorkerHeartbeatPayload = {
   status: "STARTING" | "RUNNING" | "STOPPING" | "STOPPED" | "FAILED";
   fresh: boolean;
   heartbeatAtUtc: string;
+};
+
+export type WorkerHeartbeatPayload = TenantWorkerHeartbeatPayload & {
+  observedAtUtc?: string;
   startedAtUtc: string;
   cycleStartedAtUtc: string;
   lastCycleDurationMs?: number | null;
+  metrics: unknown;
+  fleet: {
+    totalInstanceCount: number;
+    freshLiveInstanceCount: number;
+    capacityInstanceCount: number;
+    stoppingInstanceCount: number;
+    staleInstanceCount: number;
+    terminalInstanceCount: number;
+    missingReleaseShaInstanceCount: number;
+    releaseMismatchInstanceCount: number;
+    overflowedFreshLiveInstanceCount: number;
+    freshLiveInstanceLimit: number;
+    freshLiveOverflowed: boolean;
+  };
+  releaseIdentity: {
+    apiReleaseSha: string | null;
+    workerReleaseSha: string | null;
+    matches: boolean | null;
+  };
 };
 
 export type QuickBooksStatusPayload = {
@@ -2062,12 +2085,8 @@ export type QuickBooksStatusPayload = {
   webhookConfigured: boolean;
   canManage: boolean;
   environment: "sandbox" | "production";
-  reconciliationWorker: WorkerHeartbeatPayload | null;
-  releaseIdentity?: {
-    apiReleaseSha: string | null;
-    workerReleaseSha: string | null;
-    matches: boolean | null;
-  };
+  reconciliationWorker: TenantWorkerHeartbeatPayload | null;
+  releaseMatches: boolean | null;
   setup: QuickBooksSetupReadiness;
   connection: null | {
     environment: string;

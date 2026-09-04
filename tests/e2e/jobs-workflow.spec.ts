@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import {
   addSessionCookie,
   addWorkspaceMemberViaApi,
@@ -25,6 +25,106 @@ async function getJob(request: APIRequestContext, cookieHeader: string, jobId: s
   });
   expect(response.status()).toBe(200);
   return (await response.json()) as JobPayload;
+}
+
+async function createQuickBooksNavigationFixture(request: APIRequestContext, prefix: string) {
+  const owner = await signUpViaApi(request, prefix);
+  const customer = await createCustomerViaApi(request, owner, {
+    fullName: `${prefix} customer`,
+    phone: "555-014-7822",
+    email: `${prefix}@example.com`,
+  });
+  const quote = await createQuoteViaApi(request, owner, customer.id, {
+    title: `${prefix} accepted quote`,
+  });
+  const accepted = await request.patch(`${apiBaseUrl}/v1/quotes/${quote.id}`, {
+    headers: { Cookie: owner.cookieHeader },
+    data: { status: "ACCEPTED" },
+  });
+  expect(accepted.status()).toBe(200);
+  const acceptedPayload = (await accepted.json()) as {
+    job: { id: string; jobNumber: number };
+  };
+  const created = await request.post(`${apiBaseUrl}/v1/invoices`, {
+    headers: {
+      Cookie: owner.cookieHeader,
+      "Idempotency-Key": `${prefix}-${Date.now()}`,
+    },
+    data: { sourceQuoteId: quote.id, dueAtUtc: "2026-10-01T17:00:00.000Z" },
+  });
+  expect(created.status()).toBe(201);
+  const invoice = (await created.json()) as {
+    invoice: { id: string; version: number; invoiceNumber: number };
+  };
+  return {
+    owner,
+    customer,
+    quote,
+    job: acceptedPayload.job,
+    invoice: invoice.invoice,
+  };
+}
+
+type QuickBooksNavigationFixture = Awaited<ReturnType<typeof createQuickBooksNavigationFixture>>;
+
+async function installQuickBooksNavigationPreview(page: Page, fixture: QuickBooksNavigationFixture) {
+  await page.route(`**/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/sync-preview`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        providerWorkflowsEnabled: true,
+        preview: {
+          invoice: {
+            id: fixture.invoice.id,
+            invoiceNumber: fixture.invoice.invoiceNumber,
+            version: fixture.invoice.version,
+            status: "DRAFT",
+            customerName: fixture.customer.fullName,
+            currency: "USD",
+            subtotalAmount: 1600,
+            taxAmount: 0,
+            totalAmount: 1600,
+            dueAtUtc: "2026-10-01T17:00:00.000Z",
+          },
+          connection: { companyName: "Navigation QuickBooks", status: "CONNECTED" },
+          billingEmail: fixture.customer.email,
+          paymentMethods: { ach: false, card: false },
+          customerMapping: null,
+          quickBooksCustomerName: null,
+          providerDocNumber: "QF-NAVIGATION",
+          lineItems: [{
+            description: fixture.quote.title,
+            quantity: 1,
+            unitPrice: 1600,
+            amount: 1600,
+            itemKey: fixture.quote.title.toLowerCase(),
+            mapped: false,
+            quickBooksItemId: null,
+            quickBooksItemName: null,
+            reviewedAtUtc: null,
+          }],
+          blockers: ["QUICKBOOKS_CUSTOMER_MAPPING_REQUIRED", "QUICKBOOKS_ITEM_MAPPING_REQUIRED"],
+          ready: false,
+          reviewBinding: null,
+          operation: null,
+        },
+      }),
+    });
+  });
+}
+
+async function makeQuickBooksReviewDirty(page: Page, path: string, value: string) {
+  await page.goto(path);
+  const panel = page.getByTestId("quickbooks-invoice-panel");
+  const customerFallback = panel.locator("details").first();
+  await expect(customerFallback.locator(":scope > summary")).toBeVisible({ timeout: 60_000 });
+  if (!(await customerFallback.evaluate((element) => (element as HTMLDetailsElement).open))) {
+    await customerFallback.locator(":scope > summary").click();
+  }
+  const customerId = panel.getByLabel("QuickBooks customer ID");
+  await customerId.fill(value);
+  return { panel, customerId };
 }
 
 test("accepted quotes create manageable jobs with mobile-safe assignment and member visibility", async ({
@@ -455,6 +555,7 @@ test("QuickBooks review uses mapped targets and recovers from a stale preview ve
   const invoice = (await created.json()) as { invoice: { id: string; version: number } };
 
   let previewVersion = invoice.invoice.version;
+  let previewCalls = 0;
   const publishVersions: number[] = [];
   const publishBindings: string[] = [];
   let previewOperation: null | {
@@ -496,6 +597,7 @@ test("QuickBooks review uses mapped targets and recovers from a stale preview ve
     },
   });
   await page.route(`**/v1/integrations/quickbooks/invoices/${invoice.invoice.id}/sync-preview`, async (route) => {
+    previewCalls += 1;
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(previewResponse()) });
   });
   await page.route(`**/v1/integrations/quickbooks/invoices/${invoice.invoice.id}/publish`, async (route) => {
@@ -565,6 +667,7 @@ test("QuickBooks review uses mapped targets and recovers from a stale preview ve
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
 
   await dialog.getByRole("button", { name: "Publish to QuickBooks" }).click();
+  await expect.poll(() => previewCalls).toBeGreaterThanOrEqual(3);
   await expect(panel).toContainText("This invoice changed after the review. Review the updated details before publishing.");
   await expect(panel).not.toContainText("Synthetic raw backend prose must not render.");
   await panel.getByRole("button", { name: "Review QuickBooks draft" }).click();
@@ -1018,9 +1121,10 @@ test("QuickBooks customer and item reviews refresh a no-email invoice for offlin
   });
 });
 
-test("QuickBooks review guards navigation and announces a failed customer search once", async ({ context, page, request }) => {
+test("QuickBooks review coordinates workspace navigation and announces a failed customer search once", async ({ context, page, request }) => {
   test.setTimeout(120_000);
   await context.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+  await page.setViewportSize({ width: 1440, height: 900 });
   const owner = await signUpViaApi(request, "quickbooks-review-navigation-guard");
   const customer = await createCustomerViaApi(request, owner, {
     fullName: "QuickBooks review guard customer",
@@ -1082,15 +1186,451 @@ test("QuickBooks review guards navigation and announces a failed customer search
   await customerFallback.locator(":scope > summary").click();
   const customerId = panel.getByLabel("QuickBooks customer ID");
   await customerId.fill("qb-review-guard-customer");
-  await panel.getByRole("button", { name: "Open QuickBooks settings" }).click();
   const leaveDialog = page.getByRole("dialog", { name: "Leave QuickBooks review?" });
+
+  const sidebarCustomers = page.getByTestId("workspace-sidebar")
+    .getByRole("button", { name: "Customers", exact: true });
+  const desktopHistoryIndex = await page.evaluate(() => window.history.state?.idx as number);
+  await sidebarCustomers.click();
+  await expect(leaveDialog).toBeVisible();
+  await leaveDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/quotes/${quote.id}$`));
+  await expect(customerId).toHaveValue("qb-review-guard-customer");
+  await expect(sidebarCustomers).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(desktopHistoryIndex);
+
+  const quickBooksSettings = panel.getByRole("button", { name: "Open QuickBooks settings" });
+  await quickBooksSettings.click();
   await expect(leaveDialog).toBeVisible();
   await leaveDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(customerId).toHaveValue("qb-review-guard-customer");
+  await expect(quickBooksSettings).toBeFocused();
 
-  await panel.getByRole("button", { name: "Open QuickBooks settings" }).click();
-  await page.getByRole("dialog", { name: "Leave QuickBooks review?" }).getByRole("button", { name: "Leave review" }).click();
+  await page.setViewportSize({ width: 320, height: 844 });
+  const mobileHome = page.getByRole("button", { name: "Go to workspace home", exact: true });
+  await mobileHome.click();
+  await expect(leaveDialog).toBeVisible();
+  await leaveDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/quotes/${quote.id}$`));
+  await expect(customerId).toHaveValue("qb-review-guard-customer");
+  await expect(mobileHome).toBeFocused();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileQuotes = page.getByTestId("mobile-tab-quotes");
+  const mobileHistoryIndex = await page.evaluate(() => window.history.state?.idx as number);
+  await mobileQuotes.click();
+  await expect(leaveDialog).toBeVisible();
+  await leaveDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/quotes/${quote.id}$`));
+  await expect(customerId).toHaveValue("qb-review-guard-customer");
+  await expect(mobileQuotes).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(mobileHistoryIndex);
+
+  await mobileQuotes.click();
+  await leaveDialog.getByRole("button", { name: "Leave review", exact: true }).click();
+  await expect(page).toHaveURL(/\/app\/quotes$/);
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(mobileHistoryIndex + 1);
+  await expect(leaveDialog).toHaveCount(0);
+
+  const mobileHomeTab = page.getByTestId("mobile-tab-home");
+  const rapidNavigationHistoryIndex = await page.evaluate(() => window.history.state?.idx as number);
+  await mobileHomeTab.click();
+  await expect(leaveDialog).toHaveCount(0);
+  await expect(page).toHaveURL(/\/app$/);
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(rapidNavigationHistoryIndex + 1);
+
+  await page.getByTestId("mobile-tab-quotes").click();
+  await expect(page).toHaveURL(/\/app\/quotes$/);
+  await expect(page.getByRole("heading", { name: "Quotes", exact: true })).toBeVisible();
+  await mobileHomeTab.click();
+  await expect(page).toHaveURL(/\/app$/);
+  await expect(page.getByRole("dialog", { name: "Leave QuickBooks review?" })).toHaveCount(0);
+});
+
+test("QuickBooks review guards accepted quote and job navigation controls", async ({ context, page, request }) => {
+  test.setTimeout(180_000);
+  await context.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const fixture = await createQuickBooksNavigationFixture(request, "qbo-route-controls");
+  await installQuickBooksNavigationPreview(page, fixture);
+  await addSessionCookie(context, fixture.owner);
+
+  let dirtyReview = await makeQuickBooksReviewDirty(
+    page,
+    `/app/quotes/${fixture.quote.id}`,
+    "quote-open-job-draft",
+  );
+  const quoteUrl = new RegExp(`/app/quotes/${fixture.quote.id}$`);
+  const quickBooksLeave = page.getByRole("dialog", { name: "Leave QuickBooks review?" });
+  const acceptedJob = page.getByRole("status").filter({
+    hasText: new RegExp(`Job #${fixture.job.jobNumber} is (?:ready from|linked to) this accepted quote\\.`),
+  });
+  const openJob = acceptedJob.getByRole("button", { name: "Open job", exact: true });
+  const quoteHistoryIndex = await page.evaluate(() => window.history.state?.idx as number);
+
+  await openJob.click();
+  await expect(quickBooksLeave).toBeVisible();
+  await quickBooksLeave.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(quoteUrl);
+  await expect(dirtyReview.customerId).toHaveValue("quote-open-job-draft");
+  await expect(openJob).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(quoteHistoryIndex);
+
+  await openJob.click();
+  await quickBooksLeave.getByRole("button", { name: "Leave review", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/jobs/${fixture.job.id}$`));
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(quoteHistoryIndex + 1);
+
+  dirtyReview = await makeQuickBooksReviewDirty(
+    page,
+    `/app/jobs/${fixture.job.id}`,
+    "job-back-draft",
+  );
+  const jobUrl = new RegExp(`/app/jobs/${fixture.job.id}$`);
+  const backToJobs = page.getByRole("button", { name: "Back to jobs", exact: true });
+  const backHistoryIndex = await page.evaluate(() => window.history.state?.idx as number);
+  await backToJobs.click();
+  await expect(quickBooksLeave).toBeVisible();
+  await quickBooksLeave.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(jobUrl);
+  await expect(dirtyReview.customerId).toHaveValue("job-back-draft");
+  await expect(backToJobs).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(backHistoryIndex);
+
+  await backToJobs.click();
+  await quickBooksLeave.getByRole("button", { name: "Leave review", exact: true }).click();
+  await expect(page).toHaveURL(/\/app\/jobs$/);
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(backHistoryIndex + 1);
+
+  dirtyReview = await makeQuickBooksReviewDirty(
+    page,
+    `/app/jobs/${fixture.job.id}`,
+    "job-open-quote-draft",
+  );
+  const openQuote = page.getByRole("button", { name: "Open quote", exact: true });
+  const openQuoteHistoryIndex = await page.evaluate(() => window.history.state?.idx as number);
+  await openQuote.click();
+  await expect(quickBooksLeave).toBeVisible();
+  await quickBooksLeave.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(jobUrl);
+  await expect(dirtyReview.customerId).toHaveValue("job-open-quote-draft");
+  await expect(openQuote).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(openQuoteHistoryIndex);
+
+  await openQuote.click();
+  await quickBooksLeave.getByRole("button", { name: "Leave review", exact: true }).click();
+  await expect(page).toHaveURL(quoteUrl);
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(openQuoteHistoryIndex + 1);
+});
+
+test("one browser history traversal serializes two dirty review guards", async ({ context, page, request }) => {
+  test.setTimeout(180_000);
+  await context.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const fixture = await createQuickBooksNavigationFixture(request, "qbo-history-chain");
+  await installQuickBooksNavigationPreview(page, fixture);
+  await addSessionCookie(context, fixture.owner);
+
+  await page.goto("/app/quotes");
+  await expect(page.getByRole("heading", { name: "Quotes", exact: true })).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Open quote", exact: true }).filter({ visible: true }).first().click();
+  await expect(page).toHaveURL(new RegExp(`/app/quotes/${fixture.quote.id}$`));
+  await expect(page.getByTestId("quote-desk")).toBeVisible();
+
+  await page.getByRole("button", { name: "Unlock to edit", exact: true }).first().click();
+  await page.getByRole("dialog", { name: "Unlock quote for editing" })
+    .getByRole("button", { name: "Unlock quote", exact: true })
+    .click();
+  const quoteTitle = page.getByLabel("Quote title");
+  await quoteTitle.fill("Two guarded drafts remain intact");
+  await expect(page.getByText("Unsaved edits", { exact: true }).first()).toBeVisible();
+
+  const panel = page.getByTestId("quickbooks-invoice-panel");
+  const customerFallback = panel.locator("details").first();
+  await expect(customerFallback.locator(":scope > summary")).toBeVisible({ timeout: 60_000 });
+  await customerFallback.locator(":scope > summary").click();
+  const customerId = panel.getByLabel("QuickBooks customer ID");
+  await customerId.fill("two-guard-qbo-draft");
+
+  const quoteLeave = page.getByRole("dialog", { name: "Leave with unsaved quote edits?" });
+  const quickBooksLeave = page.getByRole("dialog", { name: "Leave QuickBooks review?" });
+  const eitherLeave = quoteLeave.or(quickBooksLeave);
+  const originHistoryIndex = await page.evaluate(() => window.history.state?.idx as number);
+
+  const visibleLeaveDialog = async () => {
+    await expect(eitherLeave).toBeVisible();
+    return await quoteLeave.isVisible() ? quoteLeave : quickBooksLeave;
+  };
+  const confirmVisibleLeave = async () => {
+    const dialog = await visibleLeaveDialog();
+    if (await quoteLeave.isVisible()) {
+      await dialog.getByRole("button", { name: "Keep draft and leave", exact: true }).click();
+    } else {
+      await dialog.getByRole("button", { name: "Leave review", exact: true }).click();
+    }
+  };
+
+  await customerId.focus();
+  await page.evaluate(() => window.history.back());
+  const firstPrompt = await visibleLeaveDialog();
+  await firstPrompt.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/quotes/${fixture.quote.id}$`));
+  await expect(quoteTitle).toHaveValue("Two guarded drafts remain intact");
+  await expect(customerId).toHaveValue("two-guard-qbo-draft");
+  await expect(customerId).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(originHistoryIndex);
+
+  await customerId.focus();
+  await page.evaluate(() => window.history.back());
+  await visibleLeaveDialog();
+  const firstPromptWasQuote = await quoteLeave.isVisible();
+  await confirmVisibleLeave();
+  const secondPrompt = await visibleLeaveDialog();
+  expect(await quoteLeave.isVisible()).toBe(!firstPromptWasQuote);
+  await secondPrompt.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/quotes/${fixture.quote.id}$`));
+  await expect(quoteTitle).toHaveValue("Two guarded drafts remain intact");
+  await expect(customerId).toHaveValue("two-guard-qbo-draft");
+  await expect(customerId).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(originHistoryIndex);
+
+  await page.evaluate(() => window.history.back());
+  await confirmVisibleLeave();
+  await confirmVisibleLeave();
+  await expect(page).toHaveURL(/\/app\/quotes$/);
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(originHistoryIndex - 1);
+  await expect(quoteLeave).toHaveCount(0);
+  await expect(quickBooksLeave).toHaveCount(0);
+});
+
+test("guarded overlays preserve their review and run each accepted handoff once", async ({ context, page, request }) => {
+  test.setTimeout(240_000);
+  await context.addInitScript(() => window.localStorage.setItem("qf_locale", "en-US"));
+  await page.setViewportSize({ width: 390, height: 844 });
+  const fixture = await createQuickBooksNavigationFixture(request, "qbo-overlay-handoffs");
+  const alternateQuote = await createQuoteViaApi(request, fixture.owner, fixture.customer.id, {
+    title: "Alternate dashboard handoff quote",
+  });
+  await installQuickBooksNavigationPreview(page, fixture);
+
+  const notification = {
+    id: "qbo-guard-notification",
+    appointmentId: "qbo-guard-appointment",
+    kind: "BOOKED",
+    templateKey: "job_appointment_booked",
+    templateVersion: 1,
+    sourceVersion: 1,
+    startsAtUtc: "2026-09-10T16:00:00.000Z",
+    endsAtUtc: "2026-09-10T18:00:00.000Z",
+    timeZone: "America/Los_Angeles",
+    deliveryStatus: "AVAILABLE",
+    deliveredAtUtc: null,
+    readAtUtc: null,
+    version: 1,
+    createdAt: "2026-09-03T18:00:00.000Z",
+    updatedAt: "2026-09-03T18:00:00.000Z",
+    job: {
+      id: fixture.job.id,
+      jobNumber: fixture.job.jobNumber,
+      title: fixture.quote.title,
+      customer: { id: fixture.customer.id, fullName: fixture.customer.fullName },
+    },
+  };
+  await page.route(`${apiBaseUrl}/v1/notifications**`, async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/v1/notifications/summary") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          unreadCount: 1,
+          totalCount: 1,
+          latestCreatedAtUtc: notification.createdAt,
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [notification],
+        page: { limit: 25, hasMore: false, nextCursor: null },
+      }),
+    });
+  });
+
+  let assistantRequests = 0;
+  await page.route(`${apiBaseUrl}/v1/ai/assistant`, async (route) => {
+    assistantRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        assistant: {
+          tool: "GET_QUICKBOOKS_SETUP_STATUS",
+          generatedAtUtc: "2026-09-03T18:00:00.000Z",
+          policyVersion: "2026-08-12",
+          maxClassification: "C1_BUSINESS_INTERNAL",
+          answer: "I can open QuickBooks setup for review.",
+          results: [],
+          citations: [],
+          actions: [{
+            type: "OPEN_QUICKBOOKS_SETUP",
+            label: "Open QuickBooks setup",
+            requiresConfirmation: false,
+            payload: {},
+          }],
+          auditEventId: "audit-qbo-guard-handoff",
+          fieldsExcluded: ["provider credentials", "tenant ids"],
+          diagnostics: {
+            requestedTool: "AUTO",
+            resolvedTool: "GET_QUICKBOOKS_SETUP_STATUS",
+            resultCount: 0,
+            citationCount: 0,
+            emptyReason: null,
+            archivePolicy: "Setup status does not retrieve provider credentials.",
+            filters: {},
+            answerMode: "DETERMINISTIC",
+            model: null,
+          },
+        },
+        usage: {
+          consumedCredits: 0,
+          consumedSpendUsd: 0,
+          monthlyCreditsUsed: 0,
+          monthlyCreditsLimit: 770,
+          monthlyCreditsRemaining: 770,
+          monthlySpendUsedUsd: 0,
+          monthlySpendLimitUsd: 1.25,
+          monthlySpendRemainingUsd: 1.25,
+          monthlySpendUsagePercent: 0,
+          estimatedPromptCostUsd: 0,
+          estimatedPromptsRemaining: 770,
+          renewsAtUtc: "2026-10-01T00:00:00.000Z",
+        },
+      }),
+    });
+  });
+
+  let jobDetailRequests = 0;
+  let logoutRequests = 0;
+  page.on("request", (browserRequest) => {
+    const url = new URL(browserRequest.url());
+    if (browserRequest.method() === "GET" && url.pathname === `/v1/jobs/${fixture.job.id}`) {
+      jobDetailRequests += 1;
+    }
+    if (browserRequest.method() === "POST" && url.pathname === "/v1/auth/logout") {
+      logoutRequests += 1;
+    }
+  });
+
+  await addSessionCookie(context, fixture.owner);
+  const quotePath = `/app/quotes/${fixture.quote.id}`;
+  const quoteUrl = new RegExp(`${quotePath}$`);
+  const quickBooksLeave = page.getByRole("dialog", { name: "Leave QuickBooks review?" });
+
+  let dirtyReview = await makeQuickBooksReviewDirty(page, quotePath, "command-palette-draft");
+  const commandHistoryIndex = await page.evaluate(() => window.history.state?.idx as number);
+  await page.getByRole("button", { name: "Open workspace search", exact: true }).click();
+  const commandInput = page.getByPlaceholder("Jump to customers, quotes, analytics, branding...");
+  const commandPalette = page.getByRole("dialog").filter({ has: commandInput });
+  await commandInput.fill("Customers");
+  const commandCustomers = commandPalette.getByText("Customers", { exact: true });
+  await commandCustomers.click();
+  await expect(quickBooksLeave).toBeVisible();
+  await quickBooksLeave.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(quoteUrl);
+  await expect(dirtyReview.customerId).toHaveValue("command-palette-draft");
+  await expect(commandPalette).toBeVisible();
+  await expect(commandInput).toBeFocused();
+  await commandCustomers.click();
+  await quickBooksLeave.getByRole("button", { name: "Leave review", exact: true }).click();
+  await expect(page).toHaveURL(/\/app\/customers$/);
+  await expect(commandPalette).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(commandHistoryIndex + 1);
+
+  dirtyReview = await makeQuickBooksReviewDirty(page, quotePath, "notification-draft");
+  const notificationHistoryIndex = await page.evaluate(() => window.history.state?.idx as number);
+  const bell = page.getByRole("button", { name: "Notifications, 1 unread", exact: true }).filter({ visible: true });
+  await bell.click();
+  const notificationCenter = page.getByRole("dialog", { name: "Notifications" });
+  const notificationOpenJob = notificationCenter.getByRole("button", { name: "Open job", exact: true });
+  await notificationOpenJob.click();
+  await expect(quickBooksLeave).toBeVisible();
+  await quickBooksLeave.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(quoteUrl);
+  await expect(dirtyReview.customerId).toHaveValue("notification-draft");
+  await expect(notificationCenter).toBeVisible();
+  await expect(notificationOpenJob).toBeFocused();
+  expect(jobDetailRequests).toBe(0);
+  await notificationOpenJob.click();
+  await quickBooksLeave.getByRole("button", { name: "Leave review", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/jobs/${fixture.job.id}$`));
+  await expect(notificationCenter).toHaveCount(0);
+  // StrictMode may replay the destination page's data-loading effect. The
+  // exact-once navigation contract is the single history entry asserted next.
+  await expect.poll(() => jobDetailRequests).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(notificationHistoryIndex + 1);
+
+  dirtyReview = await makeQuickBooksReviewDirty(page, quotePath, "kody-draft");
+  const kodyHistoryIndex = await page.evaluate(() => window.history.state?.idx as number);
+  // Mobile intentionally hides the generic launcher when the Quote Desk has a
+  // more contextual Kody entry point.
+  await page.getByRole("button", { name: "Book with Kody", exact: true }).filter({ visible: true }).click();
+  const kody = page.getByTestId("kody-chat-panel");
+  await kody.getByTestId("kody-prompt").fill("Open QuickBooks setup");
+  await kody.getByRole("button", { name: "Send", exact: true }).click();
+  const kodyQuickBooks = kody.getByRole("button", { name: "Open QuickBooks setup", exact: true });
+  await expect(kodyQuickBooks).toBeVisible();
+  await kodyQuickBooks.click();
+  await expect(quickBooksLeave).toBeVisible();
+  await quickBooksLeave.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(quoteUrl);
+  await expect(dirtyReview.customerId).toHaveValue("kody-draft");
+  await expect(kody).toBeVisible();
+  await expect(kodyQuickBooks).toBeFocused();
+  await kodyQuickBooks.click();
+  await quickBooksLeave.getByRole("button", { name: "Leave review", exact: true }).click();
   await expect(page).toHaveURL(/\/app\/settings#admin-quickbooks$/);
+  await expect(kody).toBeHidden();
+  expect(assistantRequests).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(kodyHistoryIndex + 1);
+
+  dirtyReview = await makeQuickBooksReviewDirty(page, quotePath, "dashboard-handoff-draft");
+  const dashboardHistoryIndex = await page.evaluate(() => window.history.state?.idx as number);
+  const quickLookup = page.getByLabel("Search customers and quotes", { exact: true });
+  await quickLookup.fill(alternateQuote.title);
+  await expect(page.getByText(alternateQuote.title, { exact: true }).filter({ visible: true })).toBeVisible();
+  const dashboardOpenQuote = page.getByRole("button", { name: "Open quote", exact: true }).filter({ visible: true });
+  await dashboardOpenQuote.click();
+  await expect(quickBooksLeave).toBeVisible();
+  await quickBooksLeave.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(quoteUrl);
+  await expect(dirtyReview.customerId).toHaveValue("dashboard-handoff-draft");
+  await expect(dashboardOpenQuote).toBeFocused();
+  await dashboardOpenQuote.click();
+  await quickBooksLeave.getByRole("button", { name: "Leave review", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/quotes/${alternateQuote.id}$`));
+  await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(dashboardHistoryIndex + 1);
+
+  dirtyReview = await makeQuickBooksReviewDirty(page, quotePath, "logout-draft");
+  await page.getByRole("button", { name: "Open workspace menu", exact: true }).click();
+  const signOut = page.getByRole("menuitem", { name: "Sign out", exact: true });
+  await signOut.click();
+  await expect(quickBooksLeave).toBeVisible();
+  await quickBooksLeave.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(quoteUrl);
+  await expect(dirtyReview.customerId).toHaveValue("logout-draft");
+  await expect(signOut).toBeVisible();
+  await expect(signOut).toBeFocused();
+  expect(logoutRequests).toBe(0);
+  await signOut.click();
+  await quickBooksLeave.getByRole("button", { name: "Leave review", exact: true }).click();
+  await expect.poll(() => logoutRequests).toBe(1);
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("button", { name: "Open workspace menu", exact: true })).toHaveCount(0);
 });
 
 test("QuickBooks blocker actions remain usable in Spanish at 320px", async ({

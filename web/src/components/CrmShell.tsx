@@ -23,6 +23,7 @@ import {
   type WorkspaceNavigationId,
   type WorkspacePage,
 } from "./crm/workspace-navigation";
+import { useWorkspaceNavigationGuardCoordinator } from "../hooks/workspace-navigation-guard-context";
 
 const CrmCommandPalette = lazy(() => import("./crm/CrmCommandPalette").then((module) => ({ default: module.CrmCommandPalette })));
 const FeatureRequestForm = lazy(() => import("./feedback/FeatureRequestForm").then((module) => ({ default: module.FeatureRequestForm })));
@@ -70,6 +71,7 @@ export function CrmShell({
   onNavigateToJob,
 }: CrmShellProps) {
   const { t } = useTranslation();
+  const { requestNavigation } = useWorkspaceNavigationGuardCoordinator();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const savedValue = localStorage.getItem("qf_sidebar_collapsed");
@@ -130,15 +132,22 @@ export function CrmShell({
   }, [mobileOpen]);
 
   const handleNavigate = (page: WorkspaceNavigationId) => {
-    onNavigate(page);
-    setMobileOpen(false);
-    setCommandOpen(false);
+    requestNavigation(() => {
+      onNavigate(page);
+      setMobileOpen(false);
+      setCommandOpen(false);
+    });
   };
 
   const handleQuickAction = (action: "new-customer" | "new-quote") => {
-    setMobileOpen(false);
-    onQuickAction(action);
+    requestNavigation(() => {
+      setMobileOpen(false);
+      setCommandOpen(false);
+      onQuickAction(action);
+    });
   };
+
+  const handleLogout = () => requestNavigation(onLogout);
 
   const handleToggleMobile = () => {
     setCommandOpen(false);
@@ -196,7 +205,7 @@ export function CrmShell({
         onOpenCommand={() => setCommandOpen(true)}
         onNavigate={handleNavigate}
         onQuickAction={handleQuickAction}
-        onLogout={onLogout}
+        onLogout={handleLogout}
         currentLabel={pageLabel}
         canManageWorkspace={canManageCatalog}
         notificationButtonRef={mobileNotificationTriggerRef}
@@ -229,7 +238,7 @@ export function CrmShell({
           onNavigate={handleNavigate}
           operationsLinks={operationsLinks}
           settingsLinks={settingsLinks}
-          onLogout={onLogout}
+          onLogout={handleLogout}
           onRequestFeature={handleRequestFeature}
           planName={planName}
           isTrial={isTrial}
@@ -364,7 +373,10 @@ export function CrmShell({
                       </DropdownMenuPrimitive.Item>
                       <DropdownMenuPrimitive.Separator className="my-2 h-px bg-[var(--qf-border)]" />
                       <DropdownMenuPrimitive.Item
-                        onSelect={() => onLogout()}
+                        onSelect={(event) => {
+                          event.preventDefault();
+                          handleLogout();
+                        }}
                         className={cn("cursor-pointer rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-danger-text)] outline-none transition hover:bg-[var(--qf-danger-surface)] focus:bg-[var(--qf-danger-surface)] data-[highlighted]:bg-[var(--qf-danger-surface)]")}
                       >
                         {t("navigation.signOut")}
@@ -388,7 +400,10 @@ export function CrmShell({
         onOpenChange={setNotificationCenterOpen}
         displayTimeZone={displayTimeZone}
         onUnreadCountChange={setNotificationUnreadCount}
-        onOpenJob={onNavigateToJob}
+        onOpenJob={(jobId) => requestNavigation(() => {
+          setNotificationCenterOpen(false);
+          onNavigateToJob(jobId);
+        })}
         returnFocusRef={notificationReturnFocusRef}
       />
 

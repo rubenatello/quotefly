@@ -333,8 +333,10 @@ test("infrastructure variable audit uses fixed profiles and never emits secret v
     web: { VITE_API_BASE_URL: "https://api.example.test" },
     quickbooks: {
       NODE_ENV: "test", DATABASE_URL: "database-sentinel", JWT_SECRET: "jwt-sentinel",
+      APP_URL: "https://app.example.test", API_URL: "https://api.example.test",
       QUICKBOOKS_CLIENT_ID: "client-id", QUICKBOOKS_CLIENT_SECRET: "client-secret-sentinel",
       QUICKBOOKS_ENVIRONMENT: "sandbox", QUICKBOOKS_REDIRECT_URI: "https://api.example.test/callback",
+      QUICKBOOKS_SANDBOX_STAGING_ORIGINS: "https://app.example.test,https://api.example.test",
       QUICKBOOKS_WEBHOOK_VERIFIER: "verifier-sentinel", QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "encryption-key-sentinel",
       QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
       QUICKBOOKS_OAUTH_ONLY_MODE: "false",
@@ -344,13 +346,95 @@ test("infrastructure variable audit uses fixed profiles and never emits secret v
     },
     "quickbooks-oauth": {
       NODE_ENV: "test", DATABASE_URL: "database-sentinel", JWT_SECRET: "jwt-sentinel",
+      APP_URL: "https://app.example.test", API_URL: "https://api.example.test",
       QUICKBOOKS_CLIENT_ID: "client-id", QUICKBOOKS_CLIENT_SECRET: "client-secret-sentinel",
       QUICKBOOKS_ENVIRONMENT: "sandbox", QUICKBOOKS_REDIRECT_URI: "https://api.example.test/callback",
+      QUICKBOOKS_SANDBOX_STAGING_ORIGINS: "https://app.example.test,https://api.example.test",
       QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "encryption-key-sentinel",
       QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true", QUICKBOOKS_OAUTH_ONLY_MODE: "true",
       QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "false", QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "false",
       QUICKBOOKS_CDC_WORKER_ENABLED: "false",
     },
+    "quickbooks-reconciliation": {
+      NODE_ENV: "test", DATABASE_URL: "database-sentinel", JWT_SECRET: "jwt-sentinel",
+      APP_URL: "https://app.example.test", API_URL: "https://api.example.test",
+      QUICKBOOKS_CLIENT_ID: "client-id", QUICKBOOKS_CLIENT_SECRET: "client-secret-sentinel",
+      QUICKBOOKS_ENVIRONMENT: "sandbox", QUICKBOOKS_REDIRECT_URI: "https://api.example.test/callback",
+      QUICKBOOKS_SANDBOX_STAGING_ORIGINS: "https://app.example.test,https://api.example.test",
+      QUICKBOOKS_WEBHOOK_VERIFIER: "verifier-sentinel", QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "encryption-key-sentinel",
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true", QUICKBOOKS_OAUTH_ONLY_MODE: "false",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "false", QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "false",
+    },
+    "quickbooks-cdc": {
+      NODE_ENV: "test", DATABASE_URL: "database-sentinel", JWT_SECRET: "jwt-sentinel",
+      APP_URL: "https://app.example.test", API_URL: "https://api.example.test",
+      QUICKBOOKS_CLIENT_ID: "client-id", QUICKBOOKS_CLIENT_SECRET: "client-secret-sentinel",
+      QUICKBOOKS_ENVIRONMENT: "sandbox", QUICKBOOKS_REDIRECT_URI: "https://api.example.test/callback",
+      QUICKBOOKS_SANDBOX_STAGING_ORIGINS: "https://app.example.test,https://api.example.test",
+      QUICKBOOKS_WEBHOOK_VERIFIER: "verifier-sentinel", QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "encryption-key-sentinel",
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true", QUICKBOOKS_OAUTH_ONLY_MODE: "false",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "false", QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "true",
+    },
+    "quickbooks-hosted-payments": {
+      NODE_ENV: "test", DATABASE_URL: "database-sentinel", JWT_SECRET: "jwt-sentinel",
+      APP_URL: "https://app.example.test", API_URL: "https://api.example.test",
+      QUICKBOOKS_CLIENT_ID: "client-id", QUICKBOOKS_CLIENT_SECRET: "client-secret-sentinel",
+      QUICKBOOKS_ENVIRONMENT: "sandbox", QUICKBOOKS_REDIRECT_URI: "https://api.example.test/callback",
+      QUICKBOOKS_SANDBOX_STAGING_ORIGINS: "https://app.example.test,https://api.example.test",
+      QUICKBOOKS_WEBHOOK_VERIFIER: "verifier-sentinel", QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "encryption-key-sentinel",
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true", QUICKBOOKS_OAUTH_ONLY_MODE: "false",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "true", QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "true",
+    },
+  };
+
+  const quickBooksStageExpectations = {
+    "quickbooks-oauth": {
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+      QUICKBOOKS_OAUTH_ONLY_MODE: "true",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "false",
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "false",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "false",
+    },
+    "quickbooks-reconciliation": {
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+      QUICKBOOKS_OAUTH_ONLY_MODE: "false",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "false",
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "false",
+    },
+    "quickbooks-cdc": {
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+      QUICKBOOKS_OAUTH_ONLY_MODE: "false",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "false",
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "true",
+    },
+    "quickbooks-hosted-payments": {
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+      QUICKBOOKS_OAUTH_ONLY_MODE: "false",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "true",
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "true",
+    },
+    quickbooks: {
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true",
+      QUICKBOOKS_OAUTH_ONLY_MODE: "false",
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "true",
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+      QUICKBOOKS_CDC_WORKER_ENABLED: "true",
+    },
+  };
+
+  const assertNoSecretValues = (result, environment) => {
+    for (const name of allSecretNames) {
+      const value = environment[name];
+      if (!value) continue;
+      assert.doesNotMatch(result.stdout, new RegExp(value));
+      assert.doesNotMatch(result.stderr, new RegExp(value));
+    }
   };
 
   for (const [profile, env] of Object.entries(requiredEnvironment)) {
@@ -365,23 +449,82 @@ test("infrastructure variable audit uses fixed profiles and never emits secret v
     assert.ok(report.required.every((entry) => entry.status === "configured"));
     assert.ok(report.required.every((entry) => !entry.expectationStatus || entry.expectationStatus === "matched"));
     assert.ok(report.forbidden.every((entry) => entry.status === "missing"));
+    assertNoSecretValues(result, env);
   }
 
-  for (const [profile, variableName, wrongValue] of [
-    ["quickbooks", "QUICKBOOKS_OAUTH_ONLY_MODE", "true"],
-    ["quickbooks", "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED", "false"],
-    ["quickbooks-oauth", "QUICKBOOKS_ENVIRONMENT", "production"],
-    ["quickbooks-oauth", "QUICKBOOKS_HOSTED_PAYMENTS_ENABLED", "true"],
-  ]) {
-    const result = runAudit(profile, { ...requiredEnvironment[profile], [variableName]: wrongValue });
-    assert.equal(result.status, 1, `${profile}:${variableName}`);
-    const report = JSON.parse(result.stdout);
-    assert.equal(report.outcome, "fail");
-    assert.equal(
-      report.required.find((entry) => entry.name === variableName)?.expectationStatus,
-      "mismatched",
-    );
+  for (const [profile, expectations] of Object.entries(quickBooksStageExpectations)) {
+    for (const [variableName, expectedValue] of Object.entries(expectations)) {
+      const wrongValue = expectedValue === "true" ? "false" : "true";
+      const environment = { ...requiredEnvironment[profile], [variableName]: wrongValue };
+      const result = runAudit(profile, environment);
+      assert.equal(result.status, 1, `${profile}:${variableName}`);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.outcome, "fail");
+      assert.equal(
+        report.required.find((entry) => entry.name === variableName)?.expectationStatus,
+        "mismatched",
+      );
+      assertNoSecretValues(result, environment);
+    }
   }
+
+  for (const profile of Object.keys(quickBooksStageExpectations)) {
+    const configured = runAudit(profile, requiredEnvironment[profile]);
+    const configuredReport = JSON.parse(configured.stdout);
+    for (const { name: variableName } of configuredReport.required) {
+      const incompleteEnvironment = { ...requiredEnvironment[profile], [variableName]: "" };
+      const result = runAudit(profile, incompleteEnvironment);
+      assert.equal(result.status, 1, `${profile}:${variableName}`);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.outcome, "fail");
+      assert.equal(
+        report.required.find((entry) => entry.name === variableName)?.status,
+        "missing",
+      );
+      assertNoSecretValues(result, incompleteEnvironment);
+    }
+  }
+
+  for (const profile of ["quickbooks-reconciliation", "quickbooks-cdc", "quickbooks-hosted-payments", "quickbooks"]) {
+    const productionEnvironment = {
+      ...requiredEnvironment[profile],
+      QUICKBOOKS_ENVIRONMENT: "production",
+      QUICKBOOKS_SANDBOX_STAGING_ORIGINS: "",
+    };
+    const result = runAudit(profile, productionEnvironment);
+    assert.equal(result.status, 0, `${profile}: ${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, "pass");
+    assert.equal(
+      report.required.some((entry) => entry.name === "QUICKBOOKS_SANDBOX_STAGING_ORIGINS"),
+      false,
+    );
+    assertNoSecretValues(result, productionEnvironment);
+  }
+
+  const productionOauthEnvironment = {
+    ...requiredEnvironment["quickbooks-oauth"],
+    QUICKBOOKS_ENVIRONMENT: "production",
+    QUICKBOOKS_SANDBOX_STAGING_ORIGINS: "",
+  };
+  const productionOauthResult = runAudit("quickbooks-oauth", productionOauthEnvironment);
+  assert.equal(productionOauthResult.status, 1);
+  const productionOauthReport = JSON.parse(productionOauthResult.stdout);
+  assert.equal(
+    productionOauthReport.required.find((entry) => entry.name === "QUICKBOOKS_ENVIRONMENT")?.expectationStatus,
+    "mismatched",
+  );
+  assert.equal(
+    productionOauthReport.required.some((entry) => entry.name === "QUICKBOOKS_SANDBOX_STAGING_ORIGINS"),
+    false,
+  );
+  assertNoSecretValues(productionOauthResult, productionOauthEnvironment);
+
+  assert.deepEqual(
+    runAudit("quickbooks", requiredEnvironment.quickbooks).stdout
+      .replace('"profile": "quickbooks"', '"profile": "quickbooks-hosted-payments"'),
+    runAudit("quickbooks-hosted-payments", requiredEnvironment["quickbooks-hosted-payments"]).stdout,
+  );
 
   const secretEnvironment = Object.fromEntries(allSecretNames.map((name, index) => [name, `secret-sentinel-${index}`]));
   const webResult = runAudit("web", { VITE_API_BASE_URL: "https://api.example.test", ...secretEnvironment });
@@ -395,21 +538,29 @@ test("infrastructure variable audit uses fixed profiles and never emits secret v
     assert.doesNotMatch(webResult.stderr, new RegExp(value));
   }
 
-  for (const [profile, forbiddenName] of Object.entries({
-    api: "DIRECT_DATABASE_URL",
-    worker: "DIRECT_DATABASE_URL",
-    migrations: "DATABASE_URL",
-    quickbooks: "DIRECT_DATABASE_URL",
-    "quickbooks-oauth": "QUICKBOOKS_WEBHOOK_VERIFIER",
-  })) {
-    const result = runAudit(profile, { ...requiredEnvironment[profile], [forbiddenName]: "forbidden-sentinel" });
-    assert.equal(result.status, 1, profile);
-    const report = JSON.parse(result.stdout);
-    assert.equal(report.outcome, "fail");
-    assert.deepEqual(
-      report.forbidden.find((entry) => entry.name === forbiddenName),
-      { name: forbiddenName, classification: "secret", status: "configured" },
-    );
+  const forbiddenByProfile = {
+    api: ["DIRECT_DATABASE_URL"],
+    worker: ["DIRECT_DATABASE_URL"],
+    migrations: ["DATABASE_URL"],
+    "quickbooks-oauth": ["DIRECT_DATABASE_URL", "QUICKBOOKS_WEBHOOK_VERIFIER"],
+    "quickbooks-reconciliation": ["DIRECT_DATABASE_URL"],
+    "quickbooks-cdc": ["DIRECT_DATABASE_URL"],
+    "quickbooks-hosted-payments": ["DIRECT_DATABASE_URL"],
+    quickbooks: ["DIRECT_DATABASE_URL"],
+  };
+  for (const [profile, forbiddenNames] of Object.entries(forbiddenByProfile)) {
+    for (const forbiddenName of forbiddenNames) {
+      const environment = { ...requiredEnvironment[profile], [forbiddenName]: "forbidden-sentinel" };
+      const result = runAudit(profile, environment);
+      assert.equal(result.status, 1, `${profile}:${forbiddenName}`);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.outcome, "fail");
+      assert.deepEqual(
+        report.forbidden.find((entry) => entry.name === forbiddenName),
+        { name: forbiddenName, classification: "secret", status: "configured" },
+      );
+      assertNoSecretValues(result, environment);
+    }
   }
 
   const unknownProfile = "untrusted-profile-sentinel";

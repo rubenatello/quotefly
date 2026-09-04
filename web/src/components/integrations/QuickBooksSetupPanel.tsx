@@ -47,6 +47,11 @@ const checkKeys: Record<QuickBooksSetupCheckKey, string> = {
   SETUP_CONFIRMED: "admin.quickBooksSetup.checks.setupConfirmed",
 };
 
+const preConnectionPlatformChecks = new Set<QuickBooksSetupCheckKey>([
+  "PROVIDER_CONFIGURED",
+  "PROVIDER_WORKFLOWS_ENABLED",
+]);
+
 function phaseTone(phase: QuickBooksSetupPhase): "emerald" | "blue" | "amber" | "red" | "slate" {
   if (phase === "CONFIRMED") return "emerald";
   if (phase === "READY_FOR_CONFIRMATION") return "blue";
@@ -139,7 +144,10 @@ export function QuickBooksSetupPanel({
       ? { label: t("admin.quickBooksSetup.reconnect"), handler: onConnect }
       : null;
   const actionableFailures = setup.checks.filter((check) => !check.passed && check.managedBy === "WORKSPACE");
-  const platformFailures = setup.checks.filter((check) => !check.passed && check.managedBy === "QUOTEFLY");
+  const quoteFlyManagedFailures = setup.checks.filter((check) => !check.passed && check.managedBy === "QUOTEFLY");
+  const platformFailures = connection?.status === "CONNECTED"
+    ? quoteFlyManagedFailures
+    : quoteFlyManagedFailures.filter((check) => preConnectionPlatformChecks.has(check.key));
   const reconciliationWorkerExpected = setup.checks.some(
     (check) => check.key === "RECONCILIATION_WORKER_ENABLED" && check.passed,
   );

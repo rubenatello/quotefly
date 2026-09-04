@@ -393,6 +393,12 @@ describe("invoice ledger API", () => {
     await prisma.billingWebhookEvent.deleteMany();
     await prisma.tenant.deleteMany();
     await prisma.user.deleteMany();
+    await prisma.workerHeartbeatInstance.deleteMany({
+      where: { workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY },
+    });
+    await prisma.workerHeartbeat.deleteMany({
+      where: { workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY },
+    });
     const heartbeatAtUtc = new Date();
     await recordWorkerHeartbeat(prisma, {
       workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
@@ -1858,6 +1864,7 @@ describe("invoice ledger API", () => {
   ])("refuses invoice publishing when the worker heartbeat is $label", async ({ heartbeat }) => {
     const owner = await signUp(`invoice-qb-heartbeat-${heartbeat?.status ?? "missing"}`);
     const { invoice, reviewBinding } = await createQuickBooksReadyInvoice(owner, `heartbeat-${heartbeat?.status ?? "missing"}`);
+    await prisma.workerHeartbeatInstance.deleteMany({ where: { workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY } });
     await prisma.workerHeartbeat.deleteMany({ where: { workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY } });
     if (heartbeat) {
       const heartbeatAtUtc = new Date(Date.now() - heartbeat.ageMs);
@@ -1870,6 +1877,20 @@ describe("invoice ledger API", () => {
         heartbeatAtUtc,
         metrics: { fixture: true },
       });
+      if (heartbeat.ageMs > 0) {
+        // Fleet readiness deliberately uses the database-observed timestamp,
+        // not a worker-provided heartbeat timestamp. Age the mirror explicitly
+        // so this fixture proves the fail-closed stale-observation path.
+        await prisma.workerHeartbeatInstance.update({
+          where: {
+            workerKey_instanceRefHash: {
+              workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+              instanceRefHash: "b".repeat(64),
+            },
+          },
+          data: { observedAtUtc: heartbeatAtUtc },
+        });
+      }
     }
 
     const response = await app.inject({
@@ -1903,6 +1924,8 @@ describe("invoice ledger API", () => {
     try {
       const owner = await signUp("invoice-qb-release-mismatch");
       const { invoice, reviewBinding } = await createQuickBooksReadyInvoice(owner, "release-mismatch");
+      await prisma.workerHeartbeatInstance.deleteMany({ where: { workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY } });
+      await prisma.workerHeartbeat.deleteMany({ where: { workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY } });
       const heartbeatAtUtc = new Date();
       await recordWorkerHeartbeat(prisma, {
         workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
@@ -1920,14 +1943,17 @@ describe("invoice ledger API", () => {
         headers: { cookie: owner.cookie },
       });
       expect(status.statusCode).toBe(200);
-      expect(status.json()).toMatchObject({
-        reconciliationWorker: { fresh: false },
-        releaseIdentity: {
-          apiReleaseSha,
-          workerReleaseSha,
-          matches: false,
-        },
+      const statusPayload = status.json();
+      expect(statusPayload.reconciliationWorker).toEqual({
+        status: "RUNNING",
+        fresh: false,
+        heartbeatAtUtc: expect.any(String),
       });
+      expect(statusPayload.releaseMatches).toBe(false);
+      expect(statusPayload).not.toHaveProperty("releaseIdentity");
+      expect(status.body).not.toContain(apiReleaseSha);
+      expect(status.body).not.toContain(workerReleaseSha);
+      expect(status.body).not.toContain("c".repeat(64));
 
       const publish = await releaseAwareApp.inject({
         method: "POST",
@@ -1940,6 +1966,111 @@ describe("invoice ledger API", () => {
       });
       expect(publish.statusCode).toBe(503);
       expect(publish.json()).toMatchObject({ code: "QUICKBOOKS_RECONCILIATION_UNAVAILABLE" });
+      expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
+    } finally {
+      await releaseAwareApp.close();
+    }
+  });
+
+  test("refuses publishing while an overlapping stopping worker has a different release", async () => {
+    const apiReleaseSha = "a".repeat(40);
+    const oldWorkerReleaseSha = "b".repeat(40);
+    const previousReleaseSha = process.env.QUOTEFLY_RELEASE_SHA;
+    process.env.QUOTEFLY_RELEASE_SHA = apiReleaseSha;
+    const releaseAwareApp = await buildServer();
+    await releaseAwareApp.ready();
+    if (previousReleaseSha === undefined) delete process.env.QUOTEFLY_RELEASE_SHA;
+    else process.env.QUOTEFLY_RELEASE_SHA = previousReleaseSha;
+
+    try {
+      const owner = await signUp("invoice-qb-overlapping-release");
+      const { invoice, reviewBinding } = await createQuickBooksReadyInvoice(owner, "overlapping-release");
+      await prisma.workerHeartbeatInstance.deleteMany({ where: { workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY } });
+      await prisma.workerHeartbeat.deleteMany({ where: { workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY } });
+      const heartbeatAtUtc = new Date();
+      await recordWorkerHeartbeat(prisma, {
+        workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+        instanceRefHash: "d".repeat(64),
+        status: "STOPPING",
+        startedAtUtc: heartbeatAtUtc,
+        cycleStartedAtUtc: heartbeatAtUtc,
+        heartbeatAtUtc,
+        metrics: { releaseSha: oldWorkerReleaseSha },
+      });
+      // The matching worker writes last. A singleton-only check would accept
+      // this state and miss the still-live old process.
+      await recordWorkerHeartbeat(prisma, {
+        workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+        instanceRefHash: "e".repeat(64),
+        status: "RUNNING",
+        startedAtUtc: heartbeatAtUtc,
+        cycleStartedAtUtc: heartbeatAtUtc,
+        heartbeatAtUtc: new Date(heartbeatAtUtc.getTime() + 1),
+        metrics: { releaseSha: apiReleaseSha },
+      });
+
+      const status = await releaseAwareApp.inject({
+        method: "GET",
+        url: "/v1/integrations/quickbooks/status",
+        headers: { cookie: owner.cookie },
+      });
+      expect(status.statusCode).toBe(200);
+      const statusPayload = status.json();
+      expect(statusPayload.reconciliationWorker).toEqual({
+        status: "RUNNING",
+        fresh: false,
+        heartbeatAtUtc: expect.any(String),
+      });
+      expect(statusPayload.releaseMatches).toBe(false);
+      expect(statusPayload).not.toHaveProperty("releaseIdentity");
+      expect(status.body).not.toContain(apiReleaseSha);
+      expect(status.body).not.toContain(oldWorkerReleaseSha);
+      expect(status.body).not.toContain("d".repeat(64));
+      expect(status.body).not.toContain("e".repeat(64));
+
+      const publish = await releaseAwareApp.inject({
+        method: "POST",
+        url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+        headers: {
+          cookie: owner.cookie,
+          "idempotency-key": `qb-overlapping-release-${Date.now()}`,
+        },
+        payload: { invoiceVersion: invoice.version, reviewBinding },
+      });
+      expect(publish.statusCode).toBe(503);
+      expect(publish.json()).toMatchObject({ code: "QUICKBOOKS_RECONCILIATION_UNAVAILABLE" });
+      expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
+      await expect(prisma.quickBooksInvoiceOperation.count({
+        where: { tenantId: owner.tenant.id, invoiceId: invoice.id },
+      })).resolves.toBe(0);
+
+      await recordWorkerHeartbeat(prisma, {
+        workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+        instanceRefHash: "d".repeat(64),
+        status: "STOPPED",
+        startedAtUtc: heartbeatAtUtc,
+        cycleStartedAtUtc: heartbeatAtUtc,
+        heartbeatAtUtc: new Date(heartbeatAtUtc.getTime() + 2),
+        metrics: { releaseSha: oldWorkerReleaseSha },
+      });
+      const recoveredStatus = await releaseAwareApp.inject({
+        method: "GET",
+        url: "/v1/integrations/quickbooks/status",
+        headers: { cookie: owner.cookie },
+      });
+      expect(recoveredStatus.statusCode).toBe(200);
+      const recoveredStatusPayload = recoveredStatus.json();
+      expect(recoveredStatusPayload.reconciliationWorker).toEqual({
+        status: "RUNNING",
+        fresh: true,
+        heartbeatAtUtc: expect.any(String),
+      });
+      expect(recoveredStatusPayload.releaseMatches).toBe(true);
+      expect(recoveredStatusPayload).not.toHaveProperty("releaseIdentity");
+      expect(recoveredStatus.body).not.toContain(apiReleaseSha);
+      expect(recoveredStatus.body).not.toContain(oldWorkerReleaseSha);
+      expect(recoveredStatus.body).not.toContain("d".repeat(64));
+      expect(recoveredStatus.body).not.toContain("e".repeat(64));
       expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
     } finally {
       await releaseAwareApp.close();

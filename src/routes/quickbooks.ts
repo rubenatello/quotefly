@@ -6,8 +6,6 @@ import { z } from "zod";
 import { buildAccessContext } from "../lib/access-policy";
 import { getJwtClaims } from "../lib/auth";
 import {
-  compareRuntimeReleaseShas,
-  releaseShaFromMetrics,
   resolveRuntimeReleaseSha,
 } from "../lib/release-identity";
 import { buildTenantEntitlements } from "../lib/subscription";
@@ -90,9 +88,9 @@ import {
   recordQuickBooksConnectionEvent,
 } from "../services/quickbooks-connection-events";
 import {
-  loadWorkerHeartbeat,
+  loadWorkerHeartbeatFleet,
   QUICKBOOKS_RECONCILIATION_WORKER_KEY,
-  serializeWorkerHeartbeat,
+  serializeWorkerHeartbeatFleetForTenant,
 } from "../services/worker-heartbeats";
 
 const QuickBooksCallbackQuerySchema = z.object({
@@ -537,27 +535,12 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       || !app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED
       || !isQuickBooksWebhookConfigured(app.env)
     ) return false;
-    const heartbeat = await loadWorkerHeartbeat(app.prisma, QUICKBOOKS_RECONCILIATION_WORKER_KEY);
-    return quickBooksWorkerHealthy(heartbeat);
-  }
-
-  function quickBooksWorkerReleaseIdentity(
-    heartbeat: Awaited<ReturnType<typeof loadWorkerHeartbeat>>,
-  ) {
-    const workerReleaseSha = releaseShaFromMetrics(heartbeat?.metrics);
-    return {
-      apiReleaseSha,
-      workerReleaseSha,
-      matches: compareRuntimeReleaseShas(apiReleaseSha, workerReleaseSha),
-    };
-  }
-
-  function quickBooksWorkerHealthy(
-    heartbeat: Awaited<ReturnType<typeof loadWorkerHeartbeat>>,
-  ): boolean {
-    if (!heartbeat?.fresh) return false;
-    const workerReleaseSha = releaseShaFromMetrics(heartbeat.metrics);
-    return !apiReleaseSha || workerReleaseSha === apiReleaseSha;
+    const fleet = await loadWorkerHeartbeatFleet(
+      app.prisma,
+      QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+      { apiReleaseSha, requireReleaseIdentity: app.env.NODE_ENV === "production" || apiReleaseSha !== null },
+    );
+    return fleet.ready;
   }
 
   async function hostedPaymentsRuntimeAvailable(): Promise<boolean> {
@@ -873,7 +856,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       reply.header("Cache-Control", "private, no-store");
 
-      const [connection, workerHeartbeat] = await Promise.all([
+      const [connection, workerFleet] = await Promise.all([
         withTenantRlsContext(app.prisma, claims.tenantId, (transaction) =>
           transaction.quickBooksConnection.findFirst({
             where: {
@@ -883,10 +866,14 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             select: QuickBooksSetupConnectionSelect,
           }),
         ),
-        loadWorkerHeartbeat(app.prisma, QUICKBOOKS_RECONCILIATION_WORKER_KEY),
+        loadWorkerHeartbeatFleet(
+          app.prisma,
+          QUICKBOOKS_RECONCILIATION_WORKER_KEY,
+          { apiReleaseSha, requireReleaseIdentity: app.env.NODE_ENV === "production" || apiReleaseSha !== null },
+        ),
       ]);
-      const workerHealthy = quickBooksWorkerHealthy(workerHeartbeat);
-      const serializedWorkerHeartbeat = serializeWorkerHeartbeat(workerHeartbeat);
+      const workerHealthy = workerFleet.ready;
+      const serializedWorkerHeartbeat = serializeWorkerHeartbeatFleetForTenant(workerFleet);
       const setup = deriveQuickBooksSetupReadiness(
         quickBooksSetupRuntime(workerHealthy),
         connection,
@@ -903,7 +890,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         reconciliationWorker: serializedWorkerHeartbeat
           ? { ...serializedWorkerHeartbeat, fresh: workerHealthy }
           : null,
-        releaseIdentity: quickBooksWorkerReleaseIdentity(workerHeartbeat),
+        releaseMatches: workerFleet.releaseIdentity.matches,
         setup,
         connection: connection
           ? {

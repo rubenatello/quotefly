@@ -37,7 +37,17 @@ Official references:
 
 Do not paste client secrets, token-encryption keys, refresh tokens, webhook verifier values, OAuth codes, or hosted invoice links into Git, tickets, screenshots, chat, or retained logs.
 
-Follow the [infrastructure secret-handling protocol](../security/infrastructure-secret-handling.md) for every staging setup, credential disclosure, and rotation. Never run a provider command that streams raw environment values into a terminal, CI log, agent transcript, or screenshot. Use the provider dashboard's secret editor for writes and its masked-value view for manual review. For the connection-only proof, run `npm run infra:variables:audit -- --profile quickbooks-oauth`. Use the `quickbooks` profile only for the later full accounting runtime. Both profiles emit fixed names, classifications, and configured/missing status only, never values. Do not use a downloaded `.env` file or a provider CLI environment dump as evidence.
+Follow the [infrastructure secret-handling protocol](../security/infrastructure-secret-handling.md) for every staging setup, credential disclosure, and rotation. Never run a provider command that streams raw environment values into a terminal, CI log, agent transcript, or screenshot. Use the provider dashboard's secret editor for writes and its masked-value view for manual review. Run the fixed presence-only audit profile for the active stage:
+
+| Authorized stage | Audit profile | Exact capability posture |
+| --- | --- | --- |
+| Connection proof | `quickbooks-oauth` | OAuth-only on; reconciliation, CDC, hosted payments, and signed webhook ingress off |
+| Accounting and signed-webhook reconciliation | `quickbooks-reconciliation` | Reconciliation and signed webhook ingress on; CDC and hosted payments off |
+| Dropped-webhook recovery | `quickbooks-cdc` | Reconciliation, signed webhook ingress, and CDC on; hosted payments off |
+| Hosted-payment proof | `quickbooks-hosted-payments` | Reconciliation, signed webhook ingress, CDC, and hosted payments on |
+| Full-runtime compatibility alias | `quickbooks` | Identical to `quickbooks-hosted-payments`; retained so existing operator commands remain valid |
+
+Every QuickBooks profile requires `APP_URL` and `API_URL`. When `QUICKBOOKS_ENVIRONMENT=sandbox`, each profile also requires `QUICKBOOKS_SANDBOX_STAGING_ORIGINS`; production-capable profiles do not require that sandbox-only variable when the environment is production. The OAuth-only profile accepts sandbox only and forbids `QUICKBOOKS_WEBHOOK_VERIFIER`. Reconciliation and later profiles require the verifier because signed webhook ingress is active. All profiles emit fixed names, classifications, expectations, and configured/missing status only, never values. They prove only the invoking process environment, not Railway, Vercel, Intuit, or another remote configuration. Do not use a downloaded `.env` file or a provider CLI environment dump as evidence.
 
 Neon and other managed-PostgreSQL rehearsals must also follow the [PostgreSQL 16+ migration-portability protocol](../deployment/postgresql-migration-portability.md). The QuickBooks quarantine-retention role is cluster-wide, so a second database in one branch is an intentional release test, not an interchangeable application database.
 
@@ -86,17 +96,28 @@ QUICKBOOKS_CDC_WORKER_ENABLED=false
 
 `QUICKBOOKS_WEBHOOK_VERIFIER` must remain unset in this profile. OAuth-only mode permits status, connect, callback, and disconnect; it rejects setup confirmation, provider search and mapping, invoice sync, hosted links, webhooks, reconciliation, and CDC with a stable `QUICKBOOKS_OAUTH_ONLY_MODE` response.
 
+After masked configuration review, run the connection-stage check without printing values:
+
+```powershell
+npm run infra:variables:audit -- --profile quickbooks-oauth
+```
+
+Do not advance directly to the full profile. For each separately authorized phase, change only the documented capability flags and run `quickbooks-reconciliation`, then `quickbooks-cdc`, then `quickbooks-hosted-payments`. The `quickbooks` alias is equivalent to the final hosted-payments profile; it is not an additional phase.
+
 Before changing a flag, record approval, exact candidate SHA, migrated staging database, callback/webhook URLs, test company, evidence owner, and rollback owner. The API refuses sandbox workflows on QuoteFly production origins.
 
 ## 3. Prepare the exact staging candidate
 
 1. Confirm the exact candidate passes `npm run verify:launch` against a dedicated migrated test database.
-2. Apply checked-in migrations to an isolated staging database through the migration job, never through the runtime database credential.
-3. Start the API with the least-privileged `quotefly_runtime` database role.
-4. Confirm `/v1/health` and `/v1/ready` succeed.
-5. Confirm provider logs and access logs do not retain callback query strings or hosted invoice links.
-6. Confirm an alert destination exists for OAuth and token-revocation failures. Webhook, reconciliation, and CDC alerts are required before the later accounting proof.
-7. Run `node scripts/quickbooks-staging-oauth-smoke.mjs`. It is hard-locked to the approved staging API, creates a disposable staging tenant, verifies the pre-connection fail-closed behavior and Intuit authorization handoff, and never prints credentials, OAuth state, or the authorization URL.
+2. Confirm the presence-only audit passes for the authorized stage; for the first proof this is `quickbooks-oauth`.
+3. Apply checked-in migrations to an isolated staging database through the migration job, never through the runtime database credential.
+4. Start the API from the same exact SHA with the least-privileged `quotefly_runtime` database role.
+5. Confirm `/v1/health` and `/v1/ready` succeed before starting a worker or routing the web app to this candidate.
+6. For reconciliation and later stages only, start the worker from the same exact SHA, then require a fresh heartbeat and matching API/worker release identity. Keep the worker off for OAuth-only.
+7. Deploy the web app from the same exact SHA only after API readiness and, when enabled, worker readiness succeed.
+8. Confirm provider logs and access logs do not retain callback query strings or hosted invoice links.
+9. Confirm an alert destination exists for OAuth and token-revocation failures. Webhook, reconciliation, and CDC alerts are required before the later accounting proof.
+10. Run `node scripts/quickbooks-staging-oauth-smoke.mjs`. It is hard-locked to the approved staging API, creates a disposable staging tenant, verifies the pre-connection fail-closed behavior and Intuit authorization handoff, and never prints credentials, OAuth state, or the authorization URL.
 
 Only then run the connection proof. Mapping, hosted payments, webhooks, and workers remain outside this stage.
 
@@ -115,6 +136,8 @@ Members cannot view or manage provider setup. QuoteFly stores OAuth tokens encry
 ## 5. Run one controlled accounting proof
 
 Use fabricated customer details and a non-taxable USD sample invoice.
+
+Advance progressively under the recorded authorization: use `quickbooks-reconciliation` for reviewed mapping, publish, and signed-webhook reconciliation; move to `quickbooks-cdc` only for the approved dropped-webhook repair; move to `quickbooks-hosted-payments` only after reconciliation and payment eligibility evidence pass. At each transition, restart the API, confirm readiness, start or restart the same-SHA worker and confirm its heartbeat, then update the web deployment only if its release changed.
 
 1. Create a sample QuoteFly customer, quote, accepted Job, and internal invoice.
 2. Open the invoice's QuickBooks review panel.

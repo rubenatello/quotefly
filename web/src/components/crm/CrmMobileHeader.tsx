@@ -162,7 +162,10 @@ export function CrmMobileHeader({
                 </DropdownMenuPrimitive.Item>
                 <DropdownMenuPrimitive.Separator className="my-2 h-px bg-[var(--qf-border)]" />
                 <DropdownMenuPrimitive.Item
-                  onSelect={() => onLogout()}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    onLogout();
+                  }}
                   className={cn("flex cursor-pointer items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-[var(--qf-danger-text)] outline-none transition hover:bg-[var(--qf-danger-surface)] focus:bg-[var(--qf-danger-surface)] data-[highlighted]:bg-[var(--qf-danger-surface)]")}
                 >
                   {t("navigation.signOut")}

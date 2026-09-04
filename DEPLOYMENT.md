@@ -204,12 +204,15 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 ## Staging Flow
 
 1. Provision staging Postgres and set API env vars.
-2. Deploy API to Railway/Render staging.
-3. Confirm `GET /v1/health` returns OK and `GET /v1/ready` reports database readiness.
-4. Deploy Vercel staging with `VITE_API_BASE_URL` pointed at staging API.
-5. Rehearse migrations with `npm run prisma:migrate:deploy` and follow any feature-specific rollout document, including `docs/billing-integrity-rollout.md`.
-6. Run staging smoke checks.
-7. Keep Stripe, Twilio, and OpenAI in test/sandbox modes. Keep QuickBooks provider workflows disabled unless a separate owner-authorized sandbox checklist is active.
+2. Snapshot or verify the staging backup, then apply checked-in migrations through the isolated migration job with `npm run prisma:migrate:deploy`; follow any feature-specific rollout document, including `docs/billing-integrity-rollout.md`.
+3. Deploy the exact migrated candidate API to Railway/Render staging with only the least-privileged runtime database credential.
+4. Confirm `GET /v1/health` returns OK and `GET /v1/ready` reports database readiness before starting any worker or routing the web app to the candidate.
+5. Start separately enabled workers from the same exact SHA, then confirm their readiness/heartbeat and API release-parity checks. Keep the QuickBooks worker off for the OAuth-only stage.
+6. Deploy Vercel staging with `VITE_API_BASE_URL` pointed at the ready staging API.
+7. Run staging smoke checks.
+8. Keep Stripe, Twilio, and OpenAI in test/sandbox modes. Keep QuickBooks provider workflows disabled unless a separate owner-authorized sandbox checklist is active.
+
+For an authorized progressive QuickBooks sandbox run, use the fixed presence-only audit profile for the active stage: `quickbooks-oauth`, `quickbooks-reconciliation`, `quickbooks-cdc`, then `quickbooks-hosted-payments`. The legacy `quickbooks` profile intentionally remains an alias for the complete hosted-payments stage. Every QuickBooks stage follows the same ordering: migration job, API, API readiness, worker when that stage enables it, then web. The audit reports names and configured/missing status only; it never emits environment values or proves remote provider configuration.
 
 ## Production Flow
 
