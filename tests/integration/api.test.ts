@@ -4977,6 +4977,22 @@ describe("QuoteFly API integration", () => {
     for (const providerMock of Object.values(quickBooksProviderMocks)) providerMock.mockReset();
 
     try {
+      const realmId = `realm-oauth-only-${Date.now()}`;
+      await prisma.quickBooksConnection.create({
+        data: {
+          tenantId: session.tenant.id,
+          realmId,
+          environment: "sandbox",
+          companyName: "OAuth-only validation company",
+          status: "CONNECTED",
+          scopes: ["com.intuit.quickbooks.accounting"],
+          accessTokenEncrypted: "opaque-access-token",
+          refreshTokenEncrypted: "opaque-refresh-token",
+          accessTokenExpiresAtUtc: new Date(Date.now() + 60_000),
+          realmBinding: { create: { realmId, active: true } },
+          cdcCursor: { create: { changedSinceUtc: new Date() } },
+        },
+      });
       const status = await app.inject({
         method: "GET",
         url: "/v1/integrations/quickbooks/status",
@@ -4987,10 +5003,12 @@ describe("QuoteFly API integration", () => {
         enabled: boolean;
         providerWorkflowsEnabled: boolean;
         oauthOnlyMode: boolean;
+        setup: { phase: string; capabilities: { canConfirm: boolean } };
       }>(status)).toMatchObject({
         enabled: true,
         providerWorkflowsEnabled: true,
         oauthOnlyMode: true,
+        setup: { phase: "CONNECTION_VERIFIED", capabilities: { canConfirm: false } },
       });
 
       const connect = await app.inject({

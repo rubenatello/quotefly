@@ -5,6 +5,7 @@ export type QuickBooksSetupPhase =
   | "UNAVAILABLE"
   | "NOT_CONNECTED"
   | "ACTION_REQUIRED"
+  | "CONNECTION_VERIFIED"
   | "READY_FOR_CONFIRMATION"
   | "CONFIRMED";
 
@@ -105,12 +106,13 @@ export function deriveQuickBooksSetupReadiness(
     ?? Boolean(connection?.accessTokenEncrypted && connection.refreshTokenEncrypted && connection.accessTokenExpiresAtUtc);
   const realmBindingActive = connection?.realmBindingActive ?? Boolean(connection?.realmBinding?.active);
   const cdcCursorInitialized = connection?.cdcCursorInitialized ?? Boolean(connection?.cdcCursor?.id);
-  const confirmed = Boolean(
+  const setupConfirmationCurrent = Boolean(
     connectionActive
       && connection?.setupConfirmedAtUtc
       && connection.setupConfirmedByTenantUserId
       && connection.setupChecklistVersion === QUICKBOOKS_SETUP_CHECKLIST_VERSION,
   );
+  const confirmed = setupConfirmationCurrent && accountingWorkflowsEnabled;
 
   const checks = [
     { key: "PROVIDER_CONFIGURED", passed: providerConfigured, managedBy: "QUOTEFLY" },
@@ -153,9 +155,11 @@ export function deriveQuickBooksSetupReadiness(
       ? "NOT_CONNECTED"
       : !requiredChecksPassed
         ? "ACTION_REQUIRED"
-        : confirmed
-          ? "CONFIRMED"
-          : "READY_FOR_CONFIRMATION";
+        : runtime.oauthOnlyMode
+          ? "CONNECTION_VERIFIED"
+          : confirmed
+            ? "CONFIRMED"
+            : "READY_FOR_CONFIRMATION";
 
   const coreConnectionReady = requiredChecksPassed && confirmed && accountingWorkflowsEnabled;
   const reconciliationReady = coreConnectionReady
@@ -167,7 +171,7 @@ export function deriveQuickBooksSetupReadiness(
 
   return {
     phase,
-    ready: requiredChecksPassed && confirmed,
+    ready: requiredChecksPassed && confirmed && accountingWorkflowsEnabled,
     confirmed,
     checklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
     confirmedAtUtc: confirmed ? connection?.setupConfirmedAtUtc ?? null : null,

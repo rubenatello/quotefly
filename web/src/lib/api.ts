@@ -2008,6 +2008,7 @@ export type QuickBooksSetupPhase =
   | "UNAVAILABLE"
   | "NOT_CONNECTED"
   | "ACTION_REQUIRED"
+  | "CONNECTION_VERIFIED"
   | "READY_FOR_CONFIRMATION"
   | "CONFIRMED";
 

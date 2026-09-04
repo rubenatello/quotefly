@@ -162,7 +162,7 @@ describe("QuickBooks setup readiness", () => {
       cdcWorkerEnabled: false,
     }, connection());
 
-    assert.equal(result.phase, "READY_FOR_CONFIRMATION");
+    assert.equal(result.phase, "CONNECTION_VERIFIED");
     assert.equal(result.capabilities.canConnect, false);
     assert.equal(result.capabilities.canReconnect, true);
     assert.equal(result.capabilities.canConfirm, false);
@@ -172,6 +172,22 @@ describe("QuickBooks setup readiness", () => {
       result.checks.find((check) => check.key === "ACCOUNTING_WORKFLOWS_ENABLED")?.passed,
       false,
     );
+  });
+
+  it("presents a previously confirmed connection as connection-only when accounting workflows are paused", () => {
+    const result = deriveQuickBooksSetupReadiness({
+      ...runtime,
+      oauthOnlyMode: true,
+    }, connection({
+      setupConfirmedAtUtc: new Date(),
+      setupConfirmedByTenantUserId: "membership",
+      setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+    }));
+
+    assert.equal(result.phase, "CONNECTION_VERIFIED");
+    assert.equal(result.confirmed, false);
+    assert.equal(result.ready, false);
+    assert.equal(result.capabilities.canConfirm, false);
   });
 });
 
@@ -217,5 +233,14 @@ describe("QuickBooks Settings status normalization", () => {
     assert.deepEqual(normalizeQuickBooksStatusPayload(validStatus), validStatus);
     assert.equal(normalizeQuickBooksStatusPayload({ ...validStatus, setup: undefined }), null);
     assert.equal(normalizeQuickBooksStatusPayload({ ...validStatus, setup: { ...validStatus.setup, checks: [{}] } }), null);
+  });
+
+  it("accepts the connection-only verification phase", () => {
+    const connectionOnlyStatus = {
+      ...validStatus,
+      setup: { ...validStatus.setup, phase: "CONNECTION_VERIFIED" as const, capabilities: { ...validStatus.setup.capabilities, canConfirm: false } },
+      oauthOnlyMode: true,
+    };
+    assert.deepEqual(normalizeQuickBooksStatusPayload(connectionOnlyStatus), connectionOnlyStatus);
   });
 });

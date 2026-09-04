@@ -54,6 +54,7 @@ const preConnectionPlatformChecks = new Set<QuickBooksSetupCheckKey>([
 
 function phaseTone(phase: QuickBooksSetupPhase): "emerald" | "blue" | "amber" | "red" | "slate" {
   if (phase === "CONFIRMED") return "emerald";
+  if (phase === "CONNECTION_VERIFIED") return "blue";
   if (phase === "READY_FOR_CONFIRMATION") return "blue";
   if (phase === "ACTION_REQUIRED") return "amber";
   if (phase === "UNAVAILABLE") return "red";
@@ -65,6 +66,7 @@ function phaseKey(phase: QuickBooksSetupPhase) {
     UNAVAILABLE: "admin.quickBooksSetup.phases.unavailable",
     NOT_CONNECTED: "admin.quickBooksSetup.phases.notConnected",
     ACTION_REQUIRED: "admin.quickBooksSetup.phases.actionRequired",
+    CONNECTION_VERIFIED: "admin.quickBooksSetup.phases.connectionVerified",
     READY_FOR_CONFIRMATION: "admin.quickBooksSetup.phases.readyToConfirm",
     CONFIRMED: "admin.quickBooksSetup.phases.confirmed",
   };
@@ -137,15 +139,20 @@ export function QuickBooksSetupPanel({
   }
 
   const { setup, connection } = status;
+  const oauthOnlyMode = status.oauthOnlyMode === true;
   const fallback = t("admin.quickBooksSetup.never");
   const primaryAction = setup.capabilities.canConnect
     ? { label: t("admin.quickBooksSetup.connect"), handler: onConnect }
     : setup.capabilities.canReconnect && connection?.status !== "CONNECTED"
       ? { label: t("admin.quickBooksSetup.reconnect"), handler: onConnect }
       : null;
-  const actionableFailures = setup.checks.filter((check) => !check.passed && check.managedBy === "WORKSPACE");
+  const actionableFailures = setup.checks.filter(
+    (check) => !check.passed
+      && check.managedBy === "WORKSPACE"
+      && !(oauthOnlyMode && check.key === "SETUP_CONFIRMED"),
+  );
   const quoteFlyManagedFailures = setup.checks.filter((check) => !check.passed && check.managedBy === "QUOTEFLY");
-  const platformFailures = connection?.status === "CONNECTED"
+  const platformFailures = !oauthOnlyMode && connection?.status === "CONNECTED"
     ? quoteFlyManagedFailures
     : quoteFlyManagedFailures.filter((check) => preConnectionPlatformChecks.has(check.key));
   const reconciliationWorkerExpected = setup.checks.some(
@@ -232,6 +239,15 @@ export function QuickBooksSetupPanel({
         </div>
       ) : null}
 
+      {oauthOnlyMode && connection?.status === "CONNECTED" ? (
+        <div className="mt-5">
+          <Alert tone="info">
+            <p className="font-semibold">{t("admin.quickBooksSetup.connectionOnlyTitle")}</p>
+            <p className="mt-1">{t("admin.quickBooksSetup.connectionOnlyDescription")}</p>
+          </Alert>
+        </div>
+      ) : null}
+
       {reconciliationWorkerExpected && !reconciliationWorkerHealthy ? (
         <div className="mt-5">
           <Alert tone="warning">
@@ -252,7 +268,11 @@ export function QuickBooksSetupPanel({
             <IconShieldCheckFilled className="text-[var(--qf-primary)]" size={20} aria-hidden="true" />
             <h4 id="quickbooks-checklist-title" className="font-semibold text-[var(--qf-text)]">{t("admin.quickBooksSetup.checklistTitle")}</h4>
           </div>
-          <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("admin.quickBooksSetup.checklistDescription")}</p>
+          <p className="mt-1 text-sm text-[var(--qf-text-soft)]">
+            {oauthOnlyMode
+              ? t("admin.quickBooksSetup.connectionOnlyChecklistDescription")
+              : t("admin.quickBooksSetup.checklistDescription")}
+          </p>
           <ul className="mt-3 grid gap-2 sm:grid-cols-2">
             {setup.checks.map((check) => (
               <li key={check.key} className="flex min-h-12 items-start gap-2 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2.5">
@@ -262,7 +282,11 @@ export function QuickBooksSetupPanel({
                 <span className="min-w-0 text-sm leading-5 text-[var(--qf-text)]">
                   {t(checkKeys[check.key])}
                   {!check.passed && check.managedBy === "QUOTEFLY" ? (
-                    <span className="block text-xs text-[var(--qf-text-muted)]">{t("admin.quickBooksSetup.quoteFlyManaged")}</span>
+                    <span className="block text-xs text-[var(--qf-text-muted)]">
+                      {oauthOnlyMode
+                        ? t("admin.quickBooksSetup.intentionalStagingSafeguard")
+                        : t("admin.quickBooksSetup.quoteFlyManaged")}
+                    </span>
                   ) : null}
                 </span>
               </li>
@@ -296,7 +320,11 @@ export function QuickBooksSetupPanel({
           ) : null}
           <div className="mt-4 border-t border-[var(--qf-border)] pt-4">
             <p className="text-sm font-semibold text-[var(--qf-text)]">{t("admin.quickBooksSetup.operationsTitle")}</p>
-            <p className="mt-1 text-xs leading-5 text-[var(--qf-text-muted)]">{t("admin.quickBooksSetup.operationsDescription")}</p>
+            <p className="mt-1 text-xs leading-5 text-[var(--qf-text-muted)]">
+              {oauthOnlyMode
+                ? t("admin.quickBooksSetup.operationsDescriptionConnectionOnly")
+                : t("admin.quickBooksSetup.operationsDescription")}
+            </p>
             <ul className="mt-3 space-y-2">
               {([
                 ["coreConnectionReady", "admin.quickBooksSetup.operations.coreConnection"],
@@ -305,14 +333,21 @@ export function QuickBooksSetupPanel({
                 ["cdcRecoveryReady", "admin.quickBooksSetup.operations.cdcRecovery"],
               ] as const).map(([key, labelKey]) => {
                 const ready = setup.operations[key];
+                const resolvedLabelKey = oauthOnlyMode && key === "coreConnectionReady"
+                  ? "admin.quickBooksSetup.operations.accountingSetupConfirmation"
+                  : labelKey;
                 return (
                   <li key={key} className="flex min-h-8 items-center justify-between gap-3 text-sm">
-                    <span className="text-[var(--qf-text-soft)]">{t(labelKey)}</span>
+                    <span className="text-[var(--qf-text-soft)]">{t(resolvedLabelKey)}</span>
                     <span className={`inline-flex shrink-0 items-center gap-1 font-semibold ${ready ? "text-[var(--qf-success-text)]" : "text-[var(--qf-warning-text)]"}`}>
                       {ready
                         ? <IconCircleCheckFilled size={16} aria-hidden="true" />
                         : <IconAlertTriangleFilled size={16} aria-hidden="true" />}
-                      {ready ? t("admin.quickBooksSetup.operations.ready") : t("admin.quickBooksSetup.operations.notReady")}
+                      {ready
+                        ? t("admin.quickBooksSetup.operations.ready")
+                        : oauthOnlyMode
+                          ? t("admin.quickBooksSetup.operations.intentionallyDisabled")
+                          : t("admin.quickBooksSetup.operations.notReady")}
                     </span>
                   </li>
                 );
@@ -329,6 +364,7 @@ export function QuickBooksSetupPanel({
         environment={status.environment}
         companyName={connection?.companyName}
         operations={setup.operations}
+        oauthOnlyMode={oauthOnlyMode}
         canConnect={Boolean(primaryAction)}
         connectLabel={primaryAction?.label ?? t("admin.quickBooksSetup.connect")}
         onConnect={primaryAction?.handler ?? onConnect}
