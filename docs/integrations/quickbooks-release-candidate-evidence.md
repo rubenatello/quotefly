@@ -109,7 +109,7 @@ These are QuoteFly engineering obligations. They can be completed without claimi
 
 - [x] The immutable implementation SHA `e02589a41f9400b06f2e0e6dcc825bf917ac4fae`, plus the current CI-runtime/evidence-only follow-up, contains only the intended QuickBooks code, tests, UX, release configuration, and evidence changes; the PR records the follow-up tip.
 - [ ] Clean installs, Prisma generation/validation, `npm run verify`, and database-backed `npm run verify:launch` pass for that exact SHA.
-- [x] Fresh-schema migration and a production-like upgrade/RLS/least-privilege rehearsal pass with recorded duration and rollback/forward-fix evidence.
+- [x] Fresh-schema migration and a synthetic nonempty upgrade/RLS/least-privilege/forward-fix rehearsal pass with recorded duration; this does not claim owner-managed backup, restore, RPO, or RTO evidence.
 - [x] Callback, credential cleanup, tenant-wide OAuth serialization, worker health, renewable claims, webhook bounds, CSV export, and paused-provider containment tests pass.
 - [x] API and worker expose safe, redacted evidence that they run the same release SHA and fail readiness when parity is absent.
 - [ ] Sentinel, Renford, Goldface, Harbor, and independent Opera approve the exact candidate and evidence.
