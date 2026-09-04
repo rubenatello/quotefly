@@ -14,9 +14,10 @@ The release candidate is the commit that contains the QuickBooks remediation and
 | Previous exact-SHA CI | Passed for `1d987c16ec07804a9404c47648d28e0f5ca3be11` | Baseline only; it does not validate the remediation. |
 | First pushed candidate SHA | `5379c29327c7e4785aae05ec71e86c40f924591a` on `agent/consumer-launch-readiness` | Historical candidate only. Exact-SHA CI exposed one stale-preview recovery race, so this SHA is superseded and must not be promoted. |
 | First candidate CI | GitHub Actions run `33807445833`: 132 Playwright tests passed, one intentionally skipped, and one failed twice | Clean install and all 86 migrations passed, but the required launch gate failed. The UI reloaded the refreshed invoice preview and erased the localized version-conflict warning. |
-| Superseding candidate SHA | Pending completion and BCP of the current scoped remediation | Must contain the CI race fix, complete programmatic-navigation guard, correct pre-connect guidance, CSV-selection retention fix, environment-audit fix, and rollout-safe per-instance worker parity. |
+| Superseding candidate implementation SHA | `e02589a41f9400b06f2e0e6dcc825bf917ac4fae` on `agent/consumer-launch-readiness` | Contains the CI race fix, complete programmatic-navigation guard, correct pre-connect guidance, CSV-selection retention fix, environment-audit fix, and rollout-safe per-instance worker parity. This follow-up changes only the CI runtime alignment and release evidence; its immutable tip is recorded by PR #5 and the corresponding GitHub check because a commit cannot contain its own SHA. |
 | Superseding `npm run verify` | Subsumed by the passing 2026-09-03 worktree `npm run verify:launch` | Supporting local evidence only; committed exact-SHA CI remains authoritative. |
 | Remediated database-backed `npm run verify:launch` | Passed on the superseding Docker/Node 24.18.1 worktree: 125 routes inventoried, 13/13 security, 244/244 unit, 379/379 integration, all deterministic evaluations and both dependency audits, then 139 Playwright passed, one intentional capture-regeneration skip, and zero failures | Qualifies the executable worktree; exact-SHA CI and Node 22 evidence remain pending. |
+| Replacement exact-SHA Node 22 CI | Pending the check triggered by this runtime-alignment/evidence follow-up | Must clean-install, generate Prisma, apply all 87 migrations, and pass `npm run verify:launch`; a Node 24 result for `e02589a` is supporting evidence only. |
 | Exact-SHA staging OAuth proof | Pending authorized deployment and owner browser action | Must connect the expected sandbox company and stop before setup confirmation in OAuth-only mode. |
 | Full accounting sandbox proof | Not started | Requires separate approval for provider mutations, a live worker, signed webhooks, CDC, monitoring, and the owner checklist. |
 | Production pilot | Not authorized | Requires the code, staging, operations, owner, and Intuit gates below. |
@@ -106,11 +107,11 @@ A post-validation owner/admin view should expose a paginated, tenant-scoped, rea
 
 These are QuoteFly engineering obligations. They can be completed without claiming that Intuit or the owner has approved production:
 
-- [ ] One scoped, immutable candidate SHA contains only the intended QuickBooks code, tests, UX, and evidence changes.
+- [x] The immutable implementation SHA `e02589a41f9400b06f2e0e6dcc825bf917ac4fae`, plus the current CI-runtime/evidence-only follow-up, contains only the intended QuickBooks code, tests, UX, release configuration, and evidence changes; the PR records the follow-up tip.
 - [ ] Clean installs, Prisma generation/validation, `npm run verify`, and database-backed `npm run verify:launch` pass for that exact SHA.
-- [ ] Fresh-schema migration and a production-like upgrade/RLS/least-privilege rehearsal pass with recorded duration and rollback/forward-fix evidence.
-- [ ] Callback, credential cleanup, tenant-wide OAuth serialization, worker health, renewable claims, webhook bounds, CSV export, and paused-provider containment tests pass.
-- [ ] API and worker expose or otherwise provide safe evidence that they run the same release SHA.
+- [x] Fresh-schema migration and a production-like upgrade/RLS/least-privilege rehearsal pass with recorded duration and rollback/forward-fix evidence.
+- [x] Callback, credential cleanup, tenant-wide OAuth serialization, worker health, renewable claims, webhook bounds, CSV export, and paused-provider containment tests pass.
+- [x] API and worker expose safe, redacted evidence that they run the same release SHA and fail readiness when parity is absent.
 - [ ] Sentinel, Renford, Goldface, Harbor, and independent Opera approve the exact candidate and evidence.
 
 Passing this section means the software is a production-ready release candidate. It does not mean provider production access is available or safe to advertise.
