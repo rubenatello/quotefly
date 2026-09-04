@@ -12,6 +12,16 @@ import {
   WORKER_HEARTBEAT_STALE_AFTER_MS,
 } from "../../src/services/worker-heartbeats";
 
+async function sampleDatabaseClockUtc(): Promise<Date> {
+  const [row] = await prisma.$queryRaw<Array<{ observedAtUtc: Date }>>(Prisma.sql`
+    SELECT clock_timestamp()::timestamptz(3) AS "observedAtUtc"
+  `);
+  if (!row) {
+    throw new Error("Database clock sample was unavailable.");
+  }
+  return row.observedAtUtc;
+}
+
 describe("worker heartbeat evidence", () => {
   beforeEach(async () => {
     await prisma.workerHeartbeatInstance.deleteMany();
@@ -95,7 +105,7 @@ describe("worker heartbeat evidence", () => {
   test("mirrors legacy singleton writes per instance and normalizes release identity", async () => {
     const now = new Date("2026-09-03T16:00:00.000Z");
     const releaseSha = "a".repeat(40);
-    const observedBefore = new Date();
+    const observedBefore = await sampleDatabaseClockUtc();
     await recordWorkerHeartbeat(prisma, {
       workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
       instanceRefHash: "1".repeat(64),
@@ -115,7 +125,7 @@ describe("worker heartbeat evidence", () => {
       metrics: { releaseSha, phase: "new_writer" },
     });
 
-    const observedAfter = new Date();
+    const observedAfter = await sampleDatabaseClockUtc();
     await expect(prisma.workerHeartbeat.count()).resolves.toBe(1);
     const mirrored = await prisma.workerHeartbeatInstance.findMany({
       select: { status: true, releaseSha: true, observedAtUtc: true },
@@ -164,7 +174,7 @@ describe("worker heartbeat evidence", () => {
     const releaseSha = "a".repeat(40);
     const workerTime = new Date();
     const futureHeartbeatAtUtc = new Date(workerTime.getTime() + 365 * 24 * 60 * 60 * 1_000);
-    const observedBefore = new Date();
+    const observedBefore = await sampleDatabaseClockUtc();
     await recordWorkerHeartbeat(prisma, {
       workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
       instanceRefHash: "a".repeat(64),
@@ -174,7 +184,7 @@ describe("worker heartbeat evidence", () => {
       heartbeatAtUtc: futureHeartbeatAtUtc,
       metrics: { releaseSha },
     });
-    const observedAfter = new Date();
+    const observedAfter = await sampleDatabaseClockUtc();
 
     const initiallyFresh = await loadWorkerHeartbeatFleet(
       prisma,
@@ -571,7 +581,7 @@ describe("worker heartbeat evidence", () => {
     })).rejects.toThrow(/permission denied/i);
 
     const releaseSha = "a".repeat(40);
-    const observedBefore = new Date();
+    const observedBefore = await sampleDatabaseClockUtc();
     await prisma.$transaction(async (transaction) => {
       await transaction.$executeRawUnsafe("SET LOCAL ROLE quotefly_runtime");
       await transaction.$executeRaw(Prisma.sql`
@@ -595,7 +605,7 @@ describe("worker heartbeat evidence", () => {
           "updatedAt" = EXCLUDED."updatedAt"
       `);
     });
-    const observedAfter = new Date();
+    const observedAfter = await sampleDatabaseClockUtc();
     const runtimeMirror = await prisma.workerHeartbeatInstance.findFirst({
       where: { workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY },
       select: {
