@@ -4,44 +4,153 @@ import { addSessionCookie, addWorkspaceMemberViaApi, apiBaseUrl, signUpViaApi } 
 const quickBooksStatusPath = "/v1/integrations/quickbooks/status";
 const quickBooksConfirmationPath = "/v1/integrations/quickbooks/setup-confirmation";
 
-function quickBooksStatus(confirmed = false) {
+const quickBooksCheckKeys = [
+  "PROVIDER_CONFIGURED",
+  "PROVIDER_WORKFLOWS_ENABLED",
+  "ACCOUNTING_WORKFLOWS_ENABLED",
+  "WEBHOOK_CONFIGURED",
+  "HOSTED_PAYMENTS_ENABLED",
+  "RECONCILIATION_WORKER_ENABLED",
+  "RECONCILIATION_WORKER_HEALTHY",
+  "CDC_WORKER_ENABLED",
+  "CONNECTION_ACTIVE",
+  "ENVIRONMENT_MATCHES",
+  "ACCOUNTING_SCOPE_GRANTED",
+  "CREDENTIALS_AVAILABLE",
+  "REALM_BINDING_ACTIVE",
+  "CDC_CURSOR_INITIALIZED",
+  "SETUP_CONFIRMED",
+] as const;
+
+const workspaceCheckKeys = new Set(["CONNECTION_ACTIVE", "ACCOUNTING_SCOPE_GRANTED", "SETUP_CONFIRMED"]);
+const optionalOperationCheckKeys = new Set([
+  "WEBHOOK_CONFIGURED",
+  "ACCOUNTING_WORKFLOWS_ENABLED",
+  "HOSTED_PAYMENTS_ENABLED",
+  "RECONCILIATION_WORKER_ENABLED",
+  "RECONCILIATION_WORKER_HEALTHY",
+  "CDC_WORKER_ENABLED",
+  "SETUP_CONFIRMED",
+]);
+
+function quickBooksStatusFor(options: {
+  confirmed?: boolean;
+  configured?: boolean;
+  providerWorkflowsEnabled?: boolean;
+  oauthOnlyMode?: boolean;
+  webhookConfigured?: boolean;
+  hostedPaymentsEnabled?: boolean;
+  reconciliationWorkerEnabled?: boolean;
+  reconciliationWorkerHealthy?: boolean;
+  cdcWorkerEnabled?: boolean;
+  connection?: "CONNECTED" | "NEEDS_REAUTH" | "REVOCATION_PENDING" | "ERROR" | "DISCONNECTED" | null;
+  connectionEnvironment?: "sandbox" | "production";
+  accountingScopeGranted?: boolean;
+  credentialsAvailable?: boolean;
+  realmBindingActive?: boolean;
+  cdcCursorInitialized?: boolean;
+} = {}) {
+  const configured = options.configured ?? true;
+  const providerWorkflowsEnabled = options.providerWorkflowsEnabled ?? true;
+  const oauthOnlyMode = options.oauthOnlyMode ?? false;
+  const webhookConfigured = options.webhookConfigured ?? providerWorkflowsEnabled;
+  const reconciliationWorkerEnabled = options.reconciliationWorkerEnabled
+    ?? (providerWorkflowsEnabled && !oauthOnlyMode);
+  const hostedPaymentsEnabled = options.hostedPaymentsEnabled ?? reconciliationWorkerEnabled;
+  const reconciliationWorkerHealthy = options.reconciliationWorkerHealthy ?? reconciliationWorkerEnabled;
+  const cdcWorkerEnabled = options.cdcWorkerEnabled ?? reconciliationWorkerEnabled;
+  const connectionStatus = options.connection === undefined ? "CONNECTED" : options.connection;
+  const hasConnection = connectionStatus !== null;
+  const connected = connectionStatus === "CONNECTED";
+  const connectionEnvironment = options.connectionEnvironment ?? "sandbox";
+  const environmentMatches = hasConnection && connectionEnvironment === "sandbox";
+  const accountingScopeGranted = options.accountingScopeGranted ?? hasConnection;
+  const credentialsAvailable = options.credentialsAvailable ?? hasConnection;
+  const realmBindingActive = options.realmBindingActive ?? hasConnection;
+  const cdcCursorInitialized = options.cdcCursorInitialized ?? hasConnection;
+  const confirmed = Boolean(options.confirmed && !oauthOnlyMode && connected);
+  const checksByKey = {
+    PROVIDER_CONFIGURED: configured,
+    PROVIDER_WORKFLOWS_ENABLED: providerWorkflowsEnabled,
+    ACCOUNTING_WORKFLOWS_ENABLED: !oauthOnlyMode,
+    WEBHOOK_CONFIGURED: webhookConfigured,
+    HOSTED_PAYMENTS_ENABLED: hostedPaymentsEnabled,
+    RECONCILIATION_WORKER_ENABLED: reconciliationWorkerEnabled,
+    RECONCILIATION_WORKER_HEALTHY: reconciliationWorkerHealthy,
+    CDC_WORKER_ENABLED: cdcWorkerEnabled,
+    CONNECTION_ACTIVE: connected,
+    ENVIRONMENT_MATCHES: environmentMatches,
+    ACCOUNTING_SCOPE_GRANTED: accountingScopeGranted,
+    CREDENTIALS_AVAILABLE: credentialsAvailable,
+    REALM_BINDING_ACTIVE: realmBindingActive,
+    CDC_CURSOR_INITIALIZED: cdcCursorInitialized,
+    SETUP_CONFIRMED: confirmed,
+  } as const;
+  const requiredChecksPassed = quickBooksCheckKeys
+    .filter((key) => !optionalOperationCheckKeys.has(key))
+    .every((key) => checksByKey[key]);
+  const platformAvailable = configured && providerWorkflowsEnabled;
+  const phase = !platformAvailable
+    ? "UNAVAILABLE"
+    : connectionStatus === null || connectionStatus === "DISCONNECTED"
+      ? "NOT_CONNECTED"
+      : !requiredChecksPassed
+        ? "ACTION_REQUIRED"
+        : oauthOnlyMode
+          ? "CONNECTION_VERIFIED"
+          : confirmed
+            ? "CONFIRMED"
+            : "READY_FOR_CONFIRMATION";
+  const coreConnectionReady = requiredChecksPassed && confirmed && !oauthOnlyMode;
+  const reconciliationReady = coreConnectionReady
+    && webhookConfigured
+    && reconciliationWorkerEnabled
+    && reconciliationWorkerHealthy;
+
   return {
-    enabled: true,
-    configured: true,
-    providerWorkflowsEnabled: true,
-    webhookConfigured: true,
+    enabled: configured && providerWorkflowsEnabled,
+    configured,
+    providerWorkflowsEnabled,
+    oauthOnlyMode,
+    webhookConfigured,
     canManage: true,
     environment: "sandbox",
+    reconciliationWorker: reconciliationWorkerHealthy
+      ? { status: "RUNNING", fresh: true, heartbeatAtUtc: "2026-08-27T11:00:00.000Z" }
+      : null,
+    releaseMatches: null,
     setup: {
-      phase: confirmed ? "CONFIRMED" : "READY_FOR_CONFIRMATION",
-      ready: confirmed,
+      phase,
+      ready: coreConnectionReady,
       confirmed,
       checklistVersion: "2026-08-28.v2",
       confirmedAtUtc: confirmed ? "2026-08-27T12:00:00.000Z" : null,
-      checks: [
-        { key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" },
-        { key: "CONNECTION_ACTIVE", passed: true, managedBy: "WORKSPACE" },
-        { key: "SETUP_CONFIRMED", passed: confirmed, managedBy: "WORKSPACE" },
-      ],
+      checks: quickBooksCheckKeys.map((key) => ({
+        key,
+        passed: checksByKey[key],
+        managedBy: workspaceCheckKeys.has(key) ? "WORKSPACE" : "QUOTEFLY",
+      })),
       capabilities: {
-        canConnect: false,
-        canReconnect: false,
-        canConfirm: !confirmed,
-        canDisconnect: true,
+        canConnect: platformAvailable && (connectionStatus === null || connectionStatus === "DISCONNECTED"),
+        canReconnect: platformAvailable && (connectionStatus === "CONNECTED" || connectionStatus === "NEEDS_REAUTH"),
+        canConfirm: requiredChecksPassed && !oauthOnlyMode,
+        canDisconnect: connectionStatus === "CONNECTED" || connectionStatus === "NEEDS_REAUTH" || connectionStatus === "REVOCATION_PENDING",
       },
       operations: {
-        coreConnectionReady: confirmed,
-        hostedPaymentsReady: confirmed,
-        reconciliationReady: confirmed,
-        cdcRecoveryReady: confirmed,
-        allAccountingWorkflowsReady: confirmed,
+        coreConnectionReady,
+        hostedPaymentsReady: reconciliationReady && hostedPaymentsEnabled,
+        reconciliationReady,
+        cdcRecoveryReady: reconciliationReady && cdcWorkerEnabled,
+        allAccountingWorkflowsReady: reconciliationReady && hostedPaymentsEnabled && cdcWorkerEnabled,
       },
     },
-    connection: {
-      environment: "sandbox",
+    connection: connectionStatus === null ? null : {
+      environment: connectionEnvironment,
       companyName: "QuoteFly Test Company",
-      status: "CONNECTED",
+      status: connectionStatus,
       connectedAtUtc: "2026-08-27T11:00:00.000Z",
+      disconnectedAtUtc: null,
+      lastTokenRefreshAtUtc: null,
       lastSyncAtUtc: null,
       lastWebhookAtUtc: null,
       counts: { customerMaps: 0, itemMaps: 0, invoiceSyncs: 0 },
@@ -49,75 +158,26 @@ function quickBooksStatus(confirmed = false) {
   };
 }
 
+function quickBooksStatus(confirmed = false) {
+  return quickBooksStatusFor({ confirmed });
+}
+
 function quickBooksConnectionOnlyStatus() {
-  const status = quickBooksStatus();
-  return {
-    ...status,
-    oauthOnlyMode: true,
-    setup: {
-      ...status.setup,
-      phase: "CONNECTION_VERIFIED",
-      checks: [
-        { key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" },
-        { key: "PROVIDER_WORKFLOWS_ENABLED", passed: true, managedBy: "QUOTEFLY" },
-        { key: "ACCOUNTING_WORKFLOWS_ENABLED", passed: false, managedBy: "QUOTEFLY" },
-        { key: "WEBHOOK_CONFIGURED", passed: false, managedBy: "QUOTEFLY" },
-        { key: "CONNECTION_ACTIVE", passed: true, managedBy: "WORKSPACE" },
-        { key: "ENVIRONMENT_MATCHES", passed: true, managedBy: "QUOTEFLY" },
-        { key: "ACCOUNTING_SCOPE_GRANTED", passed: true, managedBy: "WORKSPACE" },
-        { key: "CREDENTIALS_AVAILABLE", passed: true, managedBy: "QUOTEFLY" },
-        { key: "REALM_BINDING_ACTIVE", passed: true, managedBy: "QUOTEFLY" },
-        { key: "CDC_CURSOR_INITIALIZED", passed: true, managedBy: "QUOTEFLY" },
-        { key: "SETUP_CONFIRMED", passed: false, managedBy: "WORKSPACE" },
-      ],
-      capabilities: { ...status.setup.capabilities, canConfirm: false },
-      operations: {
-        coreConnectionReady: false,
-        hostedPaymentsReady: false,
-        reconciliationReady: false,
-        cdcRecoveryReady: false,
-        allAccountingWorkflowsReady: false,
-      },
-    },
-  };
+  return quickBooksStatusFor({ oauthOnlyMode: true });
 }
 
 function quickBooksDegradedConnectionOnlyStatus() {
-  const status = quickBooksConnectionOnlyStatus();
-  return {
-    ...status,
-    setup: {
-      ...status.setup,
-      phase: "ACTION_REQUIRED",
-      checks: [
-        { key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" },
-        { key: "ACCOUNTING_WORKFLOWS_ENABLED", passed: false, managedBy: "QUOTEFLY" },
-        { key: "ENVIRONMENT_MATCHES", passed: false, managedBy: "QUOTEFLY" },
-        { key: "CREDENTIALS_AVAILABLE", passed: false, managedBy: "QUOTEFLY" },
-        { key: "REALM_BINDING_ACTIVE", passed: false, managedBy: "QUOTEFLY" },
-        { key: "CDC_CURSOR_INITIALIZED", passed: false, managedBy: "QUOTEFLY" },
-        { key: "CONNECTION_ACTIVE", passed: true, managedBy: "WORKSPACE" },
-        { key: "SETUP_CONFIRMED", passed: false, managedBy: "WORKSPACE" },
-      ],
-    },
-  };
+  return quickBooksStatusFor({
+    oauthOnlyMode: true,
+    connectionEnvironment: "production",
+    credentialsAvailable: false,
+    realmBindingActive: false,
+    cdcCursorInitialized: false,
+  });
 }
 
-function quickBooksUnavailableConnectionOnlyStatus() {
-  const status = quickBooksConnectionOnlyStatus();
-  return {
-    ...status,
-    setup: {
-      ...status.setup,
-      phase: "UNAVAILABLE",
-      checks: [
-        { key: "PROVIDER_CONFIGURED", passed: false, managedBy: "QUOTEFLY" },
-        { key: "PROVIDER_WORKFLOWS_ENABLED", passed: false, managedBy: "QUOTEFLY" },
-        { key: "CONNECTION_ACTIVE", passed: true, managedBy: "WORKSPACE" },
-        { key: "SETUP_CONFIRMED", passed: false, managedBy: "WORKSPACE" },
-      ],
-    },
-  };
+function quickBooksImpossibleConnectionOnlyStatus() {
+  return quickBooksStatusFor({ oauthOnlyMode: true, configured: false, providerWorkflowsEnabled: false });
 }
 
 test("members can open Settings without requesting private QuickBooks status", async ({ context, page, request }) => {
@@ -189,6 +249,24 @@ test("OAuth callback returns to QuickBooks settings and preserves the connection
   await expect(page).toHaveURL(/\/app\/settings#admin-quickbooks$/);
 });
 
+test("terminal QuickBooks errors show support guidance with no lifecycle actions", async ({ context, page, request }) => {
+  const owner = await signUpViaApi(request, "quickbooks-settings-terminal-error");
+  await addSessionCookie(context, owner);
+  const terminal = quickBooksStatusFor({ connection: "ERROR" });
+  await page.route(`**${quickBooksStatusPath}`, async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(terminal) });
+  });
+
+  let mutations = 0;
+  page.on("request", (browserRequest) => {
+    if (/\/v1\/integrations\/quickbooks\/(connect|disconnect)/.test(browserRequest.url())) mutations += 1;
+  });
+  await page.goto("/app/settings#admin-quickbooks");
+  await expect(page.getByText("QuickBooks connection requires QuoteFly support")).toBeVisible();
+  await expect(page.getByRole("button", { name: /connect quickbooks|reconnect quickbooks|disconnect/i })).toHaveCount(0);
+  expect(mutations).toBe(0);
+});
+
 test("legacy or malformed QuickBooks status keeps Settings usable with a local retry error", async ({ context, page, request }) => {
   const owner = await signUpViaApi(request, "quickbooks-settings-malformed");
   await addSessionCookie(context, owner);
@@ -203,21 +281,40 @@ test("legacy or malformed QuickBooks status keeps Settings usable with a local r
   await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
 });
 
+for (const [name, invalidStatus] of [
+  [
+    "READY_FOR_CONFIRMATION without a connection",
+    { ...quickBooksStatus(), connection: null },
+  ],
+  [
+    "CONFIRMED with a reauthorization-required connection",
+    { ...quickBooksStatus(true), connection: { ...quickBooksStatus(true).connection!, status: "NEEDS_REAUTH" } },
+  ],
+] as const) {
+  test(`contradictory ${name} fails closed without a configuration claim`, async ({ context, page, request }) => {
+    const owner = await signUpViaApi(request, `quickbooks-settings-contradictory-${name.slice(0, 12)}`);
+    await addSessionCookie(context, owner);
+    await page.route(`**${quickBooksStatusPath}`, async (route) => {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(invalidStatus) });
+    });
+
+    await page.goto("/app/settings#admin-quickbooks");
+    await expect(page.getByRole("alert")).toHaveText("QuickBooks readiness could not be loaded.");
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Confirm setup" })).toHaveCount(0);
+    await expect(page.getByText("Confirmed", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "QuoteFly Test Company" })).toHaveCount(0);
+  });
+}
+
 test("QuoteFly-managed unavailable setup explains responsibility before a company is connected", async ({ context, page, request }) => {
   const owner = await signUpViaApi(request, "quickbooks-settings-unavailable");
   await addSessionCookie(context, owner);
-  const unavailable = quickBooksStatus();
-  unavailable.setup.phase = "UNAVAILABLE";
-  unavailable.connection = null;
-  unavailable.setup.checks = [
-    { key: "PROVIDER_CONFIGURED", passed: false, managedBy: "QUOTEFLY" },
-  ];
-  unavailable.setup.capabilities = {
-    canConnect: false,
-    canReconnect: false,
-    canConfirm: false,
-    canDisconnect: false,
-  };
+  const unavailable = quickBooksStatusFor({
+    configured: false,
+    providerWorkflowsEnabled: false,
+    connection: null,
+  });
 
   await page.route(`**${quickBooksStatusPath}`, async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(unavailable) });
@@ -233,21 +330,11 @@ test("QuoteFly-managed unavailable setup explains responsibility before a compan
 test("pre-connection guidance ignores downstream platform checks while diagnostics retain them", async ({ context, page, request }) => {
   const owner = await signUpViaApi(request, "quickbooks-settings-preconnection-scope");
   await addSessionCookie(context, owner);
-  const preConnection = quickBooksStatus();
-  preConnection.setup.phase = "NOT_CONNECTED";
-  preConnection.connection = null;
-  preConnection.setup.checks = [
-    { key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" },
-    { key: "PROVIDER_WORKFLOWS_ENABLED", passed: true, managedBy: "QUOTEFLY" },
-    { key: "ACCOUNTING_WORKFLOWS_ENABLED", passed: false, managedBy: "QUOTEFLY" },
-    { key: "WEBHOOK_CONFIGURED", passed: false, managedBy: "QUOTEFLY" },
-  ];
-  preConnection.setup.capabilities = {
-    canConnect: true,
-    canReconnect: false,
-    canConfirm: false,
-    canDisconnect: false,
-  };
+  const preConnection = quickBooksStatusFor({
+    oauthOnlyMode: true,
+    webhookConfigured: false,
+    connection: null,
+  });
 
   await page.route(`**${quickBooksStatusPath}`, async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(preConnection) });
@@ -256,19 +343,14 @@ test("pre-connection guidance ignores downstream platform checks while diagnosti
   await page.goto("/app/settings#admin-quickbooks");
   await expect(page.getByText("QuoteFly-managed QuickBooks setup needs attention", { exact: true })).toHaveCount(0);
   await page.getByText("Setup checks & diagnostics", { exact: true }).click();
-  await expect(page.getByRole("listitem").filter({ hasText: "Provider-backed accounting actions enabled" })).toContainText("QuoteFly manages this check.");
-  await expect(page.getByRole("listitem").filter({ hasText: "Webhook verifier configured; signed delivery test pending" })).toContainText("QuoteFly manages this check.");
+  await expect(page.getByRole("listitem").filter({ hasText: "Provider-backed accounting actions enabled" })).toContainText("Intentionally disabled as a staging safeguard");
+  await expect(page.getByRole("listitem").filter({ hasText: "Webhook verifier configured; signed delivery test pending" })).toContainText("Intentionally disabled as a staging safeguard");
 });
 
 test("connected guidance retains downstream QuoteFly-managed readiness failures", async ({ context, page, request }) => {
   const owner = await signUpViaApi(request, "quickbooks-settings-connected-scope");
   await addSessionCookie(context, owner);
-  const connected = quickBooksStatus();
-  connected.setup.phase = "ACTION_REQUIRED";
-  connected.setup.checks = [
-    { key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" },
-    { key: "ACCOUNTING_WORKFLOWS_ENABLED", passed: false, managedBy: "QUOTEFLY" },
-  ];
+  const connected = quickBooksStatusFor({ realmBindingActive: false });
 
   await page.route(`**${quickBooksStatusPath}`, async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(connected) });
@@ -336,17 +418,19 @@ test("OAuth-only connection-integrity failures remain visible and never claim ve
     .toContainText("Intentionally disabled as a staging safeguard");
 });
 
-test("OAuth-only unavailable provider state uses integrity attention on mobile instead of waiting copy", async ({ context, page, request }) => {
+test("impossible OAuth-only unavailable provider state fails closed on mobile", async ({ context, page, request }) => {
   const owner = await signUpViaApi(request, "quickbooks-settings-oauth-only-unavailable-mobile");
   await addSessionCookie(context, owner);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route(`**${quickBooksStatusPath}`, async (route) => {
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(quickBooksUnavailableConnectionOnlyStatus()) });
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(quickBooksImpossibleConnectionOnlyStatus()) });
   });
 
   await page.goto("/app/settings#admin-quickbooks");
   await expect(page.getByText("QuickBooks connection verified for staging", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("QuickBooks connection needs attention", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("alert")).toHaveText("QuickBooks readiness could not be loaded.");
+  await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /connect quickbooks|reconnect quickbooks|disconnect|confirm setup/i })).toHaveCount(0);
   await expect(page.getByText("QuickBooks is connected, but automation is not ready yet", { exact: true })).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

@@ -101,6 +101,10 @@ const PUBLIC_PROVIDER_MUTATION_PATHS = new Set([
   "/v1/integrations/quickbooks/webhook",
   "/v1/integrations/quickbooks/webhook/",
 ]);
+const BILLING_INDEPENDENT_LIFECYCLE_MUTATION_PATHS = new Set([
+  "/v1/integrations/quickbooks/disconnect",
+  "/v1/integrations/quickbooks/disconnect/",
+]);
 
 function requestPathname(url: string): string {
   return url.split("?")[0] ?? url;
@@ -111,6 +115,14 @@ function requiresWorkspaceAccess(method: string, url: string): boolean {
   const normalizedMethod = method.toUpperCase();
 
   if (PUBLIC_PROVIDER_MUTATION_PATHS.has(pathname)) {
+    return false;
+  }
+
+  // Billing loss must stop new provider/accounting work, but it must never
+  // trap an owner in an integration whose credential can no longer be revoked.
+  // The route still enforces session, live-manager, origin, tenant-RLS, and
+  // durable revocation controls.
+  if (BILLING_INDEPENDENT_LIFECYCLE_MUTATION_PATHS.has(pathname)) {
     return false;
   }
 

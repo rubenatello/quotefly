@@ -952,7 +952,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         role: claims.role,
       });
       const stateHash = createHash("sha256").update(state, "utf8").digest("hex");
-      const credentialLifecycleBlocked = await withTenantRlsContext(app.prisma, claims.tenantId, async (transaction) => {
+      const credentialLifecycleStatus = await withTenantRlsContext(app.prisma, claims.tenantId, async (transaction) => {
         const now = new Date();
         await transaction.$queryRaw(Prisma.sql`
           SELECT 1::int AS "locked"
@@ -962,6 +962,21 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             )
           ) acquired
         `);
+        const connection = await transaction.quickBooksConnection.findFirst({
+          where: { tenantId: claims.tenantId, deletedAtUtc: null },
+          select: {
+            id: true,
+            status: true,
+            disconnectRequestedAtUtc: true,
+            tokenRefreshClaimHash: true,
+          },
+        });
+        if (connection?.status === "ERROR") return "support_required" as const;
+        if (
+          connection?.status === "REVOCATION_PENDING"
+          || connection?.disconnectRequestedAtUtc
+          || connection?.tokenRefreshClaimHash
+        ) return "busy" as const;
         await transaction.quickBooksOAuthState.deleteMany({
           where: {
             tenantId: claims.tenantId,
@@ -981,21 +996,6 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           },
           data: { consumedAtUtc: now },
         });
-        const connection = await transaction.quickBooksConnection.findFirst({
-          where: { tenantId: claims.tenantId, deletedAtUtc: null },
-          select: {
-            id: true,
-            status: true,
-            disconnectRequestedAtUtc: true,
-            tokenRefreshClaimHash: true,
-          },
-        });
-        if (
-          connection?.status === "REVOCATION_PENDING"
-          || connection?.status === "ERROR"
-          || connection?.disconnectRequestedAtUtc
-          || connection?.tokenRefreshClaimHash
-        ) return true;
         await transaction.quickBooksOAuthState.create({
           data: {
             tenantId: claims.tenantId,
@@ -1014,9 +1014,15 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           outcome: "PENDING",
           connectionGeneration: await nextQuickBooksConnectionGeneration(transaction, claims.tenantId),
         });
-        return false;
+        return "ready" as const;
       });
-      if (credentialLifecycleBlocked) {
+      if (credentialLifecycleStatus === "support_required") {
+        return reply.code(409).send({
+          error: "QuickBooks connection requires QuoteFly support before it can be changed.",
+          code: "QUICKBOOKS_CONNECTION_SUPPORT_REQUIRED",
+        });
+      }
+      if (credentialLifecycleStatus === "busy") {
         return reply.code(409).send({
           error: "Finish disconnecting QuickBooks before reconnecting.",
           code: "QUICKBOOKS_CREDENTIAL_LIFECYCLE_BUSY",
@@ -1593,7 +1599,12 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         actorTenantUserId: access.tenantUserId,
         requestId: access.requestId,
       });
-      return result === "disconnected"
+      return result === "support_required"
+        ? reply.code(409).send({
+            error: "QuickBooks connection requires QuoteFly support before it can be changed.",
+            code: "QUICKBOOKS_CONNECTION_SUPPORT_REQUIRED",
+          })
+        : result === "disconnected"
         ? { disconnected: true }
         : reply.code(202).send({ disconnected: false, revocationPending: true });
     },

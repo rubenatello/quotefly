@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { mapWithConcurrency } from "../lib/bounded-concurrency";
+import { buildTenantEntitlements } from "../lib/subscription";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
   loadWorkerHeartbeatFleet,
@@ -92,6 +93,11 @@ export type QuickBooksWorkerOperationalInstance = Readonly<{
 export type QuickBooksOperationalEvaluation = Readonly<{
   warningUnhealthy: boolean;
   criticalUnhealthy: boolean;
+}>;
+
+type QuickBooksOperationalAggregateOptions = Readonly<{
+  /** Omit to preserve raw per-tenant control-plane inventory semantics. */
+  providerActionTenantIds?: ReadonlySet<string>;
 }>;
 
 const COUNT_FIELDS = [
@@ -373,15 +379,43 @@ export function aggregateQuickBooksOperationalRows(
   };
 }
 
+/**
+ * Deliberately paused provider queues are inventory, not incidents. Credential
+ * revocation, dead webhook audit, and reauthorization signals remain visible
+ * across billing states because they are lifecycle/security obligations.
+ */
+export function maskPausedQuickBooksProviderActionMetrics(
+  row: QuickBooksOperationalRow,
+): QuickBooksOperationalRow {
+  return {
+    ...row,
+    webhookOutstandingCount: 0,
+    oldestWebhookOutstandingAtUtc: null,
+    reconciliationRequiredCount: 0,
+    oldestReconciliationRequiredAtUtc: null,
+    cdcCursorCount: 0,
+    cdcTerminalCount: 0,
+    cdcOverdueCount: 0,
+    oldestCdcChangedSinceUtc: null,
+  };
+}
+
 export async function loadQuickBooksOperationalAggregate(
   prisma: PrismaClient,
   tenantIds: readonly string[],
   now: Date,
+  options: QuickBooksOperationalAggregateOptions = {},
 ): Promise<QuickBooksOperationalAggregate> {
   const rows = await mapWithConcurrency(
     tenantIds,
     4,
-    (tenantId) => loadQuickBooksOperationalRow(prisma, tenantId, now),
+    async (tenantId) => {
+      const row = await loadQuickBooksOperationalRow(prisma, tenantId, now);
+      return options.providerActionTenantIds === undefined
+        || options.providerActionTenantIds.has(tenantId)
+        ? row
+        : maskPausedQuickBooksProviderActionMetrics(row);
+    },
   );
   return aggregateQuickBooksOperationalRows(rows, now);
 }
@@ -394,11 +428,31 @@ export async function loadQuickBooksOperationalSnapshot(
   const now = options.now ?? new Date();
   const tenants = await prisma.tenant.findMany({
     where: { deletedAtUtc: null },
-    select: { id: true },
+    select: {
+      id: true,
+      subscriptionStatus: true,
+      subscriptionPlanCode: true,
+      stripeCustomerId: true,
+      stripeSubscriptionId: true,
+      trialStartsAtUtc: true,
+      trialEndsAtUtc: true,
+      subscriptionCurrentPeriodStartUtc: true,
+      subscriptionCurrentPeriodEndUtc: true,
+    },
   });
+  const providerActionTenantIds = new Set(
+    tenants
+      .filter((tenant) => buildTenantEntitlements(tenant, now).hasWorkspaceAccess)
+      .map(({ id }) => id),
+  );
   const workerRequired = runtime.reconciliationWorkerEnabled || runtime.cdcWorkerEnabled;
   const [operations, workerState] = await Promise.all([
-    loadQuickBooksOperationalAggregate(prisma, tenants.map(({ id }) => id), now),
+    loadQuickBooksOperationalAggregate(
+      prisma,
+      tenants.map(({ id }) => id),
+      now,
+      { providerActionTenantIds },
+    ),
     workerRequired
       ? loadQuickBooksWorkerOperationalState(prisma, {
           apiReleaseSha: options.apiReleaseSha,

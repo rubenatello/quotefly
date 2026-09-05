@@ -15,7 +15,10 @@ import {
   resolveReconciledSubscriptionPeriod,
   resolveSubscriptionItemBilling,
 } from "../../src/lib/subscription";
-import { createSignedQuickBooksState } from "../../src/services/quickbooks";
+import {
+  createSignedQuickBooksState,
+  encryptQuickBooksSecret,
+} from "../../src/services/quickbooks";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
 import {
   getStandardWorkPresetCatalog,
@@ -4999,6 +5002,86 @@ describe("QuoteFly API integration", () => {
     } finally {
       app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED = workflowFlag;
     }
+  });
+
+  test("keeps QuickBooks revocation available after billing access expires while blocking new provider work", async () => {
+    const owner = await signUp("quickbooks-billing-expired-disconnect");
+    const now = new Date();
+    await prisma.tenant.update({
+      where: { id: owner.tenant.id },
+      data: {
+        subscriptionStatus: "past_due",
+        subscriptionPlanCode: "starter",
+        stripeCustomerId: "cus_quickbooks_billing_expired",
+        stripeSubscriptionId: "sub_quickbooks_billing_expired",
+        trialStartsAtUtc: new Date(now.getTime() - 3 * 86_400_000),
+        trialEndsAtUtc: new Date(now.getTime() - 2 * 86_400_000),
+        subscriptionCurrentPeriodStartUtc: new Date(now.getTime() - 2 * 86_400_000),
+        subscriptionCurrentPeriodEndUtc: new Date(now.getTime() - 86_400_000),
+      },
+    });
+    const realmId = `realm-billing-expired-${Date.now()}`;
+    const connection = await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: owner.tenant.id,
+        realmId,
+        environment: "sandbox",
+        status: "CONNECTED",
+        accessTokenEncrypted: encryptQuickBooksSecret(env, "billing-expired-access"),
+        refreshTokenEncrypted: encryptQuickBooksSecret(env, "billing-expired-refresh"),
+        accessTokenExpiresAtUtc: new Date(now.getTime() + 60_000),
+        realmBinding: { create: { realmId, active: true } },
+      },
+    });
+
+    for (const request of [
+      { url: "/v1/integrations/quickbooks/connect", payload: undefined },
+      {
+        url: "/v1/integrations/quickbooks/setup-confirmation",
+        payload: {
+          checklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+          companyConfirmed: true,
+          reviewResponsibilityConfirmed: true,
+        },
+      },
+      {
+        url: "/v1/integrations/quickbooks/mappings/customers/search",
+        payload: { query: "blocked" },
+      },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: request.url,
+        headers: authHeaders(owner.cookie),
+        payload: request.payload,
+      });
+      expect(response.statusCode).toBe(402);
+      expect(parseJson<{ code: string }>(response).code).toBe("BILLING_REQUIRED");
+    }
+    expect(quickBooksProviderMocks.revokeToken).not.toHaveBeenCalled();
+
+    const disconnected = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/disconnect",
+      headers: {
+        ...authHeaders(owner.cookie),
+        origin: env.APP_URL,
+      },
+    });
+    expect(disconnected.statusCode).toBe(200);
+    expect(parseJson<{ disconnected: boolean }>(disconnected)).toEqual({ disconnected: true });
+    expect(quickBooksProviderMocks.revokeToken).toHaveBeenCalledOnce();
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({
+      where: { id: connection.id },
+      include: { realmBinding: true },
+    })).resolves.toMatchObject({
+      status: "DISCONNECTED",
+      accessTokenEncrypted: null,
+      refreshTokenEncrypted: null,
+      disconnectRequestedAtUtc: null,
+      disconnectedAtUtc: expect.any(Date),
+      realmBinding: { active: false },
+    });
   });
 
   test("allows tenant OAuth setup while containing accounting routes in connection-only mode", async () => {

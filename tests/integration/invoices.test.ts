@@ -3222,13 +3222,43 @@ describe("invoice ledger API", () => {
         lastError: "QUICKBOOKS_TOKEN_REVOCATION_DEAD",
       },
     });
+    const terminalConnectionBefore = await prisma.quickBooksConnection.findUniqueOrThrow({
+      where: { id: connection.id },
+      select: {
+        status: true,
+        accessTokenEncrypted: true,
+        refreshTokenEncrypted: true,
+        accessTokenExpiresAtUtc: true,
+        disconnectRequestedAtUtc: true,
+        revocationPendingAtUtc: true,
+        revocationNextAttemptAtUtc: true,
+        revocationAttemptCount: true,
+        lastError: true,
+      },
+    });
+    const [oauthStatesBefore, eventsBefore] = await Promise.all([
+      prisma.quickBooksOAuthState.count({ where: { tenantId: owner.tenant.id } }),
+      prisma.quickBooksConnectionEvent.count({ where: { tenantId: owner.tenant.id } }),
+    ]);
+    quickBooksProviderMocks.revokeToken.mockClear();
     const terminalBlockedConnect = await app.inject({
       method: "POST",
       url: "/v1/integrations/quickbooks/connect",
       headers: { cookie: owner.cookie },
     });
     expect(terminalBlockedConnect.statusCode).toBe(409);
-    expect(terminalBlockedConnect.json()).toMatchObject({ code: "QUICKBOOKS_CREDENTIAL_LIFECYCLE_BUSY" });
+    expect(terminalBlockedConnect.json()).toMatchObject({ code: "QUICKBOOKS_CONNECTION_SUPPORT_REQUIRED" });
+    const terminalBlockedDisconnect = await app.inject({
+      method: "POST",
+      url: "/v1/integrations/quickbooks/disconnect",
+      headers: { cookie: owner.cookie },
+    });
+    expect(terminalBlockedDisconnect.statusCode).toBe(409);
+    expect(terminalBlockedDisconnect.json()).toMatchObject({ code: "QUICKBOOKS_CONNECTION_SUPPORT_REQUIRED" });
+    await expect(prisma.quickBooksConnection.findUniqueOrThrow({ where: { id: connection.id } })).resolves.toMatchObject(terminalConnectionBefore);
+    await expect(prisma.quickBooksOAuthState.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(oauthStatesBefore);
+    await expect(prisma.quickBooksConnectionEvent.count({ where: { tenantId: owner.tenant.id } })).resolves.toBe(eventsBefore);
+    expect(quickBooksProviderMocks.revokeToken).not.toHaveBeenCalled();
 
     await prisma.quickBooksConnection.update({
       where: { id: connection.id },

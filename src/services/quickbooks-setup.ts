@@ -178,9 +178,13 @@ export function deriveQuickBooksSetupReadiness(
     checks,
     capabilities: {
       canConnect: platformAvailable && (!connection || connection.status === "DISCONNECTED"),
-      canReconnect: platformAvailable && Boolean(connection && connection.status !== "DISCONNECTED"),
+      canReconnect: platformAvailable && Boolean(
+        connection && (connection.status === "CONNECTED" || connection.status === "NEEDS_REAUTH"),
+      ),
       canConfirm: requiredChecksPassed && accountingWorkflowsEnabled,
-      canDisconnect: Boolean(connection && connection.status !== "DISCONNECTED"),
+      canDisconnect: Boolean(
+        connection && ["CONNECTED", "NEEDS_REAUTH", "REVOCATION_PENDING"].includes(connection.status),
+      ),
     },
     operations: {
       coreConnectionReady,

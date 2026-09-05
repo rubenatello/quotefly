@@ -33,7 +33,7 @@ export type QuickBooksTokenConnection = Readonly<{
   realmId: string;
 }>;
 
-export type QuickBooksDisconnectResult = "disconnected" | "pending";
+export type QuickBooksDisconnectResult = "disconnected" | "pending" | "support_required";
 
 const QUICKBOOKS_CREDENTIAL_CLAIM_MINIMUM_MS = 120_000;
 export const QUICKBOOKS_CONNECTION_REVOCATION_MAX_ATTEMPTS = 8;
@@ -652,10 +652,6 @@ export async function disconnectQuickBooksConnection(params: {
         )
       ) acquired
     `;
-    await transaction.quickBooksOAuthState.deleteMany({
-      where: { tenantId: params.tenantId },
-    });
-
     const connection = await transaction.quickBooksConnection.findFirst({
       where: { tenantId: params.tenantId, deletedAtUtc: null },
       select: {
@@ -667,7 +663,16 @@ export async function disconnectQuickBooksConnection(params: {
         disconnectRequestedAtUtc: true,
       },
     });
-    if (!connection) return { result: "disconnected" as const };
+    if (!connection) {
+      await transaction.quickBooksOAuthState.deleteMany({
+        where: { tenantId: params.tenantId },
+      });
+      return { result: "disconnected" as const };
+    }
+    if (connection.status === "ERROR") return { result: "support_required" as const };
+    await transaction.quickBooksOAuthState.deleteMany({
+      where: { tenantId: params.tenantId },
+    });
     await invalidateQuickBooksHostedPaymentLinks(
       transaction,
       params.tenantId,

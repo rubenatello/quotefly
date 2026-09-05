@@ -476,6 +476,7 @@ interface ModalProps {
   closeOnBackdrop?: boolean;
   panelClassName?: string;
   ariaLabel?: string;
+  onCloseAutoFocus?: DialogPrimitive.DialogContentProps["onCloseAutoFocus"];
 }
 
 const MODAL_SIZES: Record<ModalSize, string> = {
@@ -495,6 +496,7 @@ export function Modal({
   closeOnBackdrop = true,
   panelClassName = "",
   ariaLabel,
+  onCloseAutoFocus,
 }: ModalProps) {
   const { t } = useTranslation();
 
@@ -520,6 +522,7 @@ export function Modal({
             // Navigation guards restore the coordinator's captured initiating
             // control after nested focus scopes unwind.
             if (layer === "navigationGuard") event.preventDefault();
+            onCloseAutoFocus?.(event);
           }}
           onPointerDownOutside={(event) => {
             if (!closeOnBackdrop) event.preventDefault();
@@ -625,6 +628,7 @@ interface ConfirmModalProps {
   children?: ReactNode;
   size?: ModalSize;
   layer?: ModalLayer;
+  onCloseAutoFocus?: DialogPrimitive.DialogContentProps["onCloseAutoFocus"];
 }
 
 export function ConfirmModal({
@@ -640,6 +644,7 @@ export function ConfirmModal({
   children,
   size = "sm",
   layer = "default",
+  onCloseAutoFocus,
 }: ConfirmModalProps) {
   const { t } = useTranslation();
   const resolvedConfirmLabel = confirmLabel ?? t("common.confirm");
@@ -674,7 +679,15 @@ export function ConfirmModal({
               };
 
   return (
-    <Modal open={open} onClose={closeIfIdle} closeOnBackdrop={!loading} size={size} layer={layer} ariaLabel={title}>
+    <Modal
+      open={open}
+      onClose={closeIfIdle}
+      closeOnBackdrop={!loading}
+      size={size}
+      layer={layer}
+      ariaLabel={title}
+      onCloseAutoFocus={onCloseAutoFocus}
+    >
       <ModalHeader title={title} onClose={loading ? undefined : onClose} />
       <ModalBody className="py-4 sm:py-5">
         <div className="flex items-start gap-3">

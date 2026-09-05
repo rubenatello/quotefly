@@ -14,7 +14,13 @@ import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbook
 async function createClaim(label: string) {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const tenant = await prisma.tenant.create({
-    data: { name: `${label} Services`, slug: `${label.toLowerCase()}-${stamp}` },
+    data: {
+      name: `${label} Services`,
+      slug: `${label.toLowerCase()}-${stamp}`,
+      subscriptionStatus: "trialing",
+      trialStartsAtUtc: new Date("2026-01-01T00:00:00.000Z"),
+      trialEndsAtUtc: new Date("2099-01-01T00:00:00.000Z"),
+    },
   });
   const user = await prisma.user.create({
     data: {
@@ -236,5 +242,36 @@ describe("QuickBooks reconciliation dead-letter policy", () => {
       },
     });
     await expect(countClaimableEvents()).resolves.toBe(0);
+  });
+
+  test("does not claim queued webhook provider work after billing access expires", async () => {
+    const { tenant, event, claim } = await createClaim("BillingPausedWebhook");
+    await expect(completeQuickBooksWebhookEvent(prisma, claim)).resolves.toBe(true);
+    await prisma.quickBooksWebhookEvent.update({
+      where: { id: event.id },
+      data: { status: "RECEIVED", processedAtUtc: null },
+    });
+    const now = new Date("2026-09-04T20:00:00.000Z");
+    await prisma.tenant.update({
+      where: { id: tenant.id },
+      data: {
+        subscriptionStatus: "past_due",
+        subscriptionPlanCode: "starter",
+        stripeCustomerId: "cus_qbo_paused_webhook",
+        stripeSubscriptionId: "sub_qbo_paused_webhook",
+        trialStartsAtUtc: new Date(now.getTime() - 3 * 86_400_000),
+        trialEndsAtUtc: new Date(now.getTime() - 2 * 86_400_000),
+        subscriptionCurrentPeriodStartUtc: new Date(now.getTime() - 2 * 86_400_000),
+        subscriptionCurrentPeriodEndUtc: new Date(now.getTime() - 86_400_000),
+      },
+    });
+
+    await expect(claimQuickBooksWebhookEvent(prisma, tenant.id, now)).resolves.toBeNull();
+    await expect(prisma.quickBooksWebhookEvent.findUniqueOrThrow({ where: { id: event.id } }))
+      .resolves.toMatchObject({
+        status: "RECEIVED",
+        claimTokenHash: null,
+        claimExpiresAtUtc: null,
+      });
   });
 });

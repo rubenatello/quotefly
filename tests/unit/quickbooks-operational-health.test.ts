@@ -4,6 +4,7 @@ import { quickBooksMonitorBearerMatches } from "../../src/routes/quickbooks-oper
 import {
   aggregateQuickBooksOperationalRows,
   evaluateQuickBooksOperationalSnapshot,
+  maskPausedQuickBooksProviderActionMetrics,
   QUICKBOOKS_MONITOR_CDC_CRITICAL_LAG_MS,
   QUICKBOOKS_MONITOR_CDC_WARNING_LAG_MS,
   QUICKBOOKS_MONITOR_CRITICAL_AGE_MS,
@@ -214,6 +215,50 @@ test("aggregates tenant-safe QuickBooks operational inventory and oldest ages", 
     tokenRefreshFailureConnectionCount: 1,
     tokenRefreshReauthRequiredCount: 1,
     oldestTokenRefreshFailureAgeMs: 75_000,
+  });
+});
+
+test("masks paused provider queues while preserving lifecycle and security signals", () => {
+  const row = maskPausedQuickBooksProviderActionMetrics({
+    webhookOutstandingCount: 4,
+    webhookDeadCount: 2,
+    oldestWebhookOutstandingAtUtc: new Date(NOW.getTime() - 60_000),
+    reconciliationRequiredCount: 3,
+    oldestReconciliationRequiredAtUtc: new Date(NOW.getTime() - 120_000),
+    cdcCursorCount: 2,
+    cdcTerminalCount: 1,
+    cdcOverdueCount: 1,
+    oldestCdcChangedSinceUtc: new Date(NOW.getTime() - 180_000),
+    connectionRevocationPendingCount: 1,
+    connectionRevocationDeadCount: 1,
+    oldestConnectionRevocationPendingAtUtc: new Date(NOW.getTime() - 240_000),
+    orphanRevocationPendingCount: 2,
+    orphanRevocationDeadCount: 1,
+    oldestOrphanRevocationPendingAtUtc: new Date(NOW.getTime() - 300_000),
+    tokenRefreshFailureConnectionCount: 1,
+    tokenRefreshReauthRequiredCount: 1,
+    oldestTokenRefreshFailureStartedAtUtc: new Date(NOW.getTime() - 360_000),
+  });
+
+  assert.deepEqual(row, {
+    webhookOutstandingCount: 0,
+    webhookDeadCount: 2,
+    oldestWebhookOutstandingAtUtc: null,
+    reconciliationRequiredCount: 0,
+    oldestReconciliationRequiredAtUtc: null,
+    cdcCursorCount: 0,
+    cdcTerminalCount: 0,
+    cdcOverdueCount: 0,
+    oldestCdcChangedSinceUtc: null,
+    connectionRevocationPendingCount: 1,
+    connectionRevocationDeadCount: 1,
+    oldestConnectionRevocationPendingAtUtc: new Date(NOW.getTime() - 240_000),
+    orphanRevocationPendingCount: 2,
+    orphanRevocationDeadCount: 1,
+    oldestOrphanRevocationPendingAtUtc: new Date(NOW.getTime() - 300_000),
+    tokenRefreshFailureConnectionCount: 1,
+    tokenRefreshReauthRequiredCount: 1,
+    oldestTokenRefreshFailureStartedAtUtc: new Date(NOW.getTime() - 360_000),
   });
 });
 

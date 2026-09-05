@@ -197,6 +197,25 @@ describe("QuickBooks setup readiness", () => {
     );
   });
 
+  it("only exposes lifecycle actions that the connection state can safely perform", () => {
+    const cases: Array<[QuickBooksSetupConnectionState["status"], boolean, boolean, boolean]> = [
+      ["CONNECTED", false, true, true],
+      ["NEEDS_REAUTH", false, true, true],
+      ["REVOCATION_PENDING", false, false, true],
+      ["ERROR", false, false, false],
+      ["DISCONNECTED", true, false, false],
+    ];
+
+    for (const [status, canConnect, canReconnect, canDisconnect] of cases) {
+      assert.deepEqual(deriveQuickBooksSetupReadiness(runtime, connection({ status })).capabilities, {
+        canConnect,
+        canReconnect,
+        canConfirm: status === "CONNECTED",
+        canDisconnect,
+      });
+    }
+  });
+
   it("presents a previously confirmed connection as connection-only when accounting workflows are paused", () => {
     const result = deriveQuickBooksSetupReadiness({
       ...runtime,
@@ -226,61 +245,44 @@ describe("QuickBooks authorization URL trust boundary", () => {
 });
 
 describe("QuickBooks Settings status normalization", () => {
-  const validStatus = {
-    enabled: true,
-    configured: true,
-    providerWorkflowsEnabled: true,
-    webhookConfigured: true,
-    canManage: true,
-    environment: "sandbox",
-    setup: {
-      phase: "READY_FOR_CONFIRMATION",
-      ready: false,
-      confirmed: false,
-      checklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
-      confirmedAtUtc: null,
-      checks: [{ key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" }],
-      capabilities: { canConnect: false, canReconnect: false, canConfirm: true, canDisconnect: true },
-      operations: {
-        coreConnectionReady: false,
-        hostedPaymentsReady: false,
-        reconciliationReady: false,
-        cdcRecoveryReady: false,
-        allAccountingWorkflowsReady: false,
-      },
-    },
-    connection: null,
-  };
-
-  it("accepts a complete status and rejects a legacy response without setup readiness", () => {
-    assert.deepEqual(normalizeQuickBooksStatusPayload(validStatus), validStatus);
-    assert.equal(normalizeQuickBooksStatusPayload({ ...validStatus, setup: undefined }), null);
-    assert.equal(normalizeQuickBooksStatusPayload({ ...validStatus, setup: { ...validStatus.setup, checks: [{}] } }), null);
-  });
-
-  it("accepts the connection-only verification phase", () => {
-    const connectionOnlyStatus = {
-      ...validStatus,
+  function statusPayload(
+    runtimeOverrides: Partial<QuickBooksSetupRuntime> = {},
+    connectionOverrides: Partial<QuickBooksSetupConnectionState> | null = {},
+  ) {
+    const configuredRuntime = {
+      ...runtime,
+      ...runtimeOverrides,
+      ...(runtimeOverrides.oauthOnlyMode === true
+        ? {
+            hostedPaymentsEnabled: runtimeOverrides.hostedPaymentsEnabled ?? false,
+            reconciliationWorkerEnabled: runtimeOverrides.reconciliationWorkerEnabled ?? false,
+            reconciliationWorkerHealthy: runtimeOverrides.reconciliationWorkerHealthy ?? false,
+            cdcWorkerEnabled: runtimeOverrides.cdcWorkerEnabled ?? false,
+          }
+        : {}),
+    };
+    const configuredConnection = connectionOverrides === null ? null : connection(connectionOverrides);
+    const setup = deriveQuickBooksSetupReadiness(configuredRuntime, configuredConnection);
+    return {
+      enabled: configuredRuntime.providerConfigured && configuredRuntime.providerWorkflowsEnabled,
+      configured: configuredRuntime.providerConfigured,
+      providerWorkflowsEnabled: configuredRuntime.providerWorkflowsEnabled,
+      oauthOnlyMode: configuredRuntime.oauthOnlyMode ?? false,
+      webhookConfigured: configuredRuntime.webhookConfigured,
+      canManage: true,
+      environment: configuredRuntime.environment,
+      reconciliationWorker: configuredRuntime.reconciliationWorkerHealthy === true
+        ? { status: "RUNNING" as const, fresh: true, heartbeatAtUtc: "2026-09-04T12:00:00.000Z" }
+        : null,
+      releaseMatches: null,
       setup: {
-        ...validStatus.setup,
-        phase: "CONNECTION_VERIFIED" as const,
-        checks: [
-          { key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" },
-          { key: "PROVIDER_WORKFLOWS_ENABLED", passed: true, managedBy: "QUOTEFLY" },
-          { key: "CONNECTION_ACTIVE", passed: true, managedBy: "WORKSPACE" },
-          { key: "ENVIRONMENT_MATCHES", passed: true, managedBy: "QUOTEFLY" },
-          { key: "ACCOUNTING_SCOPE_GRANTED", passed: true, managedBy: "WORKSPACE" },
-          { key: "CREDENTIALS_AVAILABLE", passed: true, managedBy: "QUOTEFLY" },
-          { key: "REALM_BINDING_ACTIVE", passed: true, managedBy: "QUOTEFLY" },
-          { key: "CDC_CURSOR_INITIALIZED", passed: true, managedBy: "QUOTEFLY" },
-        ],
-        capabilities: { ...validStatus.setup.capabilities, canConfirm: false },
+        ...setup,
+        confirmedAtUtc: setup.confirmedAtUtc?.toISOString() ?? null,
       },
-      oauthOnlyMode: true,
-      connection: {
-        environment: "sandbox",
+      connection: configuredConnection === null ? null : {
+        environment: configuredConnection.environment,
         companyName: "QuoteFly Sandbox",
-        status: "CONNECTED" as const,
+        status: configuredConnection.status as "CONNECTED",
         connectedAtUtc: "2026-09-04T12:00:00.000Z",
         disconnectedAtUtc: null,
         lastTokenRefreshAtUtc: null,
@@ -289,44 +291,160 @@ describe("QuickBooks Settings status normalization", () => {
         counts: { customerMaps: 0, itemMaps: 0, invoiceSyncs: 0 },
       },
     };
-    assert.deepEqual(normalizeQuickBooksStatusPayload(connectionOnlyStatus), connectionOnlyStatus);
-    assert.equal(normalizeQuickBooksStatusPayload({ ...connectionOnlyStatus, connection: null }), null);
-    assert.equal(normalizeQuickBooksStatusPayload({
-      ...connectionOnlyStatus,
-      connection: { ...connectionOnlyStatus.connection, status: "DISCONNECTED" },
-    }), null);
-    assert.equal(normalizeQuickBooksStatusPayload({
-      ...connectionOnlyStatus,
+  }
+
+  it("accepts every canonical setup phase, including degraded and OAuth-only states", () => {
+    const confirmedConnection = {
+      setupConfirmedAtUtc: new Date("2026-09-04T12:00:00.000Z"),
+      setupConfirmedByTenantUserId: "membership",
+      setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+    };
+    const cases = [
+      ["UNAVAILABLE", statusPayload({
+        providerConfigured: false,
+        providerWorkflowsEnabled: false,
+        webhookConfigured: false,
+        hostedPaymentsEnabled: false,
+        reconciliationWorkerEnabled: false,
+        reconciliationWorkerHealthy: false,
+        cdcWorkerEnabled: false,
+      }, null)],
+      ["NOT_CONNECTED", statusPayload({}, null)],
+      ["ACTION_REQUIRED", statusPayload({}, { realmBinding: null })],
+      ["CONNECTION_VERIFIED", statusPayload({ oauthOnlyMode: true })],
+      ["READY_FOR_CONFIRMATION", statusPayload()],
+      ["CONFIRMED", statusPayload({}, confirmedConnection)],
+    ] as const;
+
+    for (const [phase, payload] of cases) {
+      assert.equal(payload.setup.phase, phase);
+      assert.deepEqual(normalizeQuickBooksStatusPayload(payload), payload);
+    }
+  });
+
+  it("rejects every status contradiction that could overstate readiness", () => {
+    const ready = statusPayload();
+    const confirmed = statusPayload({}, {
+      setupConfirmedAtUtc: new Date("2026-09-04T12:00:00.000Z"),
+      setupConfirmedByTenantUserId: "membership",
+      setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+    });
+    const oauthOnly = statusPayload({ oauthOnlyMode: true });
+    const noHosted = statusPayload({ hostedPaymentsEnabled: false }, {
+      setupConfirmedAtUtc: new Date("2026-09-04T12:00:00.000Z"),
+      setupConfirmedByTenantUserId: "membership",
+      setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+    });
+    const noReconciliation = statusPayload({ webhookConfigured: false }, {
+      setupConfirmedAtUtc: new Date("2026-09-04T12:00:00.000Z"),
+      setupConfirmedByTenantUserId: "membership",
+      setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+    });
+    const unhealthyWorker = statusPayload({ reconciliationWorkerHealthy: false }, {
+      setupConfirmedAtUtc: new Date("2026-09-04T12:00:00.000Z"),
+      setupConfirmedByTenantUserId: "membership",
+      setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+    });
+    const notConnected = statusPayload({}, null);
+    const confirmedNeedsReauth = {
+      ...confirmed,
+      connection: { ...confirmed.connection!, status: "NEEDS_REAUTH" },
       setup: {
-        ...connectionOnlyStatus.setup,
-        checks: connectionOnlyStatus.setup.checks.filter((check) => check.key !== "CREDENTIALS_AVAILABLE"),
+        ...confirmed.setup,
+        checks: confirmed.setup.checks.map((check) => check.key === "CONNECTION_ACTIVE" ? { ...check, passed: false } : check),
       },
-    }), null);
-    assert.equal(normalizeQuickBooksStatusPayload({
-      ...connectionOnlyStatus,
-      setup: {
-        ...connectionOnlyStatus.setup,
-        checks: connectionOnlyStatus.setup.checks.map((check) => (
-          check.key === "REALM_BINDING_ACTIVE" ? { ...check, passed: false } : check
-        )),
+    };
+    const invalidPayloads: unknown[] = [
+      { ...ready, setup: undefined },
+      { ...ready, setup: { ...ready.setup, checks: ready.setup.checks.slice(1) } },
+      { ...ready, setup: { ...ready.setup, checks: [...ready.setup.checks, ready.setup.checks[0]] } },
+      { ...ready, setup: { ...ready.setup, checks: [...ready.setup.checks].reverse() } },
+      { ...ready, setup: { ...ready.setup, checklistVersion: "obsolete" } },
+      { ...ready, connection: null },
+      { ...confirmed, connection: { ...confirmed.connection!, status: "NEEDS_REAUTH" } },
+      confirmedNeedsReauth,
+      { ...confirmed, setup: { ...confirmed.setup, ready: false } },
+      { ...confirmed, setup: { ...confirmed.setup, operations: { ...confirmed.setup.operations, coreConnectionReady: false } } },
+      {
+        ...confirmed,
+        setup: {
+          ...confirmed.setup,
+          checks: confirmed.setup.checks.map((check) => check.key === "SETUP_CONFIRMED" ? { ...check, passed: false } : check),
+        },
       },
-    }), null);
-    assert.equal(normalizeQuickBooksStatusPayload({
-      ...connectionOnlyStatus,
-      setup: {
-        ...connectionOnlyStatus.setup,
-        checks: [
-          ...connectionOnlyStatus.setup.checks,
-          { key: "REALM_BINDING_ACTIVE", passed: false, managedBy: "QUOTEFLY" },
-        ],
+      { ...ready, setup: { ...ready.setup, capabilities: { ...ready.setup.capabilities, canConnect: true } } },
+      { ...oauthOnly, setup: { ...oauthOnly.setup, operations: { ...oauthOnly.setup.operations, coreConnectionReady: true } } },
+      {
+        ...oauthOnly,
+        setup: {
+          ...oauthOnly.setup,
+          checks: oauthOnly.setup.checks.map((check) => check.key === "SETUP_CONFIRMED" ? { ...check, passed: true } : check),
+        },
       },
-    }), null);
-    assert.equal(normalizeQuickBooksStatusPayload({
-      ...connectionOnlyStatus,
-      setup: {
-        ...connectionOnlyStatus.setup,
-        operations: { ...connectionOnlyStatus.setup.operations, hostedPaymentsReady: true },
+      { ...noReconciliation, setup: { ...noReconciliation.setup, operations: { ...noReconciliation.setup.operations, reconciliationReady: true } } },
+      { ...noReconciliation, setup: { ...noReconciliation.setup, operations: { ...noReconciliation.setup.operations, hostedPaymentsReady: true } } },
+      { ...noReconciliation, setup: { ...noReconciliation.setup, operations: { ...noReconciliation.setup.operations, cdcRecoveryReady: true } } },
+      { ...noHosted, setup: { ...noHosted.setup, operations: { ...noHosted.setup.operations, allAccountingWorkflowsReady: true } } },
+      { ...ready, oauthOnlyMode: "false" },
+      { ...ready, canManage: false },
+      { ...ready, reconciliationWorker: null },
+      { ...ready, reconciliationWorker: { ...ready.reconciliationWorker!, fresh: false } },
+      { ...ready, reconciliationWorker: { ...ready.reconciliationWorker!, status: "STOPPING" } },
+      { ...ready, reconciliationWorker: { ...ready.reconciliationWorker!, heartbeatAtUtc: "not-a-timestamp" } },
+      { ...ready, reconciliationWorker: { ...ready.reconciliationWorker!, status: "UNKNOWN" } },
+      { ...ready, reconciliationWorker: { ...ready.reconciliationWorker!, fresh: "true" } },
+      { ...ready, reconciliationWorker: { ...ready.reconciliationWorker!, extra: true } },
+      { ...ready, releaseMatches: false },
+      { ...ready, releaseMatches: undefined },
+      { ...ready, connection: { ...ready.connection!, companyName: undefined } },
+      { ...ready, connection: { ...ready.connection!, connectedAtUtc: "2026-09-04" } },
+      { ...ready, connection: { ...ready.connection!, lastSyncAtUtc: "not-a-timestamp" } },
+      { ...ready, connection: { ...ready.connection!, lastWebhookAtUtc: undefined } },
+      { ...ready, connection: { ...ready.connection!, counts: { ...ready.connection!.counts, customerMaps: Number.MAX_SAFE_INTEGER + 1 } } },
+      {
+        ...notConnected,
+        setup: {
+          ...notConnected.setup,
+          checks: notConnected.setup.checks.map((check) => check.key === "ACCOUNTING_SCOPE_GRANTED" ? { ...check, passed: true } : check),
+        },
       },
-    }), null);
+      statusPayload({ providerConfigured: false }),
+      statusPayload({ providerWorkflowsEnabled: false }),
+      statusPayload({ reconciliationWorkerEnabled: false, reconciliationWorkerHealthy: false }),
+      statusPayload({ reconciliationWorkerEnabled: false, reconciliationWorkerHealthy: false, cdcWorkerEnabled: false, hostedPaymentsEnabled: true }),
+      {
+        ...oauthOnly,
+        setup: {
+          ...oauthOnly.setup,
+          checks: oauthOnly.setup.checks.map((check) => check.key === "HOSTED_PAYMENTS_ENABLED" ? { ...check, passed: true } : check),
+        },
+      },
+      { ...unhealthyWorker, releaseMatches: true },
+      {
+        ...unhealthyWorker,
+        reconciliationWorker: { status: "RUNNING", fresh: false, heartbeatAtUtc: "2026-09-04T12:00:00.000Z" },
+        releaseMatches: true,
+      },
+      { ...unhealthyWorker, reconciliationWorker: { status: "RUNNING", fresh: true, heartbeatAtUtc: "2026-09-04T12:00:00.000Z" } },
+    ];
+
+    for (const payload of invalidPayloads) {
+      assert.equal(normalizeQuickBooksStatusPayload(payload), null);
+    }
+
+    const healthyReleaseMatch = { ...ready, releaseMatches: true };
+    assert.deepEqual(normalizeQuickBooksStatusPayload(healthyReleaseMatch), healthyReleaseMatch);
+    const stoppingFleet = {
+      ...unhealthyWorker,
+      reconciliationWorker: { status: "STOPPING", fresh: false, heartbeatAtUtc: "2026-09-04T12:00:00.000Z" },
+      releaseMatches: true,
+    };
+    assert.deepEqual(normalizeQuickBooksStatusPayload(stoppingFleet), stoppingFleet);
+    const terminalFleet = {
+      ...unhealthyWorker,
+      reconciliationWorker: { status: "STOPPED", fresh: false, heartbeatAtUtc: "2026-09-04T12:00:00.000Z" },
+      releaseMatches: true,
+    };
+    assert.equal(normalizeQuickBooksStatusPayload(terminalFleet), null);
   });
 });

@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { withTenantRlsContext, type TenantRlsClient } from "../lib/tenant-rls";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
+import { lockQuickBooksWorkerProviderReadsAllowed } from "./quickbooks-worker-scheduler";
 import {
   QUICKBOOKS_RETENTION_BATCH_SIZE,
   QUICKBOOKS_UNKNOWN_REALM_QUARANTINE_RETENTION_DAYS,
@@ -382,6 +383,9 @@ export async function claimQuickBooksWebhookEvent(
   now = new Date(),
 ): Promise<QuickBooksWebhookClaim | null> {
   return withTenantRlsContext(prisma, tenantId, async (transaction) => {
+    if (!(await lockQuickBooksWorkerProviderReadsAllowed(transaction, tenantId, now))) {
+      return null;
+    }
     const candidate = await transaction.quickBooksWebhookEvent.findFirst({
       where: quickBooksWebhookEventClaimableWhere(tenantId, now),
       orderBy: [{ receivedAtUtc: "asc" }, { id: "asc" }],

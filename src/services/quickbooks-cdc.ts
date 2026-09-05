@@ -14,6 +14,7 @@ import {
 } from "./quickbooks-credentials";
 import { quickBooksWebhookEventId } from "./quickbooks-webhook-inbox";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
+import { lockQuickBooksWorkerProviderReadsAllowed } from "./quickbooks-worker-scheduler";
 
 type RuntimeEnv = typeof env;
 
@@ -143,6 +144,9 @@ export async function claimQuickBooksCdcCursor(params: {
 }): Promise<QuickBooksCdcClaim | null> {
   return withTenantRlsContext(params.prisma, params.tenantId, async (transaction) => {
     const now = params.now ?? new Date();
+    if (!(await lockQuickBooksWorkerProviderReadsAllowed(transaction, params.tenantId, now))) {
+      return null;
+    }
     const cursor = await transaction.quickBooksCdcCursor.findFirst({
       where: {
         tenantId: params.tenantId,

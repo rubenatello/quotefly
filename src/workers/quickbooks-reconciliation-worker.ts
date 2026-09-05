@@ -28,6 +28,7 @@ import {
 } from "../services/quickbooks-retention";
 import { classifyQuickBooksWorkerFailure } from "../services/quickbooks-worker-failures";
 import {
+  visitQuickBooksWorkerProviderTenantPage,
   visitQuickBooksWorkerTenantPage,
   type QuickBooksWorkerPageResult,
 } from "../services/quickbooks-worker-scheduler";
@@ -548,7 +549,17 @@ async function run() {
       deletedAtUtc: null,
       ...(afterTenantId ? { id: { gt: afterTenantId } } : {}),
     },
-    select: { id: true },
+    select: {
+      id: true,
+      subscriptionStatus: true,
+      subscriptionPlanCode: true,
+      stripeCustomerId: true,
+      stripeSubscriptionId: true,
+      trialStartsAtUtc: true,
+      trialEndsAtUtc: true,
+      subscriptionCurrentPeriodStartUtc: true,
+      subscriptionCurrentPeriodEndUtc: true,
+    },
     orderBy: { id: "asc" as const },
     take,
   });
@@ -570,7 +581,7 @@ async function run() {
       providerWorkflowMaxDurationMs: 0,
     };
     currentProviderTickMetrics = metrics;
-    const webhookPage = await visitQuickBooksWorkerTenantPage({
+    const webhookPage = await visitQuickBooksWorkerProviderTenantPage({
       afterTenantId: webhookAfterTenantId,
       loadPage: loadTenantPage,
       visit: async (tenant) => {
@@ -602,7 +613,7 @@ async function run() {
     let revocationTenantCount = 0;
     let revocationCycleComplete = false;
     if (!stopping && tickStartedAt >= nextRevocationScanAt) {
-      const revocationPage = await visitQuickBooksWorkerTenantPage({
+      const revocationPage: QuickBooksWorkerPageResult = await visitQuickBooksWorkerTenantPage({
         afterTenantId: revocationAfterTenantId,
         loadPage: loadTenantPage,
         visit: async (tenant) => {
@@ -629,7 +640,7 @@ async function run() {
     let cdcTenantCount = 0;
     let cdcCycleComplete = false;
     if (!stopping && env.QUICKBOOKS_CDC_WORKER_ENABLED && tickStartedAt >= nextCdcScanAt) {
-      const cdcPage = await visitQuickBooksWorkerTenantPage({
+      const cdcPage = await visitQuickBooksWorkerProviderTenantPage({
         afterTenantId: cdcAfterTenantId,
         loadPage: loadTenantPage,
         visit: async (tenant) => {

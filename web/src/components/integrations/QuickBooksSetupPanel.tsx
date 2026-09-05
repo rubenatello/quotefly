@@ -235,6 +235,15 @@ export function QuickBooksSetupPanel({
         ) : null}
       </div>
 
+      {connection?.status === "ERROR" ? (
+        <div className="mt-5">
+          <Alert tone="error">
+            <p className="font-semibold">{t("admin.quickBooksSetup.connectionSupportRequiredTitle")}</p>
+            <p className="mt-1">{t("admin.quickBooksSetup.connectionSupportRequiredDescription")}</p>
+          </Alert>
+        </div>
+      ) : null}
+
       {actionableFailures.length ? (
         <div className="mt-5">
           <Alert tone="warning">

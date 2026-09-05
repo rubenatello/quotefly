@@ -11,6 +11,7 @@ import {
 } from "../../src/services/worker-heartbeats";
 import {
   loadFreshQuickBooksWorkerOperationalInstances,
+  loadQuickBooksOperationalSnapshot,
   loadQuickBooksWorkerOperationalState,
 } from "../../src/services/quickbooks-operational-health";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
@@ -111,8 +112,15 @@ function useCdcPhase() {
 
 async function createTenant(label: string) {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const now = new Date();
   return prisma.tenant.create({
-    data: { name: `${label} Services`, slug: `${label.toLowerCase()}-${stamp}` },
+    data: {
+      name: `${label} Services`,
+      slug: `${label.toLowerCase()}-${stamp}`,
+      subscriptionStatus: "trialing",
+      trialStartsAtUtc: new Date(now.getTime() - 86_400_000),
+      trialEndsAtUtc: new Date(now.getTime() + 86_400_000),
+    },
   });
 }
 
@@ -427,6 +435,70 @@ describe("QuickBooks content-free operational monitors", () => {
     });
     expect(dueWarning.statusCode).toBe(503);
     expect(dueNotCritical.statusCode).toBe(204);
+  });
+
+  test("keeps paused provider inventory out of global pages while retaining revocation alerts", async () => {
+    const now = new Date();
+    const fixture = await createCdcConnection("MonitorBillingPaused", {
+      status: "CONNECTED",
+      confirmed: true,
+      changedSinceUtc: new Date(now.getTime() - 30 * 60 * 1_000),
+    });
+    await createWebhookEvent(fixture.connection, "billing-paused", {
+      status: "RECEIVED",
+      receivedAtUtc: new Date(now.getTime() - 30 * 60 * 1_000),
+    });
+    await prisma.quickBooksOrphanCredentialRevocation.create({
+      data: {
+        tenantId: fixture.tenant.id,
+        dedupeKeyHash: "f".repeat(64),
+        refreshTokenEncrypted: "synthetic-encrypted-refresh-token",
+        status: "PENDING",
+        nextAttemptAtUtc: new Date(now.getTime() - 10 * 60 * 1_000),
+        createdAt: new Date(now.getTime() - 30 * 60 * 1_000),
+      },
+    });
+    await prisma.tenant.update({
+      where: { id: fixture.tenant.id },
+      data: {
+        subscriptionStatus: "past_due",
+        subscriptionPlanCode: "starter",
+        stripeCustomerId: "cus_qbo_monitor_paused",
+        stripeSubscriptionId: "sub_qbo_monitor_paused",
+        trialStartsAtUtc: new Date(now.getTime() - 3 * 86_400_000),
+        trialEndsAtUtc: new Date(now.getTime() - 2 * 86_400_000),
+        subscriptionCurrentPeriodStartUtc: new Date(now.getTime() - 2 * 86_400_000),
+        subscriptionCurrentPeriodEndUtc: new Date(now.getTime() - 86_400_000),
+      },
+    });
+
+    const snapshot = await loadQuickBooksOperationalSnapshot(prisma, {
+      environment: "sandbox",
+      providerWorkflowsEnabled: true,
+      oauthOnlyMode: true,
+      reconciliationWorkerEnabled: false,
+      cdcWorkerEnabled: false,
+      requireWorkerReleaseIdentity: false,
+    }, { apiReleaseSha: null, now });
+    expect(snapshot.operations).toMatchObject({
+      webhookOutstandingCount: 0,
+      oldestWebhookOutstandingAgeMs: null,
+      reconciliationRequiredCount: 0,
+      oldestReconciliationRequiredAgeMs: null,
+      cdcCursorCount: 0,
+      cdcTerminalCount: 0,
+      cdcOverdueCount: 0,
+      maximumCdcLagMs: null,
+      orphanRevocationPendingCount: 1,
+      orphanRevocationDeadCount: 0,
+    });
+    expect(snapshot.operations.oldestOrphanRevocationPendingAgeMs).toBeGreaterThanOrEqual(30 * 60 * 1_000);
+
+    const critical = await monitorRequest(CRITICAL_URL, {
+      authorization: `Bearer ${MONITOR_BEARER}`,
+    });
+    expect(critical.statusCode).toBe(503);
+    expect(critical.body).toBe("");
   });
 
   test("treats durable reauthorization state as immediately critical without leaking connection data", async () => {

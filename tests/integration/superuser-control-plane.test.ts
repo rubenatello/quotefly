@@ -354,6 +354,37 @@ describe("superuser data-governance control plane", () => {
     expect(tenantsResponse.body).not.toContain(privateOperationProviderId);
     expect(tenantsResponse.body).not.toContain(privateOperationRequestId);
 
+    const originalOauthOnlyMode = app.env.QUICKBOOKS_OAUTH_ONLY_MODE;
+    app.env.QUICKBOOKS_OAUTH_ONLY_MODE = true;
+    try {
+      const confirmedInOauthOnlyMode = await app.inject({
+        method: "GET",
+        url: "/v1/internal/control-plane/tenants?lifecycle=all&quickBooks=confirmed&limit=25&search=Private",
+        headers: { cookie: superuser.cookie },
+      });
+      expect(confirmedInOauthOnlyMode.statusCode).toBe(200);
+      expect((confirmedInOauthOnlyMode.json() as { tenants: unknown[] }).tenants).toHaveLength(0);
+
+      const attentionInOauthOnlyMode = await app.inject({
+        method: "GET",
+        url: "/v1/internal/control-plane/tenants?lifecycle=all&quickBooks=attention&limit=25&search=Private",
+        headers: { cookie: superuser.cookie },
+      });
+      expect(attentionInOauthOnlyMode.statusCode).toBe(200);
+      expect((attentionInOauthOnlyMode.json() as {
+        tenants: Array<{ quickBooks: { setupPhase: string; setupConfirmedAtUtc: string | null } }>;
+      }).tenants).toEqual([
+        expect.objectContaining({
+          quickBooks: expect.objectContaining({
+            setupPhase: "CONNECTION_VERIFIED",
+            setupConfirmedAtUtc: null,
+          }),
+        }),
+      ]);
+    } finally {
+      app.env.QUICKBOOKS_OAUTH_ONLY_MODE = originalOauthOnlyMode;
+    }
+
     const summaryResponse = await app.inject({
       method: "GET",
       url: "/v1/internal/control-plane/summary",
