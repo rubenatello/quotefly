@@ -2032,6 +2032,8 @@ export const enUS = {
       actionRequiredTitle: "Finish these workspace setup items",
       platformWaitingTitle: "QuickBooks is connected, but automation is not ready yet",
       platformWaitingDescription: "QuoteFly is finishing a platform-managed accounting check. You do not need to change anything in QuickBooks; wait for the readiness status before relying on invoice or payment automation.",
+      connectionIntegrityAttentionTitle: "QuickBooks connection needs attention",
+      connectionIntegrityAttentionDescription: "QuoteFly detected a connection-integrity check that must be restored before this staging connection can be treated as verified. Refresh this status or contact QuoteFly support. Do not wait or change anything in QuickBooks.",
       connectionOnlyTitle: "QuickBooks connection verified for staging",
       connectionOnlyDescription: "This staging validation intentionally allows only connection checks. Invoice publishing, hosted payments, signed webhooks, reconciliation, and change-data recovery are disabled and will not become available by waiting. Each requires separate enablement and validation.",
       platformUnavailableTitle: "QuoteFly-managed QuickBooks setup needs attention",

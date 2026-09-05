@@ -2659,6 +2659,35 @@ describe("invoice ledger API", () => {
     })).resolves.toMatchObject({ status: "NEEDS_REAUTH", refreshTokenEncrypted: null });
   });
 
+  test("routes resource-401 reconciliation refresh signals through the caller writer", async () => {
+    const owner = await signUp("invoice-qb-reconcile-signal-writer");
+    const fixture = await createQuickBooksReconciliationFixture(owner, "reconcile-signal-writer");
+    const signalWriter = vi.fn();
+    quickBooksProviderMocks.fetchInvoice.mockRejectedValue(
+      new QuickBooksProviderError("QUICKBOOKS_HTTP_401", false, 401),
+    );
+    quickBooksProviderMocks.refreshToken.mockRejectedValue(
+      new QuickBooksProviderError("QUICKBOOKS_REAUTH_REQUIRED", false, 400),
+    );
+
+    await expect(reconcileQuickBooksInvoice({
+      prisma,
+      runtimeEnv: env,
+      tenantId: owner.tenant.id,
+      invoiceId: fixture.invoice.id,
+      trigger: "MANUAL",
+      getAccessToken: async () => "test-access-token",
+      signalWriter,
+    })).rejects.toMatchObject({ code: "QUICKBOOKS_REAUTH_REQUIRED" });
+
+    expect(signalWriter).toHaveBeenCalledTimes(1);
+    expect(signalWriter).toHaveBeenCalledWith("error", {
+      eventCode: "QUICKBOOKS_TOKEN_REFRESH_REAUTH_REQUIRED",
+      refreshStage: "TOKEN_REFRESH",
+      outcome: "REAUTH_REQUIRED",
+    });
+  });
+
   test("deterministically migrates plaintext hosted links without changing unrelated operation lifecycles", async () => {
     const owner = await signUp("invoice-qb-hosted-link-migration");
     const active = await createQuickBooksReconciliationFixture(owner, "migration-active");

@@ -59,9 +59,15 @@ function quickBooksConnectionOnlyStatus() {
       phase: "CONNECTION_VERIFIED",
       checks: [
         { key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" },
+        { key: "PROVIDER_WORKFLOWS_ENABLED", passed: true, managedBy: "QUOTEFLY" },
         { key: "ACCOUNTING_WORKFLOWS_ENABLED", passed: false, managedBy: "QUOTEFLY" },
         { key: "WEBHOOK_CONFIGURED", passed: false, managedBy: "QUOTEFLY" },
         { key: "CONNECTION_ACTIVE", passed: true, managedBy: "WORKSPACE" },
+        { key: "ENVIRONMENT_MATCHES", passed: true, managedBy: "QUOTEFLY" },
+        { key: "ACCOUNTING_SCOPE_GRANTED", passed: true, managedBy: "WORKSPACE" },
+        { key: "CREDENTIALS_AVAILABLE", passed: true, managedBy: "QUOTEFLY" },
+        { key: "REALM_BINDING_ACTIVE", passed: true, managedBy: "QUOTEFLY" },
+        { key: "CDC_CURSOR_INITIALIZED", passed: true, managedBy: "QUOTEFLY" },
         { key: "SETUP_CONFIRMED", passed: false, managedBy: "WORKSPACE" },
       ],
       capabilities: { ...status.setup.capabilities, canConfirm: false },
@@ -72,6 +78,44 @@ function quickBooksConnectionOnlyStatus() {
         cdcRecoveryReady: false,
         allAccountingWorkflowsReady: false,
       },
+    },
+  };
+}
+
+function quickBooksDegradedConnectionOnlyStatus() {
+  const status = quickBooksConnectionOnlyStatus();
+  return {
+    ...status,
+    setup: {
+      ...status.setup,
+      phase: "ACTION_REQUIRED",
+      checks: [
+        { key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" },
+        { key: "ACCOUNTING_WORKFLOWS_ENABLED", passed: false, managedBy: "QUOTEFLY" },
+        { key: "ENVIRONMENT_MATCHES", passed: false, managedBy: "QUOTEFLY" },
+        { key: "CREDENTIALS_AVAILABLE", passed: false, managedBy: "QUOTEFLY" },
+        { key: "REALM_BINDING_ACTIVE", passed: false, managedBy: "QUOTEFLY" },
+        { key: "CDC_CURSOR_INITIALIZED", passed: false, managedBy: "QUOTEFLY" },
+        { key: "CONNECTION_ACTIVE", passed: true, managedBy: "WORKSPACE" },
+        { key: "SETUP_CONFIRMED", passed: false, managedBy: "WORKSPACE" },
+      ],
+    },
+  };
+}
+
+function quickBooksUnavailableConnectionOnlyStatus() {
+  const status = quickBooksConnectionOnlyStatus();
+  return {
+    ...status,
+    setup: {
+      ...status.setup,
+      phase: "UNAVAILABLE",
+      checks: [
+        { key: "PROVIDER_CONFIGURED", passed: false, managedBy: "QUOTEFLY" },
+        { key: "PROVIDER_WORKFLOWS_ENABLED", passed: false, managedBy: "QUOTEFLY" },
+        { key: "CONNECTION_ACTIVE", passed: true, managedBy: "WORKSPACE" },
+        { key: "SETUP_CONFIRMED", passed: false, managedBy: "WORKSPACE" },
+      ],
     },
   };
 }
@@ -253,6 +297,58 @@ test("connection-only validation clearly labels intentionally disabled accountin
   await expect(page.getByRole("listitem").filter({ hasText: "Provider-backed accounting actions enabled" })).toContainText("Intentionally disabled as a staging safeguard");
   await expect(page.getByRole("listitem").filter({ hasText: "Accounting setup confirmation" })).toContainText("Intentionally disabled");
   await expect(page.getByRole("listitem").filter({ hasText: "Company connection" })).toHaveCount(0);
+});
+
+test("OAuth-only connection-integrity failures remain visible and never claim verification", async ({ context, page, request }) => {
+  const owner = await signUpViaApi(request, "quickbooks-settings-oauth-only-degraded");
+  await addSessionCookie(context, owner);
+  await page.route(`**${quickBooksStatusPath}`, async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(quickBooksDegradedConnectionOnlyStatus()) });
+  });
+
+  await page.goto("/app/settings#admin-quickbooks");
+  await expect(page.getByText("QuickBooks connection verified for staging", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("QuickBooks connection needs attention", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Do not wait or change anything in QuickBooks.", { exact: false })).toBeVisible();
+  await expect(page.getByText("QuickBooks is connected, but automation is not ready yet", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Confirm setup" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /publish|invoice|payment/i })).toHaveCount(0);
+  for (const label of [
+    "Sandbox or production environment matches",
+    "Encrypted credentials available",
+    "Company binding active",
+    "Change-recovery cursor initialized",
+  ]) {
+    await expect(page.getByRole("status").filter({ hasText: label })).toBeVisible();
+  }
+
+  await page.getByText("Setup checks & diagnostics", { exact: true }).click();
+  const setupReadiness = page.getByRole("region", { name: "Setup readiness" });
+  for (const label of [
+    "Sandbox or production environment matches",
+    "Encrypted credentials available",
+    "Company binding active",
+    "Change-recovery cursor initialized",
+  ]) {
+    await expect(setupReadiness.getByRole("listitem").filter({ hasText: label })).toContainText("QuoteFly manages this check.");
+  }
+  await expect(page.getByRole("listitem").filter({ hasText: "Provider-backed accounting actions enabled" }))
+    .toContainText("Intentionally disabled as a staging safeguard");
+});
+
+test("OAuth-only unavailable provider state uses integrity attention on mobile instead of waiting copy", async ({ context, page, request }) => {
+  const owner = await signUpViaApi(request, "quickbooks-settings-oauth-only-unavailable-mobile");
+  await addSessionCookie(context, owner);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route(`**${quickBooksStatusPath}`, async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(quickBooksUnavailableConnectionOnlyStatus()) });
+  });
+
+  await page.goto("/app/settings#admin-quickbooks");
+  await expect(page.getByText("QuickBooks connection verified for staging", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("QuickBooks connection needs attention", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("QuickBooks is connected, but automation is not ready yet", { exact: true })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
 test("QuickBooks setup remains usable at a narrow mobile viewport", async ({ context, page, request }) => {

@@ -43,6 +43,17 @@ const QUICKBOOKS_SETUP_CHECK_KEYS = new Set<QuickBooksSetupCheckKey>([
   "SETUP_CONFIRMED",
 ]);
 
+const QUICKBOOKS_CONNECTION_VERIFICATION_CHECK_KEYS = [
+  "PROVIDER_CONFIGURED",
+  "PROVIDER_WORKFLOWS_ENABLED",
+  "CONNECTION_ACTIVE",
+  "ENVIRONMENT_MATCHES",
+  "ACCOUNTING_SCOPE_GRANTED",
+  "CREDENTIALS_AVAILABLE",
+  "REALM_BINDING_ACTIVE",
+  "CDC_CURSOR_INITIALIZED",
+] as const satisfies readonly QuickBooksSetupCheckKey[];
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -99,16 +110,29 @@ export function normalizeQuickBooksStatusPayload(value: unknown): QuickBooksStat
     return null;
   }
 
-  const validChecks = setup.checks.every((check) => (
-    isRecord(check) &&
-    typeof check.key === "string" &&
-    QUICKBOOKS_SETUP_CHECK_KEYS.has(check.key as QuickBooksSetupCheckKey) &&
-    isBoolean(check.passed) &&
-    (check.managedBy === "QUOTEFLY" || check.managedBy === "WORKSPACE")
-  ));
+  const seenCheckKeys = new Set<QuickBooksSetupCheckKey>();
+  const validChecks = setup.checks.every((check) => {
+    if (
+      !isRecord(check)
+      || typeof check.key !== "string"
+      || !QUICKBOOKS_SETUP_CHECK_KEYS.has(check.key as QuickBooksSetupCheckKey)
+      || !isBoolean(check.passed)
+      || (check.managedBy !== "QUOTEFLY" && check.managedBy !== "WORKSPACE")
+    ) {
+      return false;
+    }
+    const key = check.key as QuickBooksSetupCheckKey;
+    if (seenCheckKeys.has(key)) return false;
+    seenCheckKeys.add(key);
+    return true;
+  });
   if (!validChecks) return null;
 
-  if (value.connection === null) return value as QuickBooksStatusPayload;
+  if (value.connection === null) {
+    return setup.phase === "CONNECTION_VERIFIED"
+      ? null
+      : value as QuickBooksStatusPayload;
+  }
   if (!isRecord(value.connection)) return null;
   const connection = value.connection;
   if (
@@ -127,6 +151,35 @@ export function normalizeQuickBooksStatusPayload(value: unknown): QuickBooksStat
     !Number.isFinite(connection.counts.invoiceSyncs)
   ) {
     return null;
+  }
+
+  if (setup.phase === "CONNECTION_VERIFIED") {
+    const passedChecks = new Set(
+      setup.checks
+        .filter((check) => isRecord(check) && check.passed === true)
+        .map((check) => check.key),
+    );
+    const connectionIntegrityVerified = QUICKBOOKS_CONNECTION_VERIFICATION_CHECK_KEYS.every(
+      (key) => passedChecks.has(key),
+    );
+    if (
+      value.oauthOnlyMode !== true
+      || connection.status !== "CONNECTED"
+      || connection.environment !== value.environment
+      || setup.ready !== false
+      || setup.confirmed !== false
+      || setup.capabilities.canConfirm !== false
+      || [
+        setup.operations.coreConnectionReady,
+        setup.operations.hostedPaymentsReady,
+        setup.operations.reconciliationReady,
+        setup.operations.cdcRecoveryReady,
+        setup.operations.allAccountingWorkflowsReady,
+      ].some((operationReady) => operationReady !== false)
+      || !connectionIntegrityVerified
+    ) {
+      return null;
+    }
   }
 
   return value as QuickBooksStatusPayload;

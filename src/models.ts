@@ -497,6 +497,7 @@ export interface QuickBooksConnectionRow {
   connectedAtUtc: UtcDate;
   disconnectedAtUtc: UtcDate | null;
   lastTokenRefreshAtUtc: UtcDate | null;
+  tokenRefreshFailureStartedAtUtc: UtcDate | null;
   lastSyncAtUtc: UtcDate | null;
   lastWebhookAtUtc: UtcDate | null;
   lastError: string | null;

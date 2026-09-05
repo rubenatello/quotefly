@@ -1,6 +1,6 @@
-# QuickBooks Owner Testing Checklist — Paused
+# QuickBooks Owner Testing Checklist — Progressive Sandbox Gate
 
-Status: Acceptance checklist for a future, separately authorized sandbox run. It is not a production or current launch procedure. Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` until every prerequisite is approved.
+Status: the OAuth-only connection/replay/disconnect/revocation subset is owner-authorized for the final staging SHA. Accounting mutations, signed webhooks, CDC, hosted payments, production, customer exposure, and marketing remain outside that authorization.
 
 Use this with [QuickBooks Hosted Payments And Reconciliation](quickbooks-hosted-payments-reconciliation.md). Mocked tests, local builds, and schema presence are not Intuit sandbox evidence.
 
@@ -21,7 +21,7 @@ in an explicitly authorized sandbox run.
 - [ ] Exact candidate containment tests prove paused connect, callback, publish, refresh, reconcile, and signed webhook paths make zero Intuit calls.
 - [ ] Exact candidate confirms taxable invoices remain blocked and the legacy Quote-based provider write remains retired.
 
-Do not execute the sections below until the automated candidate gate, migration rehearsal, Sentinel review, Opera approval, and explicit sandbox authorization are recorded.
+Do not execute accounting-mutation steps below until the automated candidate gate, migration rehearsal, specialist review, Opera approval, and a separate explicit accounting-sandbox authorization are recorded. The final OAuth-only subset may proceed after exact-SHA CI and the ordered staging deployment, with every accounting capability and worker disabled.
 
 ## Automated candidate gate
 

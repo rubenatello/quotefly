@@ -96,10 +96,11 @@ QUICKBOOKS_CDC_WORKER_ENABLED=false
 
 `QUICKBOOKS_WEBHOOK_VERIFIER` must remain unset in this profile. OAuth-only mode permits status, connect, callback, and disconnect; it rejects setup confirmation, provider search and mapping, invoice sync, hosted links, webhooks, reconciliation, and CDC with a stable `QUICKBOOKS_OAUTH_ONLY_MODE` response.
 
-After masked configuration review, run the connection-stage check without printing values:
+Also configure an independent monitor bearer and the API-only signal ingest URL/token pair through the staging provider's masked secret editor. Do not provision the worker signal pair during OAuth-only staging. After masked configuration review, run both connection-stage checks without printing values:
 
 ```powershell
 npm run infra:variables:audit -- --profile quickbooks-oauth
+npm run infra:variables:audit -- --profile quickbooks-signals-api
 ```
 
 Do not advance directly to the full profile. For each separately authorized phase, change only the documented capability flags and run `quickbooks-reconciliation`, then `quickbooks-cdc`, then `quickbooks-hosted-payments`. The `quickbooks` alias is equivalent to the final hosted-payments profile; it is not an additional phase.
@@ -109,15 +110,17 @@ Before changing a flag, record approval, exact candidate SHA, migrated staging d
 ## 3. Prepare the exact staging candidate
 
 1. Confirm the exact candidate passes `npm run verify:launch` against a dedicated migrated test database.
-2. Confirm the presence-only audit passes for the authorized stage; for the first proof this is `quickbooks-oauth`.
+2. Confirm the presence-only audits pass for the authorized OAuth stage: `quickbooks-oauth` and `quickbooks-signals-api`.
 3. Apply checked-in migrations to an isolated staging database through the migration job, never through the runtime database credential.
-4. Start the API from the same exact SHA with the least-privileged `quotefly_runtime` database role.
-5. Confirm `/v1/health` and `/v1/ready` succeed before starting a worker or routing the web app to this candidate.
-6. For reconciliation and later stages only, start the worker from the same exact SHA, then require a fresh heartbeat and matching API/worker release identity. Keep the worker off for OAuth-only.
-7. Deploy the web app from the same exact SHA only after API readiness and, when enabled, worker readiness succeed.
-8. Confirm provider logs and access logs do not retain callback query strings or hosted invoice links.
-9. Confirm an alert destination exists for OAuth and token-revocation failures. Webhook, reconciliation, and CDC alerts are required before the later accounting proof.
-10. Run `node scripts/quickbooks-staging-oauth-smoke.mjs`. It is hard-locked to the approved staging API, creates a disposable staging tenant, verifies the pre-connection fail-closed behavior and Intuit authorization handoff, and never prints credentials, OAuth state, or the authorization URL.
+4. Use GitHub-connected Railway services for release evidence. Connect the staging migration service first, and then the API service only after the migration ledger passes, to `rubenatello/quotefly` branch `agent/consumer-launch-readiness`; keep autodeploy disabled and use **Deploy Latest Commit**. A CLI upload does not receive Railway's Git commit metadata and cannot prove the release identity.
+5. Before that Railway Git deployment, remove the staging variable name `QUOTEFLY_RELEASE_SHA` from the API and worker in the masked provider UI without opening its value. Rely on Railway's injected `RAILWAY_GIT_COMMIT_SHA`; a stale valid manual identity intentionally prevents startup. Do not replace the variable with an empty value or inspect the variable set through the CLI.
+6. Start the API from the same exact SHA with the least-privileged `quotefly_runtime` database role.
+7. Confirm `/v1/health` and `/v1/ready` succeed before starting a worker or routing the web app to this candidate.
+8. For reconciliation and later stages only, start the worker from the same exact SHA, then require a fresh heartbeat and matching API/worker release identity. Keep the worker off for OAuth-only.
+9. Promote the exact ready `quotefly-web` Git preview to `staging.quotefly.us` only after API readiness and, when enabled, worker readiness succeed. Do not use the obsolete `quotefly` Vercel project or a manual CLI build as release evidence.
+9. Confirm provider logs and access logs do not retain callback query strings or hosted invoice links.
+10. Trigger the documented synthetic, content-free callback/revocation canary and confirm the named alert destination receives it without token, realm, company, customer, callback-query, or provider-payload data. Webhook, reconciliation, CDC, and worker-signal alerts are required before the later accounting proof.
+11. Run `node scripts/quickbooks-staging-oauth-smoke.mjs`. It is hard-locked to the approved staging API, creates a disposable staging tenant, verifies the pre-connection fail-closed behavior and Intuit authorization handoff, and never prints credentials, OAuth state, or the authorization URL.
 
 Only then run the connection proof. Mapping, hosted payments, webhooks, and workers remain outside this stage.
 

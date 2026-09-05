@@ -5,6 +5,7 @@ import {
   claimQuickBooksWebhookEvent,
   completeQuickBooksWebhookEvent,
   failQuickBooksWebhookEvent,
+  quickBooksWebhookEventClaimableWhere,
   renewQuickBooksWebhookClaim,
 } from "../../src/services/quickbooks-webhook-inbox";
 import { classifyQuickBooksWorkerFailure } from "../../src/services/quickbooks-worker-failures";
@@ -130,5 +131,110 @@ describe("QuickBooks reconciliation dead-letter policy", () => {
     await expect(completeQuickBooksWebhookEvent(prisma, reclaimed!)).resolves.toBe(true);
     await expect(prisma.quickBooksWebhookEvent.findUniqueOrThrow({ where: { id: event.id } }))
       .resolves.toMatchObject({ status: "PROCESSED", attemptCount: 2 });
+  });
+
+  test("uses the same due predicate for backlog inspection and webhook claims", async () => {
+    const { tenant, event, claim } = await createClaim("ClaimableBacklog");
+    await expect(completeQuickBooksWebhookEvent(prisma, claim)).resolves.toBe(true);
+    const connection = await prisma.quickBooksConnection.findUniqueOrThrow({
+      where: { id: claim.quickBooksConnectionId },
+      select: {
+        setupConfirmedAtUtc: true,
+        setupConfirmedByTenantUserId: true,
+      },
+    });
+    if (!connection.setupConfirmedAtUtc || !connection.setupConfirmedByTenantUserId) {
+      throw new Error("Expected the claim fixture to have a confirmed QuickBooks connection.");
+    }
+
+    const now = new Date();
+    const countClaimableEvents = () => prisma.quickBooksWebhookEvent.count({
+      where: quickBooksWebhookEventClaimableWhere(tenant.id, now),
+    });
+    await expect(countClaimableEvents()).resolves.toBe(0);
+
+    await prisma.quickBooksWebhookEvent.update({
+      where: { id: event.id },
+      data: { status: "RECEIVED", processedAtUtc: null },
+    });
+    await expect(countClaimableEvents()).resolves.toBe(1);
+
+    await prisma.quickBooksWebhookEvent.update({
+      where: { id: event.id },
+      data: { status: "FAILED", nextAttemptAtUtc: new Date(now.getTime() + 60_000) },
+    });
+    await expect(countClaimableEvents()).resolves.toBe(0);
+    await prisma.quickBooksWebhookEvent.update({
+      where: { id: event.id },
+      data: { nextAttemptAtUtc: new Date(now.getTime() - 1) },
+    });
+    await expect(countClaimableEvents()).resolves.toBe(1);
+
+    await prisma.quickBooksWebhookEvent.update({
+      where: { id: event.id },
+      data: {
+        status: "PROCESSING",
+        nextAttemptAtUtc: null,
+        claimExpiresAtUtc: new Date(now.getTime() + 60_000),
+      },
+    });
+    await expect(countClaimableEvents()).resolves.toBe(0);
+    await prisma.quickBooksWebhookEvent.update({
+      where: { id: event.id },
+      data: { claimExpiresAtUtc: new Date(now.getTime() - 1) },
+    });
+    await expect(countClaimableEvents()).resolves.toBe(1);
+
+    await prisma.quickBooksWebhookEvent.update({
+      where: { id: event.id },
+      data: { status: "RECEIVED", claimExpiresAtUtc: null },
+    });
+    await prisma.quickBooksConnection.update({
+      where: { id: claim.quickBooksConnectionId },
+      data: {
+        setupConfirmedAtUtc: null,
+        setupConfirmedByTenantUserId: null,
+        setupChecklistVersion: null,
+      },
+    });
+    await expect(countClaimableEvents()).resolves.toBe(0);
+
+    await prisma.quickBooksConnection.update({
+      where: { id: claim.quickBooksConnectionId },
+      data: {
+        setupConfirmedAtUtc: connection.setupConfirmedAtUtc,
+        setupConfirmedByTenantUserId: connection.setupConfirmedByTenantUserId,
+        setupChecklistVersion: "superseded-checklist",
+      },
+    });
+    await expect(countClaimableEvents()).resolves.toBe(0);
+    await expect(claimQuickBooksWebhookEvent(prisma, tenant.id, now)).resolves.toBeNull();
+
+    await prisma.quickBooksConnection.update({
+      where: { id: claim.quickBooksConnectionId },
+      data: {
+        setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+        status: "DISCONNECTED",
+      },
+    });
+    await expect(countClaimableEvents()).resolves.toBe(0);
+
+    await prisma.quickBooksConnection.update({
+      where: { id: claim.quickBooksConnectionId },
+      data: {
+        status: "NEEDS_REAUTH",
+      },
+    });
+    await expect(countClaimableEvents()).resolves.toBe(0);
+
+    await prisma.quickBooksConnection.update({
+      where: { id: claim.quickBooksConnectionId },
+      data: {
+        status: "CONNECTED",
+        setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+        deletedAtUtc: new Date(),
+      },
+    });
+    await expect(countClaimableEvents()).resolves.toBe(0);
   });
 });

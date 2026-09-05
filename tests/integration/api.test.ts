@@ -37,6 +37,10 @@ const quickBooksProviderMocks = vi.hoisted(() => ({
   revokeToken: vi.fn(),
 }));
 
+const quickBooksObservabilityMocks = vi.hoisted(() => ({
+  writeSignal: vi.fn(),
+}));
+
 const stripeProviderMocks = vi.hoisted(() => ({
   retrieveSubscription: vi.fn(),
   retrieveCheckoutSession: vi.fn(),
@@ -85,6 +89,16 @@ vi.mock("../../src/services/quickbooks", async () => {
     fetchQuickBooksInvoice: quickBooksProviderMocks.fetchInvoice,
     findQuickBooksInvoicesByDocNumber: quickBooksProviderMocks.findInvoiceByDocNumber,
     revokeQuickBooksToken: quickBooksProviderMocks.revokeToken,
+  };
+});
+
+vi.mock("../../src/services/quickbooks-observability", async () => {
+  const actual = await vi.importActual<typeof import("../../src/services/quickbooks-observability")>(
+    "../../src/services/quickbooks-observability",
+  );
+  return {
+    ...actual,
+    createQuickBooksSignalWriter: () => quickBooksObservabilityMocks.writeSignal,
   };
 });
 
@@ -263,6 +277,7 @@ describe("QuoteFly API integration", () => {
     transactionalEmailMocks.sendPasswordReset.mockReset().mockResolvedValue(undefined);
     transactionalEmailMocks.sendPasswordChanged.mockReset().mockResolvedValue(undefined);
     quickBooksProviderMocks.revokeToken.mockReset().mockResolvedValue(undefined);
+    quickBooksObservabilityMocks.writeSignal.mockReset();
   });
 
   beforeAll(async () => {
@@ -4903,12 +4918,30 @@ describe("QuoteFly API integration", () => {
         userId: session.user.id,
         role: "owner",
       });
+      await prisma.quickBooksOAuthState.create({
+        data: {
+          tenantId: session.tenant.id,
+          quickBooksConnectionId: connection.id,
+          userId: session.user.id,
+          stateHash: createHash("sha256").update(state).digest("hex"),
+          expiresAtUtc: new Date(Date.now() + 60_000),
+        },
+      });
       const callback = await app.inject({
         method: "GET",
         url: `/v1/integrations/quickbooks/callback?state=${encodeURIComponent(state)}&code=paused-code&realmId=paused-realm`,
+        headers: authHeaders(session.cookie),
       });
-      expect(callback.statusCode).toBe(302);
-      expect(callback.headers.location).toContain("integrations=quickbooks_invalid_state");
+      expect(callback.statusCode).toBe(503);
+      expect(callback.json()).toEqual({ error: "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE" });
+      expect(quickBooksObservabilityMocks.writeSignal.mock.calls).toEqual([[
+        "error",
+        {
+          eventCode: "QUICKBOOKS_OAUTH_WORKFLOWS_DISABLED",
+          callbackStage: "RUNTIME_VALIDATION",
+          outcome: "FAILED",
+        },
+      ]]);
 
       const publish = await app.inject({
         method: "POST",
@@ -5341,6 +5374,14 @@ describe("QuoteFly API integration", () => {
     expect(denied.headers.location).toContain("integrations=quickbooks_denied");
     expect(denied.headers["cache-control"]).toBe("private, no-store");
     expect(denied.headers["referrer-policy"]).toBe("no-referrer");
+    expect(quickBooksObservabilityMocks.writeSignal.mock.calls).toEqual([[
+      "info",
+      {
+        eventCode: "QUICKBOOKS_OAUTH_CALLBACK_DENIED",
+        callbackStage: "CALLBACK_VALIDATION",
+        outcome: "DENIED",
+      },
+    ]]);
 
     const replay = await app.inject({
       method: "GET",
@@ -5350,6 +5391,14 @@ describe("QuoteFly API integration", () => {
     expect(replay.headers.location).toContain("integrations=quickbooks_invalid_state");
     expect(replay.headers["cache-control"]).toBe("private, no-store");
     expect(replay.headers["referrer-policy"]).toBe("no-referrer");
+    expect(quickBooksObservabilityMocks.writeSignal.mock.calls.slice(-1)).toEqual([[
+      "warn",
+      {
+        eventCode: "QUICKBOOKS_OAUTH_STATE_REPLAYED",
+        callbackStage: "STATE_LOOKUP",
+        outcome: "REJECTED",
+      },
+    ]]);
 
     const malformed = await app.inject({
       method: "GET",
@@ -5358,6 +5407,19 @@ describe("QuoteFly API integration", () => {
     expect(malformed.statusCode).toBe(400);
     expect(malformed.headers["cache-control"]).toBe("private, no-store");
     expect(malformed.headers["referrer-policy"]).toBe("no-referrer");
+    expect(quickBooksObservabilityMocks.writeSignal.mock.calls.slice(-1)).toEqual([[
+      "warn",
+      {
+        eventCode: "QUICKBOOKS_OAUTH_CALLBACK_MALFORMED",
+        callbackStage: "QUERY_VALIDATION",
+        outcome: "REJECTED",
+      },
+    ]]);
+    expect(quickBooksObservabilityMocks.writeSignal).toHaveBeenCalledTimes(3);
+    const terminalSignalJson = JSON.stringify(quickBooksObservabilityMocks.writeSignal.mock.calls);
+    expect(terminalSignalJson).not.toContain(state);
+    expect(terminalSignalJson).not.toContain("replay-code");
+    expect(terminalSignalJson).not.toContain("replay-realm");
     expect(quickBooksProviderMocks.exchangeAuthorizationCode).not.toHaveBeenCalled();
     expect(quickBooksProviderMocks.fetchCompanyInfo).not.toHaveBeenCalled();
     expect(await prisma.quickBooksConnection.count({ where: { tenantId: owner.tenant.id } })).toBe(0);
@@ -5431,6 +5493,28 @@ describe("QuoteFly API integration", () => {
     });
     expect(wrongSessionReplay.statusCode).toBe(302);
     expect(wrongSessionReplay.headers.location).toContain("integrations=quickbooks_denied");
+    expect(quickBooksObservabilityMocks.writeSignal.mock.calls).toEqual([
+      ["warn", {
+        eventCode: "QUICKBOOKS_OAUTH_SESSION_INVALID",
+        callbackStage: "SESSION_VALIDATION",
+        outcome: "REJECTED",
+      }],
+      ["info", {
+        eventCode: "QUICKBOOKS_OAUTH_CALLBACK_DENIED",
+        callbackStage: "CALLBACK_VALIDATION",
+        outcome: "DENIED",
+      }],
+      ["warn", {
+        eventCode: "QUICKBOOKS_OAUTH_SESSION_INVALID",
+        callbackStage: "SESSION_VALIDATION",
+        outcome: "REJECTED",
+      }],
+      ["info", {
+        eventCode: "QUICKBOOKS_OAUTH_CALLBACK_DENIED",
+        callbackStage: "CALLBACK_VALIDATION",
+        outcome: "DENIED",
+      }],
+    ]);
     expect(quickBooksProviderMocks.exchangeAuthorizationCode).not.toHaveBeenCalled();
     expect(quickBooksProviderMocks.fetchCompanyInfo).not.toHaveBeenCalled();
   });
@@ -5447,6 +5531,7 @@ describe("QuoteFly API integration", () => {
         companyName: "Incorrect Sandbox Company",
         status: "DISCONNECTED",
         disconnectedAtUtc: new Date(),
+        tokenRefreshFailureStartedAtUtc: new Date("2026-08-31T12:00:00.000Z"),
         realmBinding: {
           create: { realmId: previousRealmId, active: false },
         },
@@ -5498,6 +5583,7 @@ describe("QuoteFly API integration", () => {
       realmId: replacementRealmId,
       companyName: "Correct Sandbox Company",
       status: "CONNECTED",
+      tokenRefreshFailureStartedAtUtc: null,
       realmBinding: { realmId: replacementRealmId, active: true },
     });
     expect(saved.cdcCursor?.lastAttemptAtUtc).toBeNull();
@@ -5647,6 +5733,14 @@ describe("QuoteFly API integration", () => {
       expect(response.headers["referrer-policy"]).toBe("no-referrer");
       expect(quickBooksProviderMocks.exchangeAuthorizationCode).toHaveBeenCalledOnce();
       expect(quickBooksProviderMocks.fetchCompanyInfo).toHaveBeenCalledOnce();
+      expect(quickBooksObservabilityMocks.writeSignal.mock.calls).toEqual([[
+        "info",
+        {
+          eventCode: "QUICKBOOKS_OAUTH_CALLBACK_COMPLETED",
+          callbackStage: "COMPLETED",
+          outcome: "SUCCEEDED",
+        },
+      ]]);
 
       const connection = await prisma.quickBooksConnection.findUniqueOrThrow({
         where: { tenantId: session.tenant.id },
@@ -5741,6 +5835,14 @@ describe("QuoteFly API integration", () => {
     expect(JSON.stringify(orphan)).not.toContain(orphanAccessToken);
     expect(response.body).not.toContain(orphanRefreshToken);
     expect(response.headers.location).not.toContain(orphanRefreshToken);
+    expect(quickBooksObservabilityMocks.writeSignal.mock.calls).toEqual([[
+      "warn",
+      {
+        eventCode: "QUICKBOOKS_OAUTH_AUTHORIZATION_REVOKED",
+        callbackStage: "AUTHORIZATION_RECHECK",
+        outcome: "REJECTED",
+      },
+    ]]);
   });
 
   test("atomically revalidates the live manager while waiting for the QuickBooks integration lock", async () => {
@@ -5834,6 +5936,14 @@ describe("QuoteFly API integration", () => {
     expect(quickBooksProviderMocks.exchangeAuthorizationCode).toHaveBeenCalledOnce();
     expect(quickBooksProviderMocks.fetchCompanyInfo).toHaveBeenCalledOnce();
     expect(quickBooksProviderMocks.revokeToken).toHaveBeenCalledOnce();
+    expect(quickBooksObservabilityMocks.writeSignal.mock.calls).toEqual([[
+      "warn",
+      {
+        eventCode: "QUICKBOOKS_OAUTH_AUTHORIZATION_REVOKED",
+        callbackStage: "CREDENTIAL_PERSISTENCE",
+        outcome: "REJECTED",
+      },
+    ]]);
     await expect(
       prisma.quickBooksConnection.count({ where: { tenantId: session.tenant.id } }),
     ).resolves.toBe(0);
@@ -5872,6 +5982,17 @@ describe("QuoteFly API integration", () => {
     expect(response.headers.location).not.toContain("secret-access-token");
     expect(response.body).not.toContain("secret-access-token");
     expect(quickBooksProviderMocks.fetchCompanyInfo).not.toHaveBeenCalled();
+    expect(quickBooksObservabilityMocks.writeSignal.mock.calls).toEqual([[
+      "error",
+      {
+        eventCode: "QUICKBOOKS_OAUTH_CALLBACK_UNKNOWN",
+        callbackStage: "TOKEN_EXCHANGE",
+        outcome: "FAILED",
+      },
+    ]]);
+    expect(JSON.stringify(quickBooksObservabilityMocks.writeSignal.mock.calls)).not.toContain(
+      sensitiveProviderMessage,
+    );
     await expect(
       prisma.quickBooksConnection.count({ where: { tenantId: session.tenant.id } }),
     ).resolves.toBe(0);

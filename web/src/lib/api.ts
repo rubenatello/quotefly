@@ -489,6 +489,26 @@ export type InternalControlPlaneSummary = {
   };
   workers: {
     quickBooksReconciliation: WorkerHeartbeatPayload | null;
+    quickBooksOperations: {
+      webhookOutstandingCount: number;
+      webhookDeadCount: number;
+      oldestWebhookOutstandingAgeMs: number | null;
+      reconciliationRequiredCount: number;
+      oldestReconciliationRequiredAgeMs: number | null;
+      cdcCursorCount: number;
+      cdcTerminalCount: number;
+      cdcOverdueCount: number;
+      maximumCdcLagMs: number | null;
+      connectionRevocationPendingCount: number;
+      connectionRevocationDeadCount: number;
+      oldestConnectionRevocationPendingAgeMs: number | null;
+      orphanRevocationPendingCount: number;
+      orphanRevocationDeadCount: number;
+      oldestOrphanRevocationPendingAgeMs: number | null;
+      tokenRefreshFailureConnectionCount: number;
+      tokenRefreshReauthRequiredCount: number;
+      oldestTokenRefreshFailureAgeMs: number | null;
+    };
   };
   mutationPolicy: { enabled: false; reason: string };
 };

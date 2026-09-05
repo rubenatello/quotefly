@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { parseEnv } from "../../src/config/env.js";
+import {
+  assertQuickBooksOperationalMonitorApiConfiguration,
+  buildServer,
+} from "../../src/app.js";
+import { env, parseEnv } from "../../src/config/env.js";
 import {
   CURRENT_PRIVACY_POLICY_VERSION as API_PRIVACY_POLICY_VERSION,
   CURRENT_TERMS_VERSION as API_TERMS_VERSION,
@@ -202,6 +206,49 @@ describe("security boundary helpers", () => {
     expect(() => parseEnv({
       ...quickBooksDevelopmentEnv,
       QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      QUICKBOOKS_MONITOR_BEARER: "short-monitor-bearer",
+    })).toThrow(/QUICKBOOKS_MONITOR_BEARER must be at least 32 characters/i);
+    expect(() => parseEnv({
+      ...quickBooksDevelopmentEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      QUICKBOOKS_MONITOR_BEARER: quickBooksDevelopmentEnv.JWT_SECRET,
+    })).toThrow(/must be independent from application and provider secrets/i);
+    expect(() => parseEnv({
+      ...quickBooksDevelopmentEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      QUICKBOOKS_MONITOR_BEARER: "independent-quickbooks-monitor-bearer-000001",
+    })).not.toThrow();
+    const workerRuntimeWithoutMonitorBearer = parseEnv({
+      ...quickBooksDevelopmentEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
+      QUICKBOOKS_WEBHOOK_VERIFIER: "quickbooks-webhook-verifier-sentinel",
+      QUICKBOOKS_MONITOR_BEARER: "",
+    });
+    expect(workerRuntimeWithoutMonitorBearer.QUICKBOOKS_MONITOR_BEARER).toBe("");
+    expect(() => assertQuickBooksOperationalMonitorApiConfiguration(
+      workerRuntimeWithoutMonitorBearer,
+    )).toThrow(/required on the API before QuickBooks reconciliation or CDC workers/i);
+    const originalApiMonitorConfiguration = {
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED,
+      QUICKBOOKS_CDC_WORKER_ENABLED: env.QUICKBOOKS_CDC_WORKER_ENABLED,
+      QUICKBOOKS_MONITOR_BEARER: env.QUICKBOOKS_MONITOR_BEARER,
+    };
+    try {
+      Object.assign(env, {
+        QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: true,
+        QUICKBOOKS_CDC_WORKER_ENABLED: false,
+        QUICKBOOKS_MONITOR_BEARER: "",
+      });
+      expect(() => buildServer()).toThrow(
+        /QUICKBOOKS_MONITOR_BEARER is required on the API before QuickBooks reconciliation or CDC workers/i,
+      );
+    } finally {
+      Object.assign(env, originalApiMonitorConfiguration);
+    }
+    expect(() => parseEnv({
+      ...quickBooksDevelopmentEnv,
+      QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "independent-quickbooks-token-key-000001",
       QUICKBOOKS_OAUTH_ONLY_MODE: "true",
       QUICKBOOKS_WEBHOOK_VERIFIER: "",
       QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "false",
@@ -287,6 +334,39 @@ describe("security boundary helpers", () => {
       QUICKBOOKS_ENVIRONMENT: "production",
       QUICKBOOKS_REDIRECT_URI: "http://api.quotefly.example/v1/integrations/quickbooks/callback",
     })).toThrow(/QUICKBOOKS_REDIRECT_URI must use HTTPS/i);
+    const quickBooksSignalSinkEnv = {
+      ...productionEnv,
+      QUICKBOOKS_API_SIGNAL_INGEST_URL: "https://api-signals.example.test",
+      QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN: "independent-api-signal-source-token",
+      QUICKBOOKS_WORKER_SIGNAL_INGEST_URL: "https://worker-signals.example.test",
+      QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN: "independent-worker-signal-source-token",
+      QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS: "1250",
+    } satisfies NodeJS.ProcessEnv;
+    expect(() => parseEnv(quickBooksSignalSinkEnv)).not.toThrow();
+    expect(() => parseEnv({
+      ...quickBooksSignalSinkEnv,
+      QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN: "",
+    })).toThrow(/API signal ingest URL and source token must be configured together/i);
+    expect(() => parseEnv({
+      ...quickBooksSignalSinkEnv,
+      QUICKBOOKS_API_SIGNAL_INGEST_URL: "http://api-signals.example.test",
+    })).toThrow(/signal ingest URL must use HTTPS/i);
+    expect(() => parseEnv({
+      ...quickBooksSignalSinkEnv,
+      QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN: "short",
+    })).toThrow(/must be at least 16 characters/i);
+    expect(() => parseEnv({
+      ...quickBooksSignalSinkEnv,
+      QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN: quickBooksSignalSinkEnv.QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN,
+    })).toThrow(/must be independent from application, provider, monitor, and peer signal-source secrets/i);
+    expect(() => parseEnv({
+      ...quickBooksSignalSinkEnv,
+      QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN: quickBooksSignalSinkEnv.JWT_SECRET,
+    })).toThrow(/must be independent from application, provider, monitor, and peer signal-source secrets/i);
+    expect(() => parseEnv({
+      ...quickBooksSignalSinkEnv,
+      QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS: "5000",
+    })).toThrow();
   });
 
   it("validates the shared production rate-limit store when scale-out is enforced", () => {

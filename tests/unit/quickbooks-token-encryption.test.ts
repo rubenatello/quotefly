@@ -281,6 +281,7 @@ describe("QuickBooks runtime feature dependencies", () => {
       QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "true",
       QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
       QUICKBOOKS_CDC_WORKER_ENABLED: "true",
+      QUICKBOOKS_MONITOR_BEARER: "independent-quickbooks-monitor-bearer-000001",
     }));
   });
 

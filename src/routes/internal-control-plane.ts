@@ -20,6 +20,7 @@ import {
   QUICKBOOKS_SETUP_CHECKLIST_VERSION,
 } from "../services/quickbooks-setup";
 import { isQuickBooksConfigured, isQuickBooksWebhookConfigured } from "../services/quickbooks";
+import { loadQuickBooksOperationalAggregate } from "../services/quickbooks-operational-health";
 import {
   loadWorkerHeartbeatFleet,
   QUICKBOOKS_RECONCILIATION_WORKER_KEY,
@@ -96,42 +97,6 @@ type QuickBooksControlPlaneRow = Readonly<{
   customerMaps: number;
   itemMaps: number;
   invoiceSyncs: number;
-}>;
-
-type QuickBooksOperationalRow = Readonly<{
-  webhookOutstandingCount: number;
-  webhookDeadCount: number;
-  oldestWebhookOutstandingAtUtc: Date | null;
-  reconciliationRequiredCount: number;
-  oldestReconciliationRequiredAtUtc: Date | null;
-  cdcCursorCount: number;
-  cdcTerminalCount: number;
-  cdcOverdueCount: number;
-  oldestCdcChangedSinceUtc: Date | null;
-  connectionRevocationPendingCount: number;
-  connectionRevocationDeadCount: number;
-  oldestConnectionRevocationPendingAtUtc: Date | null;
-  orphanRevocationPendingCount: number;
-  orphanRevocationDeadCount: number;
-  oldestOrphanRevocationPendingAtUtc: Date | null;
-}>;
-
-type QuickBooksOperationalAggregate = Readonly<{
-  webhookOutstandingCount: number;
-  webhookDeadCount: number;
-  oldestWebhookOutstandingAgeMs: number | null;
-  reconciliationRequiredCount: number;
-  oldestReconciliationRequiredAgeMs: number | null;
-  cdcCursorCount: number;
-  cdcTerminalCount: number;
-  cdcOverdueCount: number;
-  maximumCdcLagMs: number | null;
-  connectionRevocationPendingCount: number;
-  connectionRevocationDeadCount: number;
-  oldestConnectionRevocationPendingAgeMs: number | null;
-  orphanRevocationPendingCount: number;
-  orphanRevocationDeadCount: number;
-  oldestOrphanRevocationPendingAgeMs: number | null;
 }>;
 
 const ControlPlaneTenantSelect = Prisma.validator<Prisma.TenantSelect>()({
@@ -219,158 +184,6 @@ async function loadQuickBooksControlPlaneRow(
   return rows[0] ?? null;
 }
 
-async function loadQuickBooksOperationalRow(
-  prisma: PrismaClient,
-  tenantId: string,
-  now: Date,
-): Promise<QuickBooksOperationalRow> {
-  const rows = await withTenantRlsContext(prisma, tenantId, (transaction) =>
-    transaction.$queryRaw<QuickBooksOperationalRow[]>(Prisma.sql`
-      SELECT
-        (
-          SELECT count(*)::int
-          FROM "QuickBooksWebhookEvent" event
-          WHERE event."tenantId" = ${tenantId}
-            AND event."status" IN ('RECEIVED', 'PROCESSING', 'FAILED')
-        ) AS "webhookOutstandingCount",
-        (
-          SELECT count(*)::int
-          FROM "QuickBooksWebhookEvent" event
-          WHERE event."tenantId" = ${tenantId}
-            AND event."status" = 'DEAD'
-        ) AS "webhookDeadCount",
-        (
-          SELECT min(event."receivedAtUtc")
-          FROM "QuickBooksWebhookEvent" event
-          WHERE event."tenantId" = ${tenantId}
-            AND event."status" IN ('RECEIVED', 'PROCESSING', 'FAILED')
-        ) AS "oldestWebhookOutstandingAtUtc",
-        (
-          SELECT count(*)::int
-          FROM "QuickBooksInvoiceOperation" operation
-          WHERE operation."tenantId" = ${tenantId}
-            AND operation."status" = 'RECONCILIATION_REQUIRED'
-            AND operation."archivedAtUtc" IS NULL
-        ) AS "reconciliationRequiredCount",
-        (
-          SELECT min(COALESCE(operation."failedAtUtc", operation."updatedAt"))
-          FROM "QuickBooksInvoiceOperation" operation
-          WHERE operation."tenantId" = ${tenantId}
-            AND operation."status" = 'RECONCILIATION_REQUIRED'
-            AND operation."archivedAtUtc" IS NULL
-        ) AS "oldestReconciliationRequiredAtUtc",
-        (
-          SELECT count(*)::int
-          FROM "QuickBooksCdcCursor" cursor
-          WHERE cursor."tenantId" = ${tenantId}
-        ) AS "cdcCursorCount",
-        (
-          SELECT count(*)::int
-          FROM "QuickBooksCdcCursor" cursor
-          WHERE cursor."tenantId" = ${tenantId}
-            AND cursor."terminalAtUtc" IS NOT NULL
-        ) AS "cdcTerminalCount",
-        (
-          SELECT count(*)::int
-          FROM "QuickBooksCdcCursor" cursor
-          WHERE cursor."tenantId" = ${tenantId}
-            AND cursor."terminalAtUtc" IS NULL
-            AND (cursor."nextAttemptAtUtc" IS NULL OR cursor."nextAttemptAtUtc" <= ${now})
-        ) AS "cdcOverdueCount",
-        (
-          SELECT min(cursor."changedSinceUtc")
-          FROM "QuickBooksCdcCursor" cursor
-          WHERE cursor."tenantId" = ${tenantId}
-            AND cursor."terminalAtUtc" IS NULL
-        ) AS "oldestCdcChangedSinceUtc",
-        (
-          SELECT count(*)::int
-          FROM "QuickBooksConnection" connection
-          WHERE connection."tenantId" = ${tenantId}
-            AND connection."deletedAtUtc" IS NULL
-            AND connection."status" = 'REVOCATION_PENDING'
-        ) AS "connectionRevocationPendingCount",
-        (
-          SELECT count(*)::int
-          FROM "QuickBooksConnection" connection
-          WHERE connection."tenantId" = ${tenantId}
-            AND connection."deletedAtUtc" IS NULL
-            AND connection."status" = 'ERROR'
-            AND connection."lastError" = 'QUICKBOOKS_TOKEN_REVOCATION_DEAD'
-        ) AS "connectionRevocationDeadCount",
-        (
-          SELECT min(COALESCE(
-            connection."revocationPendingAtUtc",
-            connection."disconnectRequestedAtUtc",
-            connection."updatedAt"
-          ))
-          FROM "QuickBooksConnection" connection
-          WHERE connection."tenantId" = ${tenantId}
-            AND connection."deletedAtUtc" IS NULL
-            AND connection."status" = 'REVOCATION_PENDING'
-        ) AS "oldestConnectionRevocationPendingAtUtc",
-        (
-          SELECT count(*)::int
-          FROM "QuickBooksOrphanCredentialRevocation" revocation
-          WHERE revocation."tenantId" = ${tenantId}
-            AND revocation."status" IN ('PENDING', 'PROCESSING')
-        ) AS "orphanRevocationPendingCount",
-        (
-          SELECT count(*)::int
-          FROM "QuickBooksOrphanCredentialRevocation" revocation
-          WHERE revocation."tenantId" = ${tenantId}
-            AND revocation."status" = 'DEAD'
-        ) AS "orphanRevocationDeadCount",
-        (
-          SELECT min(revocation."createdAt")
-          FROM "QuickBooksOrphanCredentialRevocation" revocation
-          WHERE revocation."tenantId" = ${tenantId}
-            AND revocation."status" IN ('PENDING', 'PROCESSING')
-        ) AS "oldestOrphanRevocationPendingAtUtc"
-    `),
-  );
-  const row = rows[0];
-  if (!row) throw new Error("QuickBooks operational metrics query returned no row.");
-  return row;
-}
-
-function ageMs(now: Date, value: Date | null): number | null {
-  return value ? Math.max(0, now.getTime() - value.getTime()) : null;
-}
-
-function aggregateQuickBooksOperationalRows(
-  rows: readonly QuickBooksOperationalRow[],
-  now: Date,
-): QuickBooksOperationalAggregate {
-  const oldestDate = (values: readonly (Date | null)[]) => values.reduce<Date | null>(
-    (oldest, value) => !value || (oldest && oldest <= value) ? oldest : value,
-    null,
-  );
-  return {
-    webhookOutstandingCount: rows.reduce((total, row) => total + row.webhookOutstandingCount, 0),
-    webhookDeadCount: rows.reduce((total, row) => total + row.webhookDeadCount, 0),
-    oldestWebhookOutstandingAgeMs: ageMs(now, oldestDate(rows.map((row) => row.oldestWebhookOutstandingAtUtc))),
-    reconciliationRequiredCount: rows.reduce((total, row) => total + row.reconciliationRequiredCount, 0),
-    oldestReconciliationRequiredAgeMs: ageMs(now, oldestDate(rows.map((row) => row.oldestReconciliationRequiredAtUtc))),
-    cdcCursorCount: rows.reduce((total, row) => total + row.cdcCursorCount, 0),
-    cdcTerminalCount: rows.reduce((total, row) => total + row.cdcTerminalCount, 0),
-    cdcOverdueCount: rows.reduce((total, row) => total + row.cdcOverdueCount, 0),
-    maximumCdcLagMs: ageMs(now, oldestDate(rows.map((row) => row.oldestCdcChangedSinceUtc))),
-    connectionRevocationPendingCount: rows.reduce((total, row) => total + row.connectionRevocationPendingCount, 0),
-    connectionRevocationDeadCount: rows.reduce((total, row) => total + row.connectionRevocationDeadCount, 0),
-    oldestConnectionRevocationPendingAgeMs: ageMs(
-      now,
-      oldestDate(rows.map((row) => row.oldestConnectionRevocationPendingAtUtc)),
-    ),
-    orphanRevocationPendingCount: rows.reduce((total, row) => total + row.orphanRevocationPendingCount, 0),
-    orphanRevocationDeadCount: rows.reduce((total, row) => total + row.orphanRevocationDeadCount, 0),
-    oldestOrphanRevocationPendingAgeMs: ageMs(
-      now,
-      oldestDate(rows.map((row) => row.oldestOrphanRevocationPendingAtUtc)),
-    ),
-  };
-}
-
 export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
   const apiReleaseSha = resolveRuntimeReleaseSha();
 
@@ -440,22 +253,18 @@ export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
       environment: app.env.QUICKBOOKS_ENVIRONMENT,
     } as const;
     const generatedAtUtc = new Date();
-    const [quickBooksRows, quickBooksOperationalRows] = await Promise.all([
+    const [quickBooksRows, quickBooksOperations] = await Promise.all([
       mapWithConcurrency(
         activeTenantRows,
         4,
         ({ id }) => loadQuickBooksControlPlaneRow(app.prisma, id),
       ),
-      mapWithConcurrency(
-        activeTenantRows,
-        4,
-        ({ id }) => loadQuickBooksOperationalRow(app.prisma, id, generatedAtUtc),
+      loadQuickBooksOperationalAggregate(
+        app.prisma,
+        activeTenantRows.map(({ id }) => id),
+        generatedAtUtc,
       ),
     ]);
-    const quickBooksOperations = aggregateQuickBooksOperationalRows(
-      quickBooksOperationalRows,
-      generatedAtUtc,
-    );
     const quickBooksSetups = quickBooksRows.map((connection) => connection
       ? deriveQuickBooksSetupReadiness(quickBooksRuntime, {
           status: connection.status,

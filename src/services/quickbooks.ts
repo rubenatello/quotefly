@@ -1,5 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import type { env } from "../config/env";
+import {
+  classifyQuickBooksProviderAttempt,
+  reportQuickBooksProviderAttempt,
+} from "./quickbooks-worker-operational";
 import { z } from "zod";
 
 const ACCOUNTING_SCOPE = "com.intuit.quickbooks.accounting";
@@ -402,6 +406,24 @@ function waitForQuickBooksRetry(delayMs: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, delayMs));
 }
 
+function reportQuickBooksFetchAttempt(
+  startedAtMs: number,
+  result: Readonly<{ statusCode: number }> | Readonly<{ error: unknown }>,
+) {
+  try {
+    const statusCode = "statusCode" in result ? result.statusCode : undefined;
+    const errorName = "error" in result && result.error instanceof Error
+      ? result.error.name
+      : undefined;
+    reportQuickBooksProviderAttempt({
+      outcome: classifyQuickBooksProviderAttempt({ statusCode, errorName }),
+      durationMs: Date.now() - startedAtMs,
+    });
+  } catch {
+    // Observability can never change a provider outcome or retry decision.
+  }
+}
+
 async function quickBooksFetch(
   runtimeEnv: RuntimeEnv,
   url: string,
@@ -410,13 +432,16 @@ async function quickBooksFetch(
 ): Promise<Response> {
   const maxAttempts = retryRead ? runtimeEnv.QUICKBOOKS_PROVIDER_READ_RETRIES + 1 : 1;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const attemptStartedAtMs = Date.now();
     let response: Response;
     try {
       response = await fetch(url, {
         ...init,
         signal: AbortSignal.timeout(runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS),
       });
-    } catch {
+      reportQuickBooksFetchAttempt(attemptStartedAtMs, { statusCode: response.status });
+    } catch (error) {
+      reportQuickBooksFetchAttempt(attemptStartedAtMs, { error });
       if (retryRead && attempt + 1 < maxAttempts) {
         await waitForQuickBooksRetry(Math.min(2_000, 200 * (2 ** attempt)));
         continue;

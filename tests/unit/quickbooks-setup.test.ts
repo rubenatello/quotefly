@@ -35,6 +35,29 @@ describe("QuickBooks runtime release identity", () => {
     assert.equal(resolveRuntimeReleaseSha({ RAILWAY_GIT_COMMIT_SHA: releaseSha.toUpperCase() }), releaseSha);
     assert.equal(resolveRuntimeReleaseSha({ RENDER_GIT_COMMIT: releaseSha }), releaseSha);
     assert.equal(resolveRuntimeReleaseSha({ QUOTEFLY_RELEASE_SHA: "not-a-sha", RAILWAY_GIT_COMMIT_SHA: releaseSha }), releaseSha);
+    assert.equal(resolveRuntimeReleaseSha({ QUOTEFLY_RELEASE_SHA: releaseSha }), releaseSha);
+    assert.equal(resolveRuntimeReleaseSha({ QUOTEFLY_RELEASE_SHA: releaseSha, RAILWAY_GIT_COMMIT_SHA: releaseSha }), releaseSha);
+    assert.throws(
+      () => resolveRuntimeReleaseSha({
+        QUOTEFLY_RELEASE_SHA: releaseSha,
+        RAILWAY_GIT_COMMIT_SHA: "b".repeat(40),
+      }),
+      /runtime release identities conflict/,
+    );
+    assert.throws(
+      () => resolveRuntimeReleaseSha({
+        RAILWAY_GIT_COMMIT_SHA: releaseSha,
+        RENDER_GIT_COMMIT: "b".repeat(40),
+      }),
+      /runtime release identities are configured/,
+    );
+    assert.throws(
+      () => resolveRuntimeReleaseSha({
+        QUOTEFLY_RELEASE_SHA: releaseSha,
+        RAILWAY_GIT_COMMIT_SHA: "not-a-provider-sha",
+      }),
+      /provider runtime release identity is malformed/,
+    );
     assert.equal(resolveRuntimeReleaseSha({ GITHUB_SHA: releaseSha }), null);
   });
 
@@ -238,9 +261,72 @@ describe("QuickBooks Settings status normalization", () => {
   it("accepts the connection-only verification phase", () => {
     const connectionOnlyStatus = {
       ...validStatus,
-      setup: { ...validStatus.setup, phase: "CONNECTION_VERIFIED" as const, capabilities: { ...validStatus.setup.capabilities, canConfirm: false } },
+      setup: {
+        ...validStatus.setup,
+        phase: "CONNECTION_VERIFIED" as const,
+        checks: [
+          { key: "PROVIDER_CONFIGURED", passed: true, managedBy: "QUOTEFLY" },
+          { key: "PROVIDER_WORKFLOWS_ENABLED", passed: true, managedBy: "QUOTEFLY" },
+          { key: "CONNECTION_ACTIVE", passed: true, managedBy: "WORKSPACE" },
+          { key: "ENVIRONMENT_MATCHES", passed: true, managedBy: "QUOTEFLY" },
+          { key: "ACCOUNTING_SCOPE_GRANTED", passed: true, managedBy: "WORKSPACE" },
+          { key: "CREDENTIALS_AVAILABLE", passed: true, managedBy: "QUOTEFLY" },
+          { key: "REALM_BINDING_ACTIVE", passed: true, managedBy: "QUOTEFLY" },
+          { key: "CDC_CURSOR_INITIALIZED", passed: true, managedBy: "QUOTEFLY" },
+        ],
+        capabilities: { ...validStatus.setup.capabilities, canConfirm: false },
+      },
       oauthOnlyMode: true,
+      connection: {
+        environment: "sandbox",
+        companyName: "QuoteFly Sandbox",
+        status: "CONNECTED" as const,
+        connectedAtUtc: "2026-09-04T12:00:00.000Z",
+        disconnectedAtUtc: null,
+        lastTokenRefreshAtUtc: null,
+        lastSyncAtUtc: null,
+        lastWebhookAtUtc: null,
+        counts: { customerMaps: 0, itemMaps: 0, invoiceSyncs: 0 },
+      },
     };
     assert.deepEqual(normalizeQuickBooksStatusPayload(connectionOnlyStatus), connectionOnlyStatus);
+    assert.equal(normalizeQuickBooksStatusPayload({ ...connectionOnlyStatus, connection: null }), null);
+    assert.equal(normalizeQuickBooksStatusPayload({
+      ...connectionOnlyStatus,
+      connection: { ...connectionOnlyStatus.connection, status: "DISCONNECTED" },
+    }), null);
+    assert.equal(normalizeQuickBooksStatusPayload({
+      ...connectionOnlyStatus,
+      setup: {
+        ...connectionOnlyStatus.setup,
+        checks: connectionOnlyStatus.setup.checks.filter((check) => check.key !== "CREDENTIALS_AVAILABLE"),
+      },
+    }), null);
+    assert.equal(normalizeQuickBooksStatusPayload({
+      ...connectionOnlyStatus,
+      setup: {
+        ...connectionOnlyStatus.setup,
+        checks: connectionOnlyStatus.setup.checks.map((check) => (
+          check.key === "REALM_BINDING_ACTIVE" ? { ...check, passed: false } : check
+        )),
+      },
+    }), null);
+    assert.equal(normalizeQuickBooksStatusPayload({
+      ...connectionOnlyStatus,
+      setup: {
+        ...connectionOnlyStatus.setup,
+        checks: [
+          ...connectionOnlyStatus.setup.checks,
+          { key: "REALM_BINDING_ACTIVE", passed: false, managedBy: "QUOTEFLY" },
+        ],
+      },
+    }), null);
+    assert.equal(normalizeQuickBooksStatusPayload({
+      ...connectionOnlyStatus,
+      setup: {
+        ...connectionOnlyStatus.setup,
+        operations: { ...connectionOnlyStatus.setup.operations, hostedPaymentsReady: true },
+      },
+    }), null);
   });
 });

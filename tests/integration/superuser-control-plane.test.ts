@@ -211,6 +211,12 @@ describe("superuser data-governance control plane", () => {
       },
     });
     const operationalNow = new Date();
+    await prisma.quickBooksConnection.update({
+      where: { id: quickBooksConnection.id },
+      data: {
+        tokenRefreshFailureStartedAtUtc: new Date(operationalNow.getTime() - 120_000),
+      },
+    });
     await prisma.quickBooksCdcCursor.update({
       where: { quickBooksConnectionId: quickBooksConnection.id },
       data: {
@@ -284,6 +290,21 @@ describe("superuser data-governance control plane", () => {
         lastError: "QUICKBOOKS_TOKEN_REVOCATION_PENDING",
       },
     });
+    const reauthFailureRealm = "realm-refresh-failure-must-not-render";
+    const reauthFailureTenant = await signUp(
+      "quickbooks-refresh-failure@example.com",
+      "Refresh Failure",
+    );
+    await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: reauthFailureTenant.tenant.id,
+        realmId: reauthFailureRealm,
+        environment: "sandbox",
+        status: "NEEDS_REAUTH",
+        tokenRefreshFailureStartedAtUtc: new Date(operationalNow.getTime() - 180_000),
+        lastError: "QUICKBOOKS_REAUTH_REQUIRED",
+      },
+    });
     const deadRevocationTenant = await signUp(
       "quickbooks-dead-revocation@example.com",
       "Dead Revocation",
@@ -354,6 +375,8 @@ describe("superuser data-governance control plane", () => {
           connectionRevocationDeadCount: 1,
           orphanRevocationPendingCount: 1,
           orphanRevocationDeadCount: 1,
+          tokenRefreshFailureConnectionCount: 2,
+          tokenRefreshReauthRequiredCount: 1,
         },
       },
     });
@@ -364,10 +387,12 @@ describe("superuser data-governance control plane", () => {
     expect(operations.maximumCdcLagMs).toBeGreaterThanOrEqual(90_000);
     expect(operations.oldestConnectionRevocationPendingAgeMs).toBeGreaterThanOrEqual(75_000);
     expect(operations.oldestOrphanRevocationPendingAgeMs).toBeGreaterThanOrEqual(45_000);
+    expect(operations.oldestTokenRefreshFailureAgeMs).toBeGreaterThanOrEqual(180_000);
     expect(summaryResponse.body).not.toContain("encrypted-orphan-pending");
     expect(summaryResponse.body).not.toContain("encrypted-orphan-dead");
     expect(summaryResponse.body).not.toContain("encrypted-connection-pending");
     expect(summaryResponse.body).not.toContain("encrypted-connection-dead");
+    expect(summaryResponse.body).not.toContain(reauthFailureRealm);
 
     const catalogResponse = await app.inject({
       method: "GET",

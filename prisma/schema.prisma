@@ -1661,48 +1661,49 @@ model BillingWebhookEvent {
 }
 
 model QuickBooksConnection {
-  id                            String                       @id @default(cuid())
-  tenantId                      String                       @unique
-  realmId                       String                       @unique
-  environment                   String
-  companyName                   String?
-  status                        QuickBooksConnectionStatus   @default(CONNECTED)
-  scopes                        String[]                     @default([])
-  accessTokenEncrypted          String?
-  refreshTokenEncrypted         String?
-  accessTokenExpiresAtUtc       DateTime?                    @db.Timestamptz(3)
-  refreshTokenRotatedAtUtc      DateTime?                    @db.Timestamptz(3)
-  connectedAtUtc                DateTime                     @default(now()) @db.Timestamptz(3)
-  disconnectedAtUtc             DateTime?                    @db.Timestamptz(3)
-  lastTokenRefreshAtUtc         DateTime?                    @db.Timestamptz(3)
-  lastSyncAtUtc                 DateTime?                    @db.Timestamptz(3)
-  lastWebhookAtUtc              DateTime?                    @db.Timestamptz(3)
-  allowOnlineAchPayment         Boolean                      @default(false)
-  allowOnlineCardPayment        Boolean                      @default(false)
-  setupConfirmedAtUtc           DateTime?                    @db.Timestamptz(3)
-  setupConfirmedByTenantUserId  String?
-  setupChecklistVersion         String?                      @db.VarChar(32)
-  revocationPendingAtUtc        DateTime?                    @db.Timestamptz(3)
-  revocationAttemptCount        Int                          @default(0)
-  revocationNextAttemptAtUtc    DateTime?                    @db.Timestamptz(3)
-  disconnectRequestedAtUtc      DateTime?                    @db.Timestamptz(3)
-  tokenRefreshClaimHash         String?                      @db.VarChar(64)
-  tokenRefreshClaimExpiresAtUtc DateTime?                    @db.Timestamptz(3)
-  lastError                     String?
-  createdAt                     DateTime                     @default(now()) @db.Timestamptz(3)
-  updatedAt                     DateTime                     @updatedAt @db.Timestamptz(3)
-  deletedAtUtc                  DateTime?                    @db.Timestamptz(3)
-  tenant                        Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  setupConfirmedByTenantUser    TenantUser?                  @relation("QuickBooksSetupConfirmer", fields: [setupConfirmedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
-  customerMaps                  QuickBooksCustomerMap[]
-  itemMaps                      QuickBooksItemMap[]
-  invoiceSyncs                  QuickBooksInvoiceSync[]
-  invoiceOperations             QuickBooksInvoiceOperation[]
-  oauthStates                   QuickBooksOAuthState[]
-  realmBinding                  QuickBooksRealmBinding?
-  cdcCursor                     QuickBooksCdcCursor?
-  webhookEvents                 QuickBooksWebhookEvent[]
-  lifecycleEvents               QuickBooksConnectionEvent[]
+  id                              String                       @id @default(cuid())
+  tenantId                        String                       @unique
+  realmId                         String                       @unique
+  environment                     String
+  companyName                     String?
+  status                          QuickBooksConnectionStatus   @default(CONNECTED)
+  scopes                          String[]                     @default([])
+  accessTokenEncrypted            String?
+  refreshTokenEncrypted           String?
+  accessTokenExpiresAtUtc         DateTime?                    @db.Timestamptz(3)
+  refreshTokenRotatedAtUtc        DateTime?                    @db.Timestamptz(3)
+  connectedAtUtc                  DateTime                     @default(now()) @db.Timestamptz(3)
+  disconnectedAtUtc               DateTime?                    @db.Timestamptz(3)
+  lastTokenRefreshAtUtc           DateTime?                    @db.Timestamptz(3)
+  lastSyncAtUtc                   DateTime?                    @db.Timestamptz(3)
+  lastWebhookAtUtc                DateTime?                    @db.Timestamptz(3)
+  allowOnlineAchPayment           Boolean                      @default(false)
+  allowOnlineCardPayment          Boolean                      @default(false)
+  setupConfirmedAtUtc             DateTime?                    @db.Timestamptz(3)
+  setupConfirmedByTenantUserId    String?
+  setupChecklistVersion           String?                      @db.VarChar(32)
+  revocationPendingAtUtc          DateTime?                    @db.Timestamptz(3)
+  revocationAttemptCount          Int                          @default(0)
+  revocationNextAttemptAtUtc      DateTime?                    @db.Timestamptz(3)
+  disconnectRequestedAtUtc        DateTime?                    @db.Timestamptz(3)
+  tokenRefreshClaimHash           String?                      @db.VarChar(64)
+  tokenRefreshClaimExpiresAtUtc   DateTime?                    @db.Timestamptz(3)
+  tokenRefreshFailureStartedAtUtc DateTime?                    @db.Timestamptz(3)
+  lastError                       String?
+  createdAt                       DateTime                     @default(now()) @db.Timestamptz(3)
+  updatedAt                       DateTime                     @updatedAt @db.Timestamptz(3)
+  deletedAtUtc                    DateTime?                    @db.Timestamptz(3)
+  tenant                          Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  setupConfirmedByTenantUser      TenantUser?                  @relation("QuickBooksSetupConfirmer", fields: [setupConfirmedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  customerMaps                    QuickBooksCustomerMap[]
+  itemMaps                        QuickBooksItemMap[]
+  invoiceSyncs                    QuickBooksInvoiceSync[]
+  invoiceOperations               QuickBooksInvoiceOperation[]
+  oauthStates                     QuickBooksOAuthState[]
+  realmBinding                    QuickBooksRealmBinding?
+  cdcCursor                       QuickBooksCdcCursor?
+  webhookEvents                   QuickBooksWebhookEvent[]
+  lifecycleEvents                 QuickBooksConnectionEvent[]
 
   @@unique([id, tenantId])
   @@index([tenantId, status])

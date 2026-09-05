@@ -347,6 +347,35 @@ export type QuickBooksWebhookClaim = Readonly<{
   claimToken: string;
 }>;
 
+/**
+ * The worker's backlog metric and the claim path must describe exactly the
+ * same queue. In particular, events for disconnected, unconfirmed, deleted,
+ * or superseded-checklist connections are retained for audit/recovery but are
+ * not work that a reconciliation worker can claim.
+ */
+export function quickBooksWebhookEventClaimableWhere(
+  tenantId: string,
+  now: Date,
+): Prisma.QuickBooksWebhookEventWhereInput {
+  return {
+    tenantId,
+    quickBooksConnectionId: { not: null },
+    entityId: { not: null },
+    connection: {
+      status: "CONNECTED",
+      deletedAtUtc: null,
+      setupConfirmedAtUtc: { not: null },
+      setupConfirmedByTenantUserId: { not: null },
+      setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+    },
+    OR: [
+      { status: "RECEIVED" },
+      { status: "FAILED", nextAttemptAtUtc: { lte: now } },
+      { status: "PROCESSING", claimExpiresAtUtc: { lte: now } },
+    ],
+  };
+}
+
 export async function claimQuickBooksWebhookEvent(
   prisma: PrismaClient,
   tenantId: string,
@@ -354,23 +383,7 @@ export async function claimQuickBooksWebhookEvent(
 ): Promise<QuickBooksWebhookClaim | null> {
   return withTenantRlsContext(prisma, tenantId, async (transaction) => {
     const candidate = await transaction.quickBooksWebhookEvent.findFirst({
-      where: {
-        tenantId,
-        quickBooksConnectionId: { not: null },
-        entityId: { not: null },
-        connection: {
-          status: "CONNECTED",
-          deletedAtUtc: null,
-          setupConfirmedAtUtc: { not: null },
-          setupConfirmedByTenantUserId: { not: null },
-          setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
-        },
-        OR: [
-          { status: "RECEIVED" },
-          { status: "FAILED", nextAttemptAtUtc: { lte: now } },
-          { status: "PROCESSING", claimExpiresAtUtc: { lte: now } },
-        ],
-      },
+      where: quickBooksWebhookEventClaimableWhere(tenantId, now),
       orderBy: [{ receivedAtUtc: "asc" }, { id: "asc" }],
       select: {
         id: true,

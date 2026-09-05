@@ -17,7 +17,7 @@ These are the owner-side items that still matter most before launch:
 2. Confirm `quotefly.us`, `www.quotefly.us`, and `api.quotefly.us` are resolving correctly in production
 3. Confirm Stripe production products, prices, and webhook destination are correct
 4. Confirm Railway and Vercel env vars match production values
-5. Keep direct QuickBooks provider workflows disabled; test only the supported QuickBooks-friendly CSV handoff
+5. Keep direct QuickBooks workflows disabled in production; complete only the explicitly authorized OAuth-only sandbox staging sequence until a later accounting-mutation approval
 6. Review final legal/support copy before public launch
 7. Verify quote board desktop column headers align with row values after latest UI fix
 8. Run `node scripts/tier-unit-economics.mjs` and confirm AI budget caps before launch pricing is finalized
@@ -73,18 +73,18 @@ QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS=
 
 ### QuickBooks app setup
 
-The hosted-payment work is an engineering candidate, not an available integration. No sandbox or production result is claimed.
+QuickBooks is in release-candidate qualification, not production availability. On 2026-09-04 the owner authorized staging-only deployment, a disposable tenant, and sandbox OAuth connect/replay/disconnect/revocation testing. The owner-observed connect and disconnect passed on a superseded staging SHA; the final exact SHA and the complete OAuth matrix remain pending. Accounting mutations and all production changes remain unauthorized.
 
-1. Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` in every release environment.
-2. Do not complete OAuth consent, subscribe provider webhooks, push invoices, retrieve/share hosted links, record provider payments, or market direct QuickBooks Online sync for this release.
+1. Keep direct QuickBooks workflows disabled in production. In staging, use the `quickbooks-oauth` profile until the final exact-SHA connection/replay/disconnect/revocation pass is recorded; keep the worker, accounting actions, hosted payments, CDC, and webhook processing off.
+2. Do not subscribe provider webhooks, push invoices, retrieve/share hosted links, record provider payments, or market direct QuickBooks Online sync until the separately authorized later phases pass.
 3. Keep taxable publishing blocked until a separate accounting-reviewed tax contract is approved.
-4. Use the QuickBooks-friendly CSV export as the supported handoff.
+4. Use the QuickBooks-friendly CSV export as the currently supported handoff.
 5. Read the acceptance contract: `docs/integrations/quickbooks-hosted-payments-reconciliation.md`.
 6. Use `docs/integrations/quickbooks-owner-setup.md` for containment, credential inventory, monitoring, revocation, and rollback.
-7. Use `docs/integrations/quickbooks-owner-testing-checklist.md` only after explicit authorization for an Intuit sandbox run.
-8. Treat `docs/integrations/quickbooks-api-progress.md` as authoritative provider status; Online/Desktop architecture remains long-term context only.
+7. Use `docs/integrations/quickbooks-owner-testing-checklist.md` for the authorized OAuth-only subset now; obtain separate explicit authorization before any sandbox accounting mutation.
+8. Treat `docs/integrations/quickbooks-release-candidate-evidence.md` as the current gate record and `docs/integrations/quickbooks-api-progress.md` as implementation context; Online/Desktop architecture remains long-term context only.
 
-Before requesting a sandbox authorization, the owner must provide dated, sanitized evidence for:
+Before advancing beyond OAuth-only staging, the owner must provide dated, sanitized evidence for:
 
 - the exact candidate SHA and a passing `npm run verify` plus database-backed `npm run verify:launch` on that SHA;
 - a production-like migration rehearsal covering billing-email backfill, index/foreign-key changes, forced RLS, non-owner runtime access, backup restore, and forward-fix compatibility;
@@ -94,7 +94,7 @@ Before requesting a sandbox authorization, the owner must provide dated, sanitiz
 - a sanitized test plan for reviewed mapping, one non-taxable invoice, hosted link, partial/full payment, refund/reversal, void, duplicate/out-of-order webhook, dropped-webhook CDC repair, and timeout/restart recovery;
 - Sentinel review and independent Opera approval of the complete provider/payment candidate.
 
-Sandbox authorization does not authorize production credentials, production migrations, production OAuth, production webhook subscriptions, customer exposure, or marketing. Production additionally requires Intuit app approval, QuickBooks Payments merchant eligibility, fee/settlement ownership, verified backup/restore, support escalation, credential-safe rollback, and a separately authorized limited pilot.
+The current OAuth-only sandbox authorization does not authorize accounting mutations, production credentials, production migrations, production OAuth, production webhook subscriptions, customer exposure, or marketing. Production additionally requires Intuit app approval, QuickBooks Payments merchant eligibility, fee/settlement ownership, verified backup/restore, support escalation, credential-safe rollback, and a separately authorized limited pilot.
 
 ### AI Models Approved for Production
 

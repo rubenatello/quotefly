@@ -55,6 +55,11 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
               FROM "Quote"
               LIMIT 0
             ),
+            quickbooks_connection_probe AS (
+              SELECT "id", "tokenRefreshFailureStartedAtUtc"
+              FROM "QuickBooksConnection"
+              LIMIT 0
+            ),
             ai_document_probe AS (
               SELECT "id", "contentHash"
               FROM "AiRetrievalDocument"
@@ -81,6 +86,7 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
           FULL JOIN brand_asset_probe ON false
           FULL JOIN customer_assignment_probe ON false
           FULL JOIN quote_assignment_probe ON false
+          FULL JOIN quickbooks_connection_probe ON false
           FULL JOIN ai_document_probe ON false
           FULL JOIN ai_chunk_probe ON false
           FULL JOIN worker_heartbeat_probe ON false

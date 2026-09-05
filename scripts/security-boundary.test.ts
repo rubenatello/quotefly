@@ -302,11 +302,31 @@ test("QuickBooks OAuth routes set no-store and no-referrer before callback parsi
   const callbackPreamble = source.slice(callbackStart, callbackEnd);
   assert.match(callbackPreamble, /reply\.header\("Cache-Control", "private, no-store"\)/);
   assert.match(callbackPreamble, /reply\.header\("Referrer-Policy", "no-referrer"\)/);
+  const callbackParser = callbackPreamble.indexOf("QuickBooksCallbackQuerySchema.safeParse(request.query)");
+  assert.ok(callbackParser >= 0, "QuickBooks OAuth callback safe parser must remain discoverable");
   assert.ok(
     callbackPreamble.indexOf('reply.header("Cache-Control", "private, no-store")')
-      < callbackPreamble.indexOf("QuickBooksCallbackQuerySchema.parse(request.query)"),
+      < callbackParser,
     "callback cache policy must be set before parsing",
   );
+});
+
+test("QuickBooks operational monitors are header-only, constant-time, content-free, and rate-limited", () => {
+  const source = readFileSync(
+    new URL("../src/routes/quickbooks-operational-monitor.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /timingSafeEqual\(expectedDigest, providedDigest\)/);
+  assert.match(source, /createHash\("sha256"\)\.update\(expected/);
+  assert.match(source, /createHash\("sha256"\)\.update\(provided/);
+  assert.match(source, /QUICKBOOKS_MONITOR_BEARER/);
+  assert.match(source, /QUICKBOOKS_MONITOR_RATE_LIMIT_MAX = 6/);
+  assert.match(source, /reply\.header\("Cache-Control", "no-store"\)/);
+  assert.match(source, /reply\.code\(unhealthy \? 503 : 204\)\.send\(\)/);
+  assert.match(source, /"\/internal\/quickbooks\/monitor\/warning"/);
+  assert.match(source, /"\/internal\/quickbooks\/monitor\/critical"/);
+  assert.doesNotMatch(source, /request\.query/);
+  assert.doesNotMatch(source, /reply\.code\([^\n]+\)\.send\(\s*\{/);
 });
 
 test("infrastructure variable audit uses fixed profiles and never emits secret values", () => {
@@ -315,7 +335,9 @@ test("infrastructure variable audit uses fixed profiles and never emits secret v
     "DATABASE_URL", "DIRECT_DATABASE_URL", "RATE_LIMIT_REDIS_URL", "JWT_SECRET", "OPENAI_API_KEY",
     "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "RESEND_API_KEY", "TWILIO_AUTH_TOKEN",
     "TWILIO_WEBHOOK_AUTH_TOKEN", "QUICKBOOKS_CLIENT_SECRET", "QUICKBOOKS_WEBHOOK_VERIFIER",
+    "QUICKBOOKS_MONITOR_BEARER",
     "QUICKBOOKS_TOKEN_ENCRYPTION_KEY", "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS",
+    "QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN", "QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN",
   ];
   const clearedSecrets = Object.fromEntries(allSecretNames.map((name) => [name, ""]));
   const runAudit = (profile, env) => spawnSync(
@@ -387,6 +409,17 @@ test("infrastructure variable audit uses fixed profiles and never emits secret v
       QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: "true", QUICKBOOKS_OAUTH_ONLY_MODE: "false",
       QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: "true", QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: "true",
       QUICKBOOKS_CDC_WORKER_ENABLED: "true",
+    },
+    "quickbooks-signals-api": {
+      QUICKBOOKS_MONITOR_BEARER: "independent-monitor-secret-sentinel-000001",
+      QUICKBOOKS_API_SIGNAL_INGEST_URL: "https://api-signals.example.test",
+      QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN: "api-signal-source-secret-sentinel",
+      QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS: "1250",
+    },
+    "quickbooks-signals-worker": {
+      QUICKBOOKS_WORKER_SIGNAL_INGEST_URL: "https://worker-signals.example.test",
+      QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN: "worker-signal-source-secret-sentinel",
+      QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS: "1250",
     },
   };
 
@@ -526,6 +559,36 @@ test("infrastructure variable audit uses fixed profiles and never emits secret v
     runAudit("quickbooks-hosted-payments", requiredEnvironment["quickbooks-hosted-payments"]).stdout,
   );
 
+  for (const [profile, peerEnvironment] of [
+    ["quickbooks-signals-api", requiredEnvironment["quickbooks-signals-worker"]],
+    ["quickbooks-signals-worker", requiredEnvironment["quickbooks-signals-api"]],
+  ]) {
+    const environment = { ...requiredEnvironment[profile], ...peerEnvironment };
+    const result = runAudit(profile, environment);
+    assert.equal(result.status, 1, profile);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, "fail");
+    assert.equal(report.forbidden.find((entry) => entry.name === "DIRECT_DATABASE_URL")?.status, "missing");
+    assert.ok(
+      report.forbidden
+        .filter((entry) => entry.name !== "DIRECT_DATABASE_URL")
+        .every((entry) => entry.status === "configured"),
+    );
+    assertNoSecretValues(result, environment);
+  }
+
+  const missingSignalMonitorBearer = runAudit("quickbooks-signals-api", {
+    ...requiredEnvironment["quickbooks-signals-api"],
+    QUICKBOOKS_MONITOR_BEARER: "",
+  });
+  assert.equal(missingSignalMonitorBearer.status, 1);
+  assert.equal(
+    JSON.parse(missingSignalMonitorBearer.stdout).required
+      .find((entry) => entry.name === "QUICKBOOKS_MONITOR_BEARER")?.status,
+    "missing",
+  );
+  assertNoSecretValues(missingSignalMonitorBearer, requiredEnvironment["quickbooks-signals-api"]);
+
   const secretEnvironment = Object.fromEntries(allSecretNames.map((name, index) => [name, `secret-sentinel-${index}`]));
   const webResult = runAudit("web", { VITE_API_BASE_URL: "https://api.example.test", ...secretEnvironment });
   assert.equal(webResult.status, 1);
@@ -540,7 +603,7 @@ test("infrastructure variable audit uses fixed profiles and never emits secret v
 
   const forbiddenByProfile = {
     api: ["DIRECT_DATABASE_URL"],
-    worker: ["DIRECT_DATABASE_URL"],
+    worker: ["DIRECT_DATABASE_URL", "QUICKBOOKS_MONITOR_BEARER"],
     migrations: ["DATABASE_URL"],
     "quickbooks-oauth": ["DIRECT_DATABASE_URL", "QUICKBOOKS_WEBHOOK_VERIFIER"],
     "quickbooks-reconciliation": ["DIRECT_DATABASE_URL"],
@@ -616,7 +679,13 @@ test("integration setup replaces ambient provider credentials with deterministic
     "QUICKBOOKS_HOSTED_PAYMENTS_ENABLED",
     "QUICKBOOKS_CDC_WORKER_ENABLED",
     "QUICKBOOKS_WEBHOOK_VERIFIER",
+    "QUICKBOOKS_MONITOR_BEARER",
     "QUICKBOOKS_TOKEN_ENCRYPTION_KEY",
+    "QUICKBOOKS_API_SIGNAL_INGEST_URL",
+    "QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN",
+    "QUICKBOOKS_WORKER_SIGNAL_INGEST_URL",
+    "QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN",
+    "QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS",
     "TWILIO_ACCOUNT_SID",
     "TWILIO_AUTH_TOKEN",
     "TWILIO_WEBHOOK_AUTH_TOKEN",

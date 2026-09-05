@@ -123,7 +123,7 @@ export async function loadWorkerHeartbeat(
  * neither this service result nor a route serializer can expose them.
  */
 export async function loadWorkerHeartbeatFleet(
-  prisma: PrismaClient,
+  prisma: Pick<PrismaClient, "$queryRaw">,
   workerKey: string,
   options: {
     apiReleaseSha: string | null;
@@ -166,7 +166,7 @@ export async function loadWorkerHeartbeatFleet(
   const [row] = await prisma.$queryRaw<FleetQueryRow[]>(Prisma.sql`
     WITH params AS MATERIALIZED (
       SELECT
-        clock_timestamp() AS evaluated_at,
+        transaction_timestamp() AS evaluated_at,
         ${workerKey}::text AS worker_key,
         ${apiReleaseSha}::text AS api_release_sha,
         ${requireReleaseIdentity}::boolean AS require_release_identity

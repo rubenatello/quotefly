@@ -45,7 +45,7 @@ npm run verify:launch
 | `APP_URL` | Required | No | `https://staging.quotefly.us` | Production web URL, for redirects and CORS inputs |
 | `API_URL` | Required | No | `https://api-staging.quotefly.us` | Production API URL |
 | `CORS_ALLOWED_ORIGINS` | Required | No | `https://staging.quotefly.us` | Comma-separated exact web origins |
-| `QUOTEFLY_RELEASE_SHA` | Optional | No | exact 40-character Git SHA | Explicit release identity for non-Git deploys; Railway/Render Git deploys use their provider-injected commit SHA automatically. API and QuickBooks worker values must match |
+| `QUOTEFLY_RELEASE_SHA` | Optional | No | exact 40-character Git SHA | Explicit release identity for non-Git deploys only. Leave absent on Railway/Render Git deploys; startup/runtime readiness fails closed if a valid manual value conflicts with the provider-injected commit SHA. API and QuickBooks worker values must match |
 | `SESSION_COOKIE_NAME` | Required | No | `qf_session` | Keep stable unless rotating sessions |
 | `SESSION_COOKIE_DOMAIN` | Optional | No | empty | Prefer host-only for `api.quotefly.us`; use `.quotefly.us` only when sharing across API hostnames |
 | `SESSION_COOKIE_SAME_SITE` | Required | No | `lax` | Production default: `lax` for same-site `app.quotefly.us` + `api.quotefly.us` |
@@ -73,9 +73,13 @@ npm run verify:launch
 | `QUICKBOOKS_CLIENT_ID` / `QUICKBOOKS_CLIENT_SECRET` | Provider setup | No | Intuit sandbox app | Direct sync stays off-sale until sandbox passes |
 | `QUICKBOOKS_REDIRECT_URI` | Provider setup | No | `https://api-staging.quotefly.us/v1/integrations/quickbooks/callback` | Must match Intuit app exactly |
 | `QUICKBOOKS_WEBHOOK_VERIFIER` | Provider setup | No | sandbox verifier | Required before enabling webhooks |
+| `QUICKBOOKS_MONITOR_BEARER` | Required for external QBO monitoring | No | independent 32+ char random secret | API only; send only in the `Authorization: Bearer` header, never a query or `VITE_` variable |
 | `QUICKBOOKS_ENVIRONMENT` | Required if configured | No | `sandbox` | Use `production` only after Intuit production approval |
 | `QUICKBOOKS_TOKEN_ENCRYPTION_KEY` | Required if configured | No | independent 32+ char random secret | Must differ from `JWT_SECRET`; encrypts newly stored OAuth tokens |
 | `QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS` | Rotation only | No | prior encryption secret | Keep only while old token ciphertext is being refreshed; must differ from current and JWT keys |
+| `QUICKBOOKS_API_SIGNAL_INGEST_URL` / `QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN` | Optional QBO monitoring | No | dedicated HTTPS log source | Configure together on the API only; the token must be independent from application/provider secrets and the worker source |
+| `QUICKBOOKS_WORKER_SIGNAL_INGEST_URL` / `QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN` | Optional QBO monitoring | No | separate dedicated HTTPS log source | Configure together on the reconciliation worker only for closed terminal/provider/retention health events; never forward the global process log stream |
+| `QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS` | Optional QBO monitoring | No | `1250` | Per-delivery timeout, constrained to 250–3000 ms; delivery never controls OAuth or accounting success |
 | `ENABLE_TWILIO_SMS` | Optional | No | `false` | Must remain false in production until sender authorization is implemented |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | Provider setup | No | Twilio test credentials | Required only when SMS provider is enabled |
 | `TWILIO_WEBHOOK_AUTH_TOKEN` | Provider setup | No | random secret | Required for webhook validation |
@@ -103,7 +107,7 @@ Railway/Render settings:
 - Build command: `npm ci && npm run prisma:generate && npm run build`.
 - Start command: `npm run start:prod` (runtime only; production env validation rejects any `DIRECT_DATABASE_URL`).
 - Run `npm run prisma:migrate:deploy` from a dedicated release job or CI environment that has `DIRECT_DATABASE_URL`. Do not add the owner URL to the Railway API service variables. Railway pre-deploy commands run separately, but inherit the service environment, so a separate migration service/job or deployment workflow is required for true credential separation.
-- For Railway, connect the `quotefly-migrations` service to this repository's `main` branch and set its custom config-file path to `/railway.migrations.json`. That service is a one-shot process with no HTTP healthcheck and a `NEVER` restart policy. Keep GitHub autodeploy disabled until migration-before-API ordering is automated; deploy it manually before redeploying the API candidate.
+- For Railway, connect the `quotefly-migrations` service to the exact release branch and set its custom config-file path to `/railway.migrations.json`. That service is a one-shot process with no HTTP healthcheck and a `NEVER` restart policy. Keep GitHub autodeploy disabled until migration-before-API ordering is automated; use **Deploy Latest Commit** before deploying the API candidate. Connect the API to the same repository and branch only after the migration ledger passes. Do not use a CLI-uploaded build as exact-SHA release evidence because Railway injects `RAILWAY_GIT_COMMIT_SHA` only for GitHub-triggered deployments.
 - Process liveness: `GET /v1/health`.
 - Deployment readiness: `GET /v1/ready` (returns `200` only when PostgreSQL responds).
 - Keep the API service region physically close to the managed Postgres region. For Railway + Neon, choose matching or nearest available US regions before optimizing code.
@@ -147,9 +151,9 @@ When latency is reported:
 5. Compare `/v1/health` and `/v1/ready`; if health is fast but ready is slow, prioritize database/connection tuning.
 6. For Kody, separate retrieval/query time from OpenAI provider time using the request timing fields.
 
-## QuickBooks Hosted-Payment Candidate
+## QuickBooks Release Candidate
 
-The hosted-payment and reconciliation work is an engineering candidate, not an available integration. Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false`; do not complete OAuth, subscribe provider webhooks, create an Intuit invoice, retrieve or share an InvoiceLink, or run sandbox mutations without separate owner authorization. Taxable invoice publishing remains blocked.
+Direct QuickBooks remains unavailable in production and must keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` there. The owner-authorized staging phase may use the `quickbooks-oauth` profile for connection, replay, disconnect, and revocation evidence only; it must keep accounting actions, the worker, signed webhooks, CDC, and hosted payments disabled. Do not create an Intuit invoice, retrieve or share an InvoiceLink, or run any accounting mutation without separate explicit authorization. Taxable invoice publishing remains blocked.
 
 The authoritative acceptance contract is [docs/integrations/quickbooks-hosted-payments-reconciliation.md](docs/integrations/quickbooks-hosted-payments-reconciliation.md). Current product and API truth is recorded in [docs/integrations/quickbooks-api-progress.md](docs/integrations/quickbooks-api-progress.md).
 
@@ -169,7 +173,7 @@ Before any sandbox or production rollout:
 
 ### Monitoring and recovery gate
 
-Before an authorized sandbox run, assign alert owners, destinations, thresholds, severity, and escalation for:
+Before advancing beyond OAuth-only sandbox staging, assign alert owners, destinations, thresholds, severity, and escalation for:
 
 - oldest eligible webhook age, retry count, lease expiry, and `DEAD` events;
 - invoice operations stuck in `PROCESSING`, `RECONCILING`, or reconciliation-required states;
@@ -208,7 +212,7 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 3. Deploy the exact migrated candidate API to Railway/Render staging with only the least-privileged runtime database credential.
 4. Confirm `GET /v1/health` returns OK and `GET /v1/ready` reports database readiness before starting any worker or routing the web app to the candidate.
 5. Start separately enabled workers from the same exact SHA, then confirm their readiness/heartbeat and API release-parity checks. Keep the QuickBooks worker off for the OAuth-only stage.
-6. Deploy Vercel staging with `VITE_API_BASE_URL` pointed at the ready staging API.
+6. Promote the exact ready `quotefly-web` Git preview to Vercel staging with `VITE_API_BASE_URL` pointed at the ready staging API. Confirm the staging domain resolves to that project and commit; do not use an obsolete root project or manual CLI build as release evidence.
 7. Run staging smoke checks.
 8. Keep Stripe, Twilio, and OpenAI in test/sandbox modes. Keep QuickBooks provider workflows disabled unless a separate owner-authorized sandbox checklist is active.
 
@@ -253,6 +257,6 @@ For an authorized progressive QuickBooks sandbox run, use the fixed presence-onl
 ## Provider Setup Notes
 
 - Stripe: configure checkout success/cancel URLs, customer portal, and `/v1/billing/webhook`.
-- QuickBooks: keep provider workflows false. Credentials, an exact redirect URI, a verifier, and realm conflict handling are prerequisites only; direct sync additionally requires the full hosted-payment contract, production-like migration rehearsal, sandbox evidence, monitoring/recovery evidence, security review, independent approval, and explicit owner authorization.
+- QuickBooks: keep provider workflows false in production. OAuth-only sandbox staging may be enabled only under the recorded owner authorization and closed profile; direct sync additionally requires the full hosted-payment contract, production-like migration rehearsal, sandbox accounting evidence, monitoring/recovery evidence, security review, independent approval, Intuit production approval, and explicit owner go/no-go.
 - Twilio: production startup rejects `ENABLE_TWILIO_SMS=true` until sender authorization is implemented; keep it false until compliance, authorization, and opt-out behavior are production reviewed.
 - OpenAI: set spend alerts and review AI quality telemetry before expanding beta access.

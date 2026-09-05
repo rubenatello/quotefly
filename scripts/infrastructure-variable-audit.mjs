@@ -25,8 +25,11 @@ const ALL_RUNTIME_SECRETS = [
   "TWILIO_WEBHOOK_AUTH_TOKEN",
   "QUICKBOOKS_CLIENT_SECRET",
   "QUICKBOOKS_WEBHOOK_VERIFIER",
+  "QUICKBOOKS_MONITOR_BEARER",
   "QUICKBOOKS_TOKEN_ENCRYPTION_KEY",
   "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS",
+  "QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN",
+  "QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN",
 ];
 
 const CLASSIFICATIONS = Object.fromEntries([
@@ -39,6 +42,9 @@ const CLASSIFICATIONS = Object.fromEntries([
   ["QUICKBOOKS_ENVIRONMENT", CONFIGURATION],
   ["QUICKBOOKS_SANDBOX_STAGING_ORIGINS", ORIGIN],
   ["QUICKBOOKS_REDIRECT_URI", ORIGIN],
+  ["QUICKBOOKS_API_SIGNAL_INGEST_URL", ORIGIN],
+  ["QUICKBOOKS_WORKER_SIGNAL_INGEST_URL", ORIGIN],
+  ["QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS", CONFIGURATION],
   ["QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED", CONFIGURATION],
   ["QUICKBOOKS_OAUTH_ONLY_MODE", CONFIGURATION],
   ["QUICKBOOKS_HOSTED_PAYMENTS_ENABLED", CONFIGURATION],
@@ -111,7 +117,7 @@ const PROFILES = {
   },
   worker: {
     required: ["NODE_ENV", "DATABASE_URL", "JWT_SECRET"],
-    forbidden: ["DIRECT_DATABASE_URL"],
+    forbidden: ["DIRECT_DATABASE_URL", "QUICKBOOKS_MONITOR_BEARER"],
   },
   migrations: {
     required: ["NODE_ENV", "DIRECT_DATABASE_URL"],
@@ -143,11 +149,37 @@ const PROFILES = {
   "quickbooks-hosted-payments": QUICKBOOKS_FULL_PROFILE,
   // Backward-compatible alias for the complete hosted-payments runtime.
   quickbooks: QUICKBOOKS_FULL_PROFILE,
+  "quickbooks-signals-api": {
+    required: [
+      "QUICKBOOKS_MONITOR_BEARER",
+      "QUICKBOOKS_API_SIGNAL_INGEST_URL",
+      "QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN",
+      "QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS",
+    ],
+    forbidden: [
+      "DIRECT_DATABASE_URL",
+      "QUICKBOOKS_WORKER_SIGNAL_INGEST_URL",
+      "QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN",
+    ],
+  },
+  "quickbooks-signals-worker": {
+    required: [
+      "QUICKBOOKS_WORKER_SIGNAL_INGEST_URL",
+      "QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN",
+      "QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS",
+    ],
+    forbidden: [
+      "DIRECT_DATABASE_URL",
+      "QUICKBOOKS_MONITOR_BEARER",
+      "QUICKBOOKS_API_SIGNAL_INGEST_URL",
+      "QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN",
+    ],
+  },
 };
 
 function usage() {
   process.stdout.write(
-    "Usage: node scripts/infrastructure-variable-audit.mjs --profile <api|worker|migrations|web|quickbooks-oauth|quickbooks-reconciliation|quickbooks-cdc|quickbooks-hosted-payments|quickbooks>\n"
+    "Usage: node scripts/infrastructure-variable-audit.mjs --profile <api|worker|migrations|web|quickbooks-oauth|quickbooks-reconciliation|quickbooks-cdc|quickbooks-hosted-payments|quickbooks|quickbooks-signals-api|quickbooks-signals-worker>\n"
     + "Emits current-process presence metadata only; it never prints environment values.\n",
   );
 }

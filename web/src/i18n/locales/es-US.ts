@@ -2093,6 +2093,8 @@ export const esUS = {
       checklistTitle: "Preparación de la configuración",
       checklistDescription: "Todos los controles deben aprobarse antes de publicar o conciliar registros contables.",
       actionRequiredTitle: "Completa estos pasos del espacio de trabajo",
+      connectionIntegrityAttentionTitle: "La conexión de QuickBooks requiere atención",
+      connectionIntegrityAttentionDescription: "QuoteFly detectó una verificación de integridad de la conexión que debe restaurarse antes de considerar verificada esta conexión de pruebas. Actualiza este estado o contacta al soporte de QuoteFly. No esperes ni cambies nada en QuickBooks.",
       platformWaitingTitle: "QuickBooks está conectado, pero la automatización aún no está lista",
       platformWaitingDescription: "QuoteFly está terminando una verificación contable administrada por la plataforma. No necesitas cambiar nada en QuickBooks; espera el estado de preparación antes de depender de la automatización de facturas o pagos.",
       connectionOnlyTitle: "Conexión de QuickBooks verificada para pruebas",

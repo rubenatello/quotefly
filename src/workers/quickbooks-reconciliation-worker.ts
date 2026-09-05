@@ -27,7 +27,10 @@ import {
   runQuickBooksUnknownRealmQuarantineRetention,
 } from "../services/quickbooks-retention";
 import { classifyQuickBooksWorkerFailure } from "../services/quickbooks-worker-failures";
-import { visitQuickBooksWorkerTenantPage } from "../services/quickbooks-worker-scheduler";
+import {
+  visitQuickBooksWorkerTenantPage,
+  type QuickBooksWorkerPageResult,
+} from "../services/quickbooks-worker-scheduler";
 import {
   QUICKBOOKS_RECONCILIATION_WORKER_KEY,
   recordWorkerHeartbeat,
@@ -38,8 +41,18 @@ import {
   claimQuickBooksWebhookEvent,
   completeQuickBooksWebhookEvent,
   failQuickBooksWebhookEvent,
+  quickBooksWebhookEventClaimableWhere,
   renewQuickBooksWebhookClaim,
 } from "../services/quickbooks-webhook-inbox";
+import {
+  emitQuickBooksWorkerOperationalSignal,
+  flushQuickBooksExternalSignals,
+} from "../services/quickbooks-observability";
+import {
+  createQuickBooksWorkerOperationalTracker,
+  registerQuickBooksProviderAttemptObserver,
+  type QuickBooksProviderAttemptObservation,
+} from "../services/quickbooks-worker-operational";
 
 let stopping = false;
 process.on("SIGTERM", () => { stopping = true; });
@@ -57,6 +70,32 @@ const WORKER_INSTANCE_REF_HASH = createHash("sha256")
   .update(randomUUID(), "utf8")
   .digest("hex");
 const WORKER_RELEASE_SHA = resolveRuntimeReleaseSha();
+const quickBooksOperationalTracker = createQuickBooksWorkerOperationalTracker({
+  environment: env.QUICKBOOKS_ENVIRONMENT,
+  startupAtUtc: WORKER_STARTED_AT_UTC,
+});
+type QuickBooksProviderTickMetrics = {
+  providerWorkflowCount: number;
+  providerWorkflowTotalDurationMs: number;
+  providerWorkflowMaxDurationMs: number;
+};
+let currentProviderTickMetrics: QuickBooksProviderTickMetrics | null = null;
+const unregisterQuickBooksProviderAttemptObserver = registerQuickBooksProviderAttemptObserver(
+  (observation: QuickBooksProviderAttemptObservation) => {
+    quickBooksOperationalTracker.recordProviderAttempt(observation);
+    const metrics = currentProviderTickMetrics;
+    if (!metrics) return;
+    metrics.providerWorkflowCount = Math.min(Number.MAX_SAFE_INTEGER, metrics.providerWorkflowCount + 1);
+    metrics.providerWorkflowTotalDurationMs = Math.min(
+      Number.MAX_SAFE_INTEGER,
+      metrics.providerWorkflowTotalDurationMs + observation.durationMs,
+    );
+    metrics.providerWorkflowMaxDurationMs = Math.max(
+      metrics.providerWorkflowMaxDurationMs,
+      observation.durationMs,
+    );
+  },
+);
 let currentCycleStartedAtUtc = WORKER_STARTED_AT_UTC;
 let lastHeartbeatWriteAt = 0;
 
@@ -67,6 +106,9 @@ async function persistWorkerHeartbeat(
 ) {
   const now = new Date();
   if (!options.force && now.getTime() - lastHeartbeatWriteAt < QUICKBOOKS_HEARTBEAT_REFRESH_MS) return;
+  const existingMetrics = metrics && typeof metrics === "object" && !Array.isArray(metrics)
+    ? metrics as Prisma.InputJsonObject
+    : {};
   await recordWorkerHeartbeat(prisma, {
     workerKey: QUICKBOOKS_RECONCILIATION_WORKER_KEY,
     instanceRefHash: WORKER_INSTANCE_REF_HASH,
@@ -75,9 +117,11 @@ async function persistWorkerHeartbeat(
     cycleStartedAtUtc: currentCycleStartedAtUtc,
     heartbeatAtUtc: now,
     lastCycleDurationMs: options.lastCycleDurationMs,
-    metrics: WORKER_RELEASE_SHA && metrics && typeof metrics === "object" && !Array.isArray(metrics)
-      ? { releaseSha: WORKER_RELEASE_SHA, ...metrics }
-      : metrics,
+    metrics: {
+      ...existingMetrics,
+      ...(WORKER_RELEASE_SHA ? { releaseSha: WORKER_RELEASE_SHA } : {}),
+      quickBooksOperational: quickBooksOperationalTracker.heartbeat(now),
+    } as Prisma.InputJsonObject,
   });
   lastHeartbeatWriteAt = now.getTime();
 }
@@ -156,18 +200,10 @@ function writeWorkerLog(
   (level === "error" ? process.stderr : process.stdout).write(`${record}\n`);
 }
 
-function recordProviderWorkflowDuration(
-  metrics: {
-    providerWorkflowCount: number;
-    providerWorkflowTotalDurationMs: number;
-    providerWorkflowMaxDurationMs: number;
-  },
-  startedAtMs: number,
-) {
-  const durationMs = Math.max(0, Date.now() - startedAtMs);
-  metrics.providerWorkflowCount += 1;
-  metrics.providerWorkflowTotalDurationMs += durationMs;
-  metrics.providerWorkflowMaxDurationMs = Math.max(metrics.providerWorkflowMaxDurationMs, durationMs);
+function emitQuickBooksOperationalHealthSignals(now = new Date()) {
+  for (const signal of quickBooksOperationalTracker.drainExternalSignals(now)) {
+    emitQuickBooksWorkerOperationalSignal(signal);
+  }
 }
 
 const WEBHOOK_PROVIDER_WORKLIST_KEY = "quoteflyPendingProviderInvoiceIds";
@@ -422,7 +458,6 @@ async function requeueQuickBooksWebhookClaim(
 
 type QuickBooksTenantProcessOutcome = Readonly<{
   status: "idle" | "processed" | "failed" | "dead";
-  failureCode?: string;
 }>;
 
 async function processTenant(tenantId: string): Promise<QuickBooksTenantProcessOutcome> {
@@ -444,20 +479,20 @@ async function processTenant(tenantId: string): Promise<QuickBooksTenantProcessO
     }
     if (work.remainingProviderInvoiceIds.length > 0 || work.remainingInvoiceIds.length > 0) {
       if (!(await stopClaimRenewal())) {
-        return { status: "failed", failureCode: "QUICKBOOKS_WEBHOOK_CLAIM_STALE" };
+        return { status: "failed" };
       }
       return (await requeueQuickBooksWebhookClaim(
         claim,
         work.payload,
         work.remainingProviderInvoiceIds,
         work.remainingInvoiceIds,
-      )) ? { status: "processed" } : { status: "failed", failureCode: "QUICKBOOKS_WEBHOOK_CLAIM_STALE" };
+      )) ? { status: "processed" } : { status: "failed" };
     }
     if (!(await stopClaimRenewal())) {
-      return { status: "failed", failureCode: "QUICKBOOKS_WEBHOOK_CLAIM_STALE" };
+      return { status: "failed" };
     }
     if (!(await completeQuickBooksWebhookEvent(prisma, claim))) {
-      return { status: "failed", failureCode: "QUICKBOOKS_WEBHOOK_CLAIM_STALE" };
+      return { status: "failed" };
     }
     return { status: "processed" };
   } catch (error) {
@@ -473,26 +508,14 @@ async function processTenant(tenantId: string): Promise<QuickBooksTenantProcessO
       retryable: failure.retryable,
       outcome,
     });
-    return {
-      status: outcome === "DEAD" ? "dead" : "failed",
-      failureCode: failure.code,
-    };
+    return { status: outcome === "DEAD" ? "dead" : "failed" };
   }
 }
 
 async function inspectDueWebhookBacklog(tenantId: string) {
   return withTenantRlsContext(prisma, tenantId, async (transaction) => {
     const now = new Date();
-    const dueWhere = {
-      tenantId,
-      quickBooksConnectionId: { not: null },
-      entityId: { not: null },
-      OR: [
-        { status: "RECEIVED" as const },
-        { status: "FAILED" as const, nextAttemptAtUtc: { lte: now } },
-        { status: "PROCESSING" as const, claimExpiresAtUtc: { lte: now } },
-      ],
-    };
+    const dueWhere = quickBooksWebhookEventClaimableWhere(tenantId, now);
     const [dueCount, oldest] = await Promise.all([
       transaction.quickBooksWebhookEvent.count({ where: dueWhere }),
       transaction.quickBooksWebhookEvent.findFirst({
@@ -516,6 +539,7 @@ async function run() {
   let revocationAfterTenantId: string | null = null;
   let cdcAfterTenantId: string | null = null;
   let retentionAfterTenantId: string | null = null;
+  let retentionCycleUnresolvedFailureCount = 0;
   let nextRevocationScanAt = 0;
   let nextCdcScanAt = 0;
   let nextRetentionScanAt = 0;
@@ -541,11 +565,11 @@ async function run() {
       dueTenantCount: 0,
       dueEventCount: 0,
       oldestBacklogAgeMs: 0,
-      failureCodes: {} as Record<string, number>,
       providerWorkflowCount: 0,
       providerWorkflowTotalDurationMs: 0,
       providerWorkflowMaxDurationMs: 0,
     };
+    currentProviderTickMetrics = metrics;
     const webhookPage = await visitQuickBooksWorkerTenantPage({
       afterTenantId: webhookAfterTenantId,
       loadPage: loadTenantPage,
@@ -561,13 +585,8 @@ async function run() {
               Math.max(0, Date.now() - backlog.oldestReceivedAtUtc.getTime()),
             );
           }
-          const providerWorkflowStartedAtMs = Date.now();
           const outcome = await processTenant(tenant.id);
-          recordProviderWorkflowDuration(metrics, providerWorkflowStartedAtMs);
           if (outcome.status !== "idle") metrics[outcome.status] += 1;
-          if (outcome.failureCode) {
-            metrics.failureCodes[outcome.failureCode] = (metrics.failureCodes[outcome.failureCode] ?? 0) + 1;
-          }
         }
         await persistWorkerHeartbeat("RUNNING", {
           phase: "webhook_scan",
@@ -588,14 +607,17 @@ async function run() {
         loadPage: loadTenantPage,
         visit: async (tenant) => {
           if (stopping) return;
-        const providerWorkflowStartedAtMs = Date.now();
-        await retryQuickBooksRevocation({ prisma, runtimeEnv: env, tenantId: tenant.id }).catch((error) => {
-          writeWorkerLog("warn", "quickbooks_token_revocation_retry_failed", {
-            errorName: error instanceof Error ? error.name : "UnknownError",
+          await retryQuickBooksRevocation({
+            prisma,
+            runtimeEnv: env,
+            tenantId: tenant.id,
+          }).catch((error) => {
+            writeWorkerLog("warn", "quickbooks_token_revocation_retry_failed", {
+              errorName: error instanceof Error ? error.name : "UnknownError",
+            });
+            return "retry" as const;
           });
-        });
-        recordProviderWorkflowDuration(metrics, providerWorkflowStartedAtMs);
-        await persistWorkerHeartbeat("RUNNING", { phase: "revocation_scan" });
+          await persistWorkerHeartbeat("RUNNING", { phase: "revocation_scan" });
         },
       });
       revocationAfterTenantId = revocationPage.nextAfterTenantId;
@@ -612,19 +634,19 @@ async function run() {
         loadPage: loadTenantPage,
         visit: async (tenant) => {
           if (stopping) return;
-          const providerWorkflowStartedAtMs = Date.now();
-          await recoverQuickBooksChanges({
-            prisma,
-            runtimeEnv: env,
-            tenantId: tenant.id,
-            getAccessToken: (connection) => getSerializedQuickBooksAccessToken({ prisma, runtimeEnv: env, connection }),
-          }).catch((error) => {
+          try {
+            await recoverQuickBooksChanges({
+              prisma,
+              runtimeEnv: env,
+              tenantId: tenant.id,
+              getAccessToken: (connection) => getSerializedQuickBooksAccessToken({ prisma, runtimeEnv: env, connection }),
+            });
+          } catch (error) {
             writeWorkerLog("warn", "quickbooks_cdc_recovery_failed", {
               tenantRefHash: tenantRefHash(tenant.id),
               errorName: error instanceof Error ? error.name : "UnknownError",
             });
-          });
-          recordProviderWorkflowDuration(metrics, providerWorkflowStartedAtMs);
+          }
           await persistWorkerHeartbeat("RUNNING", { phase: "cdc_scan" });
         },
       });
@@ -645,25 +667,27 @@ async function run() {
     let workerHeartbeatInstanceDeletedCount = 0;
     let workerHeartbeatInstanceRetentionFailed = false;
     if (!stopping && tickStartedAt >= nextRetentionScanAt) {
-      try {
-        workerHeartbeatInstanceDeletedCount = await runWorkerHeartbeatInstanceRetention(prisma);
-      } catch (error) {
-        workerHeartbeatInstanceRetentionFailed = true;
-        writeWorkerLog("warn", "worker_heartbeat_instance_retention_failed", {
-          errorName: error instanceof Error ? error.name : "UnknownError",
-        });
+      if (retentionAfterTenantId === null) {
+        try {
+          workerHeartbeatInstanceDeletedCount = await runWorkerHeartbeatInstanceRetention(prisma);
+        } catch (error) {
+          workerHeartbeatInstanceRetentionFailed = true;
+          writeWorkerLog("warn", "worker_heartbeat_instance_retention_failed", {
+            errorName: error instanceof Error ? error.name : "UnknownError",
+          });
+        }
+        try {
+          const quarantineResult = await runQuickBooksUnknownRealmQuarantineRetention(prisma);
+          unknownRealmQuarantineDeletedCount = quarantineResult.deletedCount;
+          unknownRealmQuarantineHasMore = quarantineResult.hasMore;
+        } catch (error) {
+          unknownRealmQuarantineRetentionFailed = true;
+          writeWorkerLog("warn", "quickbooks_unknown_realm_retention_failed", {
+            errorName: error instanceof Error ? error.name : "UnknownError",
+          });
+        }
       }
-      try {
-        const quarantineResult = await runQuickBooksUnknownRealmQuarantineRetention(prisma);
-        unknownRealmQuarantineDeletedCount = quarantineResult.deletedCount;
-        unknownRealmQuarantineHasMore = quarantineResult.hasMore;
-      } catch (error) {
-        unknownRealmQuarantineRetentionFailed = true;
-        writeWorkerLog("warn", "quickbooks_unknown_realm_retention_failed", {
-          errorName: error instanceof Error ? error.name : "UnknownError",
-        });
-      }
-      const retentionPage = await visitQuickBooksWorkerTenantPage({
+      const retentionPage: QuickBooksWorkerPageResult = await visitQuickBooksWorkerTenantPage({
         afterTenantId: retentionAfterTenantId,
         loadPage: loadTenantPage,
         visit: async (tenant) => {
@@ -686,12 +710,46 @@ async function run() {
           }
           await persistWorkerHeartbeat("RUNNING", { phase: "retention_scan" });
         },
+      }).catch((error) => {
+        quickBooksOperationalTracker.recordRetentionRun({
+          unresolvedFailureCount: 1,
+          occurredAtUtc: new Date(),
+        });
+        emitQuickBooksOperationalHealthSignals();
+        throw error;
       });
       retentionAfterTenantId = retentionPage.nextAfterTenantId;
       retentionTenantCount = retentionPage.tenantCount;
       retentionCycleComplete = retentionPage.cycleComplete;
-      nextRetentionScanAt = Date.now() + QUICKBOOKS_RETENTION_SCAN_INTERVAL_MS;
+      const pageUnresolvedFailureCount = retentionFailedTenantCount
+        + Number(unknownRealmQuarantineRetentionFailed)
+        + Number(workerHeartbeatInstanceRetentionFailed);
+      const cycleWasHealthy = retentionCycleUnresolvedFailureCount === 0;
+      retentionCycleUnresolvedFailureCount = Math.min(
+        Number.MAX_SAFE_INTEGER,
+        retentionCycleUnresolvedFailureCount + pageUnresolvedFailureCount,
+      );
+      if (cycleWasHealthy && pageUnresolvedFailureCount > 0) {
+        quickBooksOperationalTracker.recordRetentionRun({
+          unresolvedFailureCount: pageUnresolvedFailureCount,
+          occurredAtUtc: new Date(),
+        });
+      }
+      if (retentionCycleComplete) {
+        if (retentionCycleUnresolvedFailureCount === 0 && !stopping) {
+          quickBooksOperationalTracker.recordRetentionRun({
+            unresolvedFailureCount: 0,
+            occurredAtUtc: new Date(),
+          });
+        }
+        retentionCycleUnresolvedFailureCount = 0;
+      }
+      nextRetentionScanAt = retentionCycleComplete
+        ? Date.now() + QUICKBOOKS_RETENTION_SCAN_INTERVAL_MS
+        : 0;
     }
+
+    emitQuickBooksOperationalHealthSignals();
 
     writeWorkerLog("info", "quickbooks_reconciliation_worker_heartbeat", {
         processed: metrics.processed,
@@ -731,7 +789,6 @@ async function run() {
       dueTenantCount: metrics.dueTenantCount,
       dueEventCount: metrics.dueEventCount,
       oldestBacklogAgeMs: metrics.oldestBacklogAgeMs,
-      failureCodes: metrics.failureCodes,
       providerWorkflowCount: metrics.providerWorkflowCount,
       providerWorkflowTotalDurationMs: metrics.providerWorkflowTotalDurationMs,
       providerWorkflowMaxDurationMs: metrics.providerWorkflowMaxDurationMs,
@@ -742,24 +799,32 @@ async function run() {
       workerHeartbeatInstanceDeletedCount,
       workerHeartbeatInstanceRetentionFailed,
     }, { force: true, lastCycleDurationMs: Date.now() - tickStartedAt });
+    currentProviderTickMetrics = null;
     await pause(metrics.dueEventCount > 0
       ? QUICKBOOKS_ACTIVE_TICK_PAUSE_MS
       : QUICKBOOKS_IDLE_TICK_PAUSE_MS);
   }
   } finally {
+    currentProviderTickMetrics = null;
     await stopHeartbeatRefreshLoop();
+    await persistWorkerHeartbeat("STOPPING", { stopping: true }, { force: true }).catch(() => undefined);
   }
   await persistWorkerHeartbeat("STOPPED", { stopping: true }, { force: true });
 }
 
 run()
   .catch(async (error: unknown) => {
+    emitQuickBooksOperationalHealthSignals();
     writeWorkerLog("error", "quickbooks_reconciliation_worker_stopped", {
       errorName: error instanceof Error ? error.name : "UnknownError",
     });
     await persistWorkerHeartbeat("FAILED", {
-      errorName: error instanceof Error ? error.name : "UnknownError",
+      stoppedUnexpectedly: true,
     }, { force: true }).catch(() => undefined);
     process.exitCode = 1;
   })
-  .finally(async () => prisma.$disconnect());
+  .finally(async () => {
+    unregisterQuickBooksProviderAttemptObserver();
+    await flushQuickBooksExternalSignals();
+    await prisma.$disconnect();
+  });

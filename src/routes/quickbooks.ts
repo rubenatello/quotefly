@@ -88,6 +88,14 @@ import {
   recordQuickBooksConnectionEvent,
 } from "../services/quickbooks-connection-events";
 import {
+  createQuickBooksSignalWriter,
+  emitQuickBooksOAuthCallbackSignal,
+  safeQuickBooksOAuthProviderEventCode,
+  type QuickBooksOAuthCallbackEventCode,
+  type QuickBooksOAuthCallbackOutcome,
+  type QuickBooksOAuthCallbackStage,
+} from "../services/quickbooks-observability";
+import {
   loadWorkerHeartbeatFleet,
   QUICKBOOKS_RECONCILIATION_WORKER_KEY,
   serializeWorkerHeartbeatFleetForTenant,
@@ -289,6 +297,7 @@ const QUICKBOOKS_TAX_SYNC_UNSUPPORTED = "QUICKBOOKS_TAX_SYNC_UNSUPPORTED";
 class QuickBooksRealmChangeBlockedError extends Error {}
 class QuickBooksOAuthStateReplayError extends Error {}
 class QuickBooksCredentialLifecycleBlockedError extends Error {}
+class QuickBooksAuthorizationRevokedError extends Error {}
 
 type QuickBooksRealmSwitchCandidate = Readonly<{
   realmId: string;
@@ -435,6 +444,7 @@ function sendQuickBooksInvoiceOperationError(reply: FastifyReply, error: unknown
 
 export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
   const apiReleaseSha = resolveRuntimeReleaseSha();
+  const quickBooksSignalWriter = createQuickBooksSignalWriter(app.log);
   const QuickBooksConnectRateLimit = {
     config: {
       rateLimit: {
@@ -739,6 +749,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       prisma: app.prisma,
       runtimeEnv: app.env,
       connection,
+      signalWriter: quickBooksSignalWriter,
     });
   }
 
@@ -751,6 +762,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       runtimeEnv: app.env,
       connection,
       operation,
+      signalWriter: quickBooksSignalWriter,
     });
   }
 
@@ -1023,20 +1035,46 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     // all avoid cache retention and referrer propagation.
     reply.header("Cache-Control", "private, no-store");
     reply.header("Referrer-Policy", "no-referrer");
-    const query = QuickBooksCallbackQuerySchema.parse(request.query);
+    let callbackStage: QuickBooksOAuthCallbackStage = "QUERY_VALIDATION";
+    let terminalSignalEmitted = false;
+    const emitTerminalSignal = (
+      eventCode: QuickBooksOAuthCallbackEventCode,
+      outcome: QuickBooksOAuthCallbackOutcome,
+    ) => {
+      if (terminalSignalEmitted) return;
+      terminalSignalEmitted = true;
+      // Use the application logger rather than request.log so the normalized
+      // terminal record cannot inherit a request identifier or request fields.
+      emitQuickBooksOAuthCallbackSignal(quickBooksSignalWriter, {
+        eventCode,
+        callbackStage,
+        outcome,
+      });
+    };
     const failureRedirect = (state: string) => reply.redirect(buildQuickBooksAdminRedirect(app.env, state));
+    const parsedQuery = QuickBooksCallbackQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      emitTerminalSignal("QUICKBOOKS_OAUTH_CALLBACK_MALFORMED", "REJECTED");
+      throw parsedQuery.error;
+    }
+    const query = parsedQuery.data;
 
+    callbackStage = "STATE_VALIDATION";
     if (!query.state) {
+      // An unsigned provider error is attacker-spoofable. Preserve the public
+      // redirect while reserving DENIED telemetry for a consumed one-time state.
+      emitTerminalSignal("QUICKBOOKS_OAUTH_CALLBACK_INCOMPLETE", "REJECTED");
       return failureRedirect(query.error ? "quickbooks_denied" : "quickbooks_error");
     }
 
     const verifiedState = verifySignedQuickBooksState(app.env, query.state);
     if (!verifiedState) {
+      emitTerminalSignal("QUICKBOOKS_OAUTH_STATE_INVALID", "REJECTED");
       return failureRedirect("quickbooks_invalid_state");
     }
 
     let issuedRefreshToken: string | null = null;
-    let callbackStage = "STATE_LOOKUP";
+    callbackStage = "STATE_LOOKUP";
     try {
       const stateHash = createHash("sha256").update(query.state, "utf8").digest("hex");
       const stateExists = await withTenantRlsContext(
@@ -1060,22 +1098,30 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       // legitimate OAuth attempt.
       callbackStage = "SESSION_VALIDATION";
       await app.authenticate(request, reply);
-      if (reply.sent) return reply;
+      if (reply.sent) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_SESSION_INVALID", "REJECTED");
+        return reply;
+      }
       const callbackClaims = getJwtClaims(request);
       if (
         callbackClaims.tenantId !== verifiedState.tenantId
         || callbackClaims.userId !== verifiedState.userId
       ) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_SESSION_INVALID", "REJECTED");
         return failureRedirect("quickbooks_session_mismatch");
       }
       const callbackMembership = request.liveAuthMembership;
-      if (!callbackMembership) return failureRedirect("quickbooks_session_mismatch");
+      if (!callbackMembership) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_SESSION_INVALID", "REJECTED");
+        return failureRedirect("quickbooks_session_mismatch");
+      }
       const callbackEntitlements = buildTenantEntitlements(
         callbackMembership.tenant,
         new Date(),
         { userEmail: callbackMembership.user.email },
       );
       if (!callbackEntitlements.hasWorkspaceAccess) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_BILLING_REQUIRED", "REJECTED");
         return failureRedirect("quickbooks_billing_required");
       }
 
@@ -1114,14 +1160,24 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       );
       if (!stateConsumed) throw new QuickBooksOAuthStateReplayError();
 
-      if (query.error) return failureRedirect("quickbooks_denied");
-      if (!query.code || !query.realmId) return failureRedirect("quickbooks_error");
+      callbackStage = "CALLBACK_VALIDATION";
+      if (query.error) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_CALLBACK_DENIED", "DENIED");
+        return failureRedirect("quickbooks_denied");
+      }
+      if (!query.code || !query.realmId) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_CALLBACK_INCOMPLETE", "REJECTED");
+        return failureRedirect("quickbooks_error");
+      }
       const callbackRealmId = query.realmId;
 
+      callbackStage = "RUNTIME_VALIDATION";
       if (!app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_WORKFLOWS_DISABLED", "FAILED");
         return reply.code(503).send({ error: QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE });
       }
       if (!isQuickBooksConfigured(app.env)) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_NOT_CONFIGURED", "FAILED");
         return failureRedirect("quickbooks_not_configured");
       }
 
@@ -1134,6 +1190,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         verifiedState.userId,
       );
       if (!hasManagerAccess) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_AUTHORIZATION_REVOKED", "REJECTED");
         return failureRedirect("quickbooks_error");
       }
 
@@ -1141,6 +1198,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       const existingRealmConnection = await resolveQuickBooksWebhookRealm(app.prisma, callbackRealmId);
 
       if (existingRealmConnection && existingRealmConnection.tenantId !== verifiedState.tenantId) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_REALM_IN_USE", "REJECTED");
         return failureRedirect("quickbooks_realm_in_use");
       }
 
@@ -1185,6 +1243,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         && existingTenantConnection.realmId !== callbackRealmId
         && !canReplaceUnusedDisconnectedQuickBooksRealm(existingTenantConnection)
       ) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_REALM_CHANGE_BLOCKED", "REJECTED");
         return failureRedirect("quickbooks_realm_change_blocked");
       }
       if (
@@ -1215,7 +1274,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         verifiedState.userId,
       );
       if (!stillHasManagerAccess) {
-        throw new QuickBooksCredentialLifecycleBlockedError();
+        throw new QuickBooksAuthorizationRevokedError();
       }
 
       const now = new Date();
@@ -1321,8 +1380,8 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
            || actor.authVersion !== callbackClaims.authVersion
            || !canManageQuickBooks(actor.role)
            || !buildTenantEntitlements(actor, new Date(), { userEmail: actor.email }).hasWorkspaceAccess
-         ) {
-           throw new QuickBooksCredentialLifecycleBlockedError();
+          ) {
+            throw new QuickBooksAuthorizationRevokedError();
          }
         const switchingRealm = Boolean(
           currentConnection && currentConnection.realmId !== callbackRealmId,
@@ -1358,9 +1417,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
            revocationPendingAtUtc: null,
            revocationAttemptCount: 0,
            revocationNextAttemptAtUtc: null,
-           tokenRefreshClaimHash: null,
-           tokenRefreshClaimExpiresAtUtc: null,
-           setupConfirmedAtUtc: null,
+            tokenRefreshClaimHash: null,
+            tokenRefreshClaimExpiresAtUtc: null,
+            tokenRefreshFailureStartedAtUtc: null,
+            setupConfirmedAtUtc: null,
            setupConfirmedByTenantUserId: null,
            setupChecklistVersion: null,
            lastError: null,
@@ -1446,6 +1506,8 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         });
       }, { maxWait: 5_000, timeout: 15_000 });
 
+      callbackStage = "COMPLETED";
+      emitTerminalSignal("QUICKBOOKS_OAUTH_CALLBACK_COMPLETED", "SUCCEEDED");
       return failureRedirect("quickbooks_connected");
     } catch (error) {
       let orphanCleanupFailed = false;
@@ -1482,39 +1544,35 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           );
         }
       }
-      if (orphanCleanupFailed) return failureRedirect("quickbooks_cleanup_failed");
+      if (orphanCleanupFailed) {
+        callbackStage = "ORPHAN_CLEANUP";
+        emitTerminalSignal("QUICKBOOKS_OAUTH_ORPHAN_CLEANUP_FAILED", "FAILED");
+        return failureRedirect("quickbooks_cleanup_failed");
+      }
       if (error instanceof QuickBooksOAuthStateReplayError) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_STATE_REPLAYED", "REJECTED");
         return failureRedirect("quickbooks_invalid_state");
       }
       if (error instanceof QuickBooksRealmChangeBlockedError) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_REALM_CHANGE_BLOCKED", "REJECTED");
         return failureRedirect("quickbooks_realm_change_blocked");
       }
       if (error instanceof QuickBooksCredentialLifecycleBlockedError) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_CREDENTIAL_LIFECYCLE_BUSY", "REJECTED");
         return failureRedirect("quickbooks_disconnect_pending");
       }
-      const callbackFailure = error instanceof QuickBooksProviderError
-        ? {
-            eventCode: error.code,
-            errorName: "QuickBooksProviderError",
-          }
+      if (error instanceof QuickBooksAuthorizationRevokedError) {
+        emitTerminalSignal("QUICKBOOKS_OAUTH_AUTHORIZATION_REVOKED", "REJECTED");
+        return failureRedirect("quickbooks_disconnect_pending");
+      }
+      const eventCode: QuickBooksOAuthCallbackEventCode = error instanceof QuickBooksProviderError
+        ? safeQuickBooksOAuthProviderEventCode(error.code)
         : error instanceof Prisma.PrismaClientKnownRequestError
-          ? {
-              eventCode: "QUICKBOOKS_OAUTH_DATABASE_WRITE_FAILED",
-              errorName: "PrismaClientKnownRequestError",
-            }
+          ? "QUICKBOOKS_OAUTH_DATABASE_WRITE_FAILED"
           : error instanceof Prisma.PrismaClientInitializationError
-            ? {
-                eventCode: "QUICKBOOKS_OAUTH_DATABASE_UNAVAILABLE",
-                errorName: "PrismaClientInitializationError",
-              }
-            : {
-                eventCode: "QUICKBOOKS_OAUTH_CALLBACK_UNKNOWN",
-                errorName: "UnknownError",
-              };
-      request.log.error(
-        { ...callbackFailure, callbackStage },
-        "QuickBooks OAuth callback failed.",
-      );
+            ? "QUICKBOOKS_OAUTH_DATABASE_UNAVAILABLE"
+            : "QUICKBOOKS_OAUTH_CALLBACK_UNKNOWN";
+      emitTerminalSignal(eventCode, "FAILED");
       return failureRedirect("quickbooks_error");
     }
   });
@@ -2082,6 +2140,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             invoiceId,
             trigger: "PUBLISH",
             getAccessToken,
+            signalWriter: quickBooksSignalWriter,
           });
         } catch (reconciliationError) {
           const failureCode = reconciliationError instanceof QuickBooksReconciliationError
@@ -2305,6 +2364,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           invoiceId,
           trigger: "MANUAL",
           getAccessToken,
+          signalWriter: quickBooksSignalWriter,
         });
         const operation = await withTenantRlsContext(
           app.prisma,
@@ -2407,6 +2467,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           invoiceId,
           trigger: "MANUAL",
           getAccessToken,
+          signalWriter: quickBooksSignalWriter,
         });
         const operation = await withTenantRlsContext(app.prisma, access.tenantId, (transaction) =>
           transaction.quickBooksInvoiceOperation.findFirstOrThrow({
