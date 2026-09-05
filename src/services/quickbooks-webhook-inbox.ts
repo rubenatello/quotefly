@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { withTenantRlsContext, type TenantRlsClient } from "../lib/tenant-rls";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
+import { lockQuickBooksWorkerProviderReadsAllowed } from "./quickbooks-worker-scheduler";
 import {
   QUICKBOOKS_RETENTION_BATCH_SIZE,
   QUICKBOOKS_UNKNOWN_REALM_QUARANTINE_RETENTION_DAYS,
@@ -9,6 +10,7 @@ import {
 
 const WEBHOOK_CLAIM_TTL_MS = 2 * 60 * 1000;
 const WEBHOOK_MAX_ATTEMPTS = 8;
+export const QUICKBOOKS_WEBHOOK_REALM_CONCURRENCY = 4;
 
 function subtractUtcDays(now: Date, days: number): Date {
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1_000);
@@ -71,11 +73,13 @@ async function setQuickBooksWebhookIngressContext(
   transaction: Prisma.TransactionClient,
   realmId: string,
   eventId?: string,
+  eventIds?: readonly string[],
 ) {
   await transaction.$queryRaw(Prisma.sql`
     SELECT
       set_config('app.quickbooks_webhook_realm_id', ${realmId}, true),
-      set_config('app.quickbooks_webhook_event_id', ${eventId ?? ""}, true)
+      set_config('app.quickbooks_webhook_event_id', ${eventId ?? ""}, true),
+      set_config('app.quickbooks_webhook_event_ids', ${eventIds?.join(",") ?? ""}, true)
   `);
 }
 
@@ -157,19 +161,24 @@ async function quarantineUnknownQuickBooksWebhooks(
   notifications: readonly QuickBooksWebhookEntityNotification[],
 ): Promise<{ persisted: number; duplicate: number }> {
   return prisma.$transaction(async (transaction) => {
-    let persisted = 0;
-    let duplicate = 0;
     const realmId = notifications[0]?.realmId;
     if (!realmId || notifications.some((notification) => notification.realmId !== realmId)) {
       throw new Error("QuickBooks quarantine requires one realm per transaction.");
     }
     await setQuickBooksWebhookIngressContext(transaction, realmId);
     await cleanupExpiredUnknownQuickBooksWebhookQuarantine(transaction, realmId);
-    for (const notification of notifications) {
-      const eventId = quickBooksWebhookEventId(notification);
-      await setQuickBooksWebhookIngressContext(transaction, notification.realmId, eventId);
-      const created = await transaction.quickBooksWebhookEvent.createMany({
-        data: [{
+    const notificationRows = notifications.map((notification) => ({
+      notification,
+      eventId: quickBooksWebhookEventId(notification),
+    }));
+    await setQuickBooksWebhookIngressContext(
+      transaction,
+      realmId,
+      undefined,
+      [...new Set(notificationRows.map(({ eventId }) => eventId))],
+    );
+    const created = await transaction.quickBooksWebhookEvent.createMany({
+      data: notificationRows.map(({ notification, eventId }) => ({
           tenantId: null,
           quickBooksConnectionId: null,
           webhookEventId: eventId,
@@ -186,13 +195,13 @@ async function quarantineUnknownQuickBooksWebhooks(
           lastError: quickBooksWebhookSupported(notification)
             ? "QUICKBOOKS_REALM_UNBOUND"
             : QUICKBOOKS_UNSUPPORTED_WEBHOOK_OPERATION,
-        }],
-        skipDuplicates: true,
-      });
-      if (created.count === 1) persisted += 1;
-      else duplicate += 1;
-    }
-    return { persisted, duplicate };
+        })),
+      skipDuplicates: true,
+    });
+    return {
+      persisted: created.count,
+      duplicate: Math.max(0, notifications.length - created.count),
+    };
   }, { maxWait: 5_000, timeout: 10_000 });
 }
 
@@ -200,23 +209,20 @@ export async function persistQuickBooksWebhookNotifications(
   prisma: PrismaClient,
   notifications: readonly QuickBooksWebhookEntityNotification[],
 ): Promise<{ persisted: number; duplicate: number; unknownRealm: number }> {
-  let persisted = 0;
-  let duplicate = 0;
-  let unknownRealm = 0;
   const notificationsByRealm = new Map<string, QuickBooksWebhookEntityNotification[]>();
   for (const notification of notifications) {
     const realmNotifications = notificationsByRealm.get(notification.realmId) ?? [];
     realmNotifications.push(notification);
     notificationsByRealm.set(notification.realmId, realmNotifications);
   }
-  for (const [realmId, realmNotifications] of notificationsByRealm) {
+  const persistRealm = async (
+    realmId: string,
+    realmNotifications: readonly QuickBooksWebhookEntityNotification[],
+  ): Promise<{ persisted: number; duplicate: number; unknownRealm: number }> => {
     const binding = await resolveQuickBooksWebhookRealm(prisma, realmId);
     if (!binding) {
-      unknownRealm += realmNotifications.length;
       const quarantined = await quarantineUnknownQuickBooksWebhooks(prisma, realmNotifications);
-      persisted += quarantined.persisted;
-      duplicate += quarantined.duplicate;
-      continue;
+      return { ...quarantined, unknownRealm: realmNotifications.length };
     }
     const realmResult = await withTenantRlsContext(prisma, binding.tenantId, async (transaction) => {
       const notificationRows = realmNotifications.map((notification) => ({
@@ -302,10 +308,32 @@ export async function persistQuickBooksWebhookNotifications(
         duplicate: Math.max(0, realmNotifications.length - realmPersisted),
       };
     }, { maxWait: 5_000, timeout: 10_000 });
-    persisted += realmResult.persisted;
-    duplicate += realmResult.duplicate;
-  }
-  return { persisted, duplicate, unknownRealm };
+    return { ...realmResult, unknownRealm: 0 };
+  };
+
+  // Intuit expects a prompt acknowledgement, but persistence must complete
+  // before 2xx. Bound parallel realm work so a valid multi-company delivery
+  // does not become one unbounded sequence of transactions or overwhelm the
+  // database pool.
+  const realmBatches = [...notificationsByRealm.entries()];
+  const realmResults = new Array<Awaited<ReturnType<typeof persistRealm>>>(realmBatches.length);
+  let nextRealmIndex = 0;
+  await Promise.all(Array.from(
+    { length: Math.min(QUICKBOOKS_WEBHOOK_REALM_CONCURRENCY, realmBatches.length) },
+    async () => {
+      while (nextRealmIndex < realmBatches.length) {
+        const realmIndex = nextRealmIndex;
+        nextRealmIndex += 1;
+        const [realmId, realmNotifications] = realmBatches[realmIndex]!;
+        realmResults[realmIndex] = await persistRealm(realmId, realmNotifications);
+      }
+    },
+  ));
+  return realmResults.reduce((total, result) => ({
+    persisted: total.persisted + result.persisted,
+    duplicate: total.duplicate + result.duplicate,
+    unknownRealm: total.unknownRealm + result.unknownRealm,
+  }), { persisted: 0, duplicate: 0, unknownRealm: 0 });
 }
 
 export type QuickBooksWebhookClaim = Readonly<{
@@ -320,30 +348,46 @@ export type QuickBooksWebhookClaim = Readonly<{
   claimToken: string;
 }>;
 
+/**
+ * The worker's backlog metric and the claim path must describe exactly the
+ * same queue. In particular, events for disconnected, unconfirmed, deleted,
+ * or superseded-checklist connections are retained for audit/recovery but are
+ * not work that a reconciliation worker can claim.
+ */
+export function quickBooksWebhookEventClaimableWhere(
+  tenantId: string,
+  now: Date,
+): Prisma.QuickBooksWebhookEventWhereInput {
+  return {
+    tenantId,
+    quickBooksConnectionId: { not: null },
+    entityId: { not: null },
+    connection: {
+      status: "CONNECTED",
+      deletedAtUtc: null,
+      setupConfirmedAtUtc: { not: null },
+      setupConfirmedByTenantUserId: { not: null },
+      setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+    },
+    OR: [
+      { status: "RECEIVED" },
+      { status: "FAILED", nextAttemptAtUtc: { lte: now } },
+      { status: "PROCESSING", claimExpiresAtUtc: { lte: now } },
+    ],
+  };
+}
+
 export async function claimQuickBooksWebhookEvent(
   prisma: PrismaClient,
   tenantId: string,
+  now = new Date(),
 ): Promise<QuickBooksWebhookClaim | null> {
   return withTenantRlsContext(prisma, tenantId, async (transaction) => {
-    const now = new Date();
+    if (!(await lockQuickBooksWorkerProviderReadsAllowed(transaction, tenantId, now))) {
+      return null;
+    }
     const candidate = await transaction.quickBooksWebhookEvent.findFirst({
-      where: {
-        tenantId,
-        quickBooksConnectionId: { not: null },
-        entityId: { not: null },
-        connection: {
-          status: "CONNECTED",
-          deletedAtUtc: null,
-          setupConfirmedAtUtc: { not: null },
-          setupConfirmedByTenantUserId: { not: null },
-          setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
-        },
-        OR: [
-          { status: "RECEIVED" },
-          { status: "FAILED", nextAttemptAtUtc: { lte: now } },
-          { status: "PROCESSING", claimExpiresAtUtc: { lte: now } },
-        ],
-      },
+      where: quickBooksWebhookEventClaimableWhere(tenantId, now),
       orderBy: [{ receivedAtUtc: "asc" }, { id: "asc" }],
       select: {
         id: true,
@@ -386,6 +430,27 @@ export async function claimQuickBooksWebhookEvent(
       claimToken,
     };
   }, { maxWait: 5_000, timeout: 10_000 });
+}
+
+export async function renewQuickBooksWebhookClaim(
+  prisma: PrismaClient,
+  claim: QuickBooksWebhookClaim,
+  now = new Date(),
+): Promise<boolean> {
+  return withTenantRlsContext(prisma, claim.tenantId, async (transaction) => {
+    const renewed = await transaction.quickBooksWebhookEvent.updateMany({
+      where: {
+        id: claim.id,
+        tenantId: claim.tenantId,
+        status: "PROCESSING",
+        claimTokenHash: sha256(claim.claimToken),
+      },
+      data: {
+        claimExpiresAtUtc: new Date(now.getTime() + WEBHOOK_CLAIM_TTL_MS),
+      },
+    });
+    return renewed.count === 1;
+  });
 }
 
 export async function completeQuickBooksWebhookEvent(

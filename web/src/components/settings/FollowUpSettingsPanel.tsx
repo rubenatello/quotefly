@@ -489,6 +489,7 @@ export function FollowUpSettingsPanel({
         description={t("admin.followUp.leaveDescription")}
         confirmLabel={t("admin.followUp.leaveConfirm")}
         confirmVariant="warning"
+        layer="navigationGuard"
       />
     </div>
   );

@@ -6294,7 +6294,7 @@ export const quoteRoutes: FastifyPluginAsync = async (app) => {
           quote: updatedQuote,
           job: serializeAcceptedJobSummary(acceptedJob),
         };
-      }),
+      }, { maxWait: 5_000, timeout: 15_000 }),
       );
     } catch (error) {
       if (error instanceof QuoteDocumentLocaleLockedError) {

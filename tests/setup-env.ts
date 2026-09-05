@@ -4,6 +4,9 @@ config({ quiet: true });
 
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
+// Migration credentials must not leak into the API runtime fixtures exercised by
+// integration tests. Tests that verify the production rejection add it explicitly.
+delete process.env.DIRECT_DATABASE_URL;
 process.env.JWT_SECRET = "test-jwt-secret-for-quotefly-integration-suite";
 process.env.APP_URL = "http://localhost:5173";
 process.env.API_URL = "http://localhost:4000";
@@ -32,9 +35,15 @@ process.env.QUICKBOOKS_OAUTH_ONLY_MODE = "false";
 process.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED = "false";
 process.env.QUICKBOOKS_CDC_WORKER_ENABLED = "false";
 process.env.QUICKBOOKS_WEBHOOK_VERIFIER = "quotefly-integration-webhook-verifier";
+process.env.QUICKBOOKS_MONITOR_BEARER = "quotefly-integration-monitor-bearer-v1";
 process.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED = "true";
 process.env.QUICKBOOKS_TOKEN_ENCRYPTION_KEY = "quickbooks-integration-encryption-key-v2";
 process.env.QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS = "";
+process.env.QUICKBOOKS_API_SIGNAL_INGEST_URL = "";
+process.env.QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN = "";
+process.env.QUICKBOOKS_WORKER_SIGNAL_INGEST_URL = "";
+process.env.QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN = "";
+process.env.QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS = "1250";
 process.env.ENABLE_TWILIO_SMS = "true";
 process.env.TWILIO_ACCOUNT_SID = "";
 process.env.TWILIO_AUTH_TOKEN = "";

@@ -280,8 +280,7 @@ export function NotificationCenter({
     }
   };
 
-  const closeAndOpenJob = (jobId: string) => {
-    onOpenChange(false);
+  const requestOpenJob = (jobId: string) => {
     onOpenJob(jobId);
   };
   const visibleUnreadCount = notifications.filter((notification) => notification.readAtUtc === null).length;
@@ -389,7 +388,7 @@ export function NotificationCenter({
                     displayTimeZone={displayTimeZone}
                     pending={pendingIds.has(notification.id)}
                     onMarkRead={(item) => void markRead(item)}
-                    onOpenJob={closeAndOpenJob}
+                    onOpenJob={requestOpenJob}
                   />
                 ))}
               </div>

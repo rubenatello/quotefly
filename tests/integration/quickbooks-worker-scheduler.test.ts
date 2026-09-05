@@ -1,10 +1,14 @@
 import { describe, expect, test } from "vitest";
+import { prisma } from "../../src/lib/prisma";
 import {
   buildQuickBooksCdcWorkItems,
   pageQuickBooksProviderEntityIds,
   QUICKBOOKS_RECONCILIATIONS_PER_WORK_ITEM,
 } from "../../src/services/quickbooks-cdc";
-import { visitQuickBooksWorkerTenantPage } from "../../src/services/quickbooks-worker-scheduler";
+import {
+  visitQuickBooksWorkerProviderTenantPage,
+  visitQuickBooksWorkerTenantPage,
+} from "../../src/services/quickbooks-worker-scheduler";
 
 const tenants = Array.from({ length: 1_205 }, (_, index) => ({
   id: `tenant-${String(index).padStart(4, "0")}`,
@@ -82,6 +86,74 @@ describe("QuickBooks reconciliation worker scheduling", () => {
     expect(cursors.webhook).toBe("tenant-0074");
     expect(cursors.revocation).toBe("tenant-0024");
     expect(cursors.cdc).toBe("tenant-0024");
+  });
+
+  test("pauses provider work for billing-ineligible tenants without pausing lifecycle cleanup", async () => {
+    const now = new Date("2026-09-04T20:00:00.000Z");
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const created = await Promise.all([
+      prisma.tenant.create({
+        data: {
+          name: "QuickBooks Eligible Worker Tenant",
+          slug: `qbo-worker-eligible-${suffix}`,
+          subscriptionStatus: "trialing",
+          trialStartsAtUtc: new Date(now.getTime() - 86_400_000),
+          trialEndsAtUtc: new Date(now.getTime() + 86_400_000),
+        },
+      }),
+      prisma.tenant.create({
+        data: {
+          name: "QuickBooks Billing-Paused Worker Tenant",
+          slug: `qbo-worker-paused-${suffix}`,
+          subscriptionStatus: "past_due",
+          subscriptionPlanCode: "starter",
+          stripeCustomerId: `cus_qbo_worker_paused_${suffix}`,
+          stripeSubscriptionId: `sub_qbo_worker_paused_${suffix}`,
+          trialStartsAtUtc: new Date(now.getTime() - 3 * 86_400_000),
+          trialEndsAtUtc: new Date(now.getTime() - 2 * 86_400_000),
+          subscriptionCurrentPeriodStartUtc: new Date(now.getTime() - 2 * 86_400_000),
+          subscriptionCurrentPeriodEndUtc: new Date(now.getTime() - 86_400_000),
+        },
+      }),
+    ]);
+    const tenantIds = created.map(({ id }) => id);
+    const loadPage = async (_afterTenantId: string | null, take: number) => prisma.tenant.findMany({
+      where: { id: { in: tenantIds } },
+      orderBy: { id: "asc" },
+      take,
+      select: {
+        id: true,
+        subscriptionStatus: true,
+        subscriptionPlanCode: true,
+        stripeCustomerId: true,
+        stripeSubscriptionId: true,
+        trialStartsAtUtc: true,
+        trialEndsAtUtc: true,
+        subscriptionCurrentPeriodStartUtc: true,
+        subscriptionCurrentPeriodEndUtc: true,
+      },
+    });
+
+    try {
+      const providerReadTenants: string[] = [];
+      await visitQuickBooksWorkerProviderTenantPage({
+        afterTenantId: null,
+        loadPage,
+        now,
+        visit: async (tenant) => { providerReadTenants.push(tenant.id); },
+      });
+      expect(providerReadTenants).toEqual([created[0]!.id]);
+
+      const lifecycleCleanupTenants: string[] = [];
+      await visitQuickBooksWorkerTenantPage({
+        afterTenantId: null,
+        loadPage,
+        visit: async (tenant) => { lifecycleCleanupTenants.push(tenant.id); },
+      });
+      expect(new Set(lifecycleCleanupTenants)).toEqual(new Set(tenantIds));
+    } finally {
+      await prisma.tenant.deleteMany({ where: { id: { in: tenantIds } } });
+    }
   });
 
   test("oversized provider fan-out is paged so the next tenant still receives a turn", async () => {

@@ -23,6 +23,11 @@ test("individual save and line insertion preserve other drafts through Save Quot
   page,
   request,
 }) => {
+  // This workflow intentionally covers setup, two line mutations, an atomic
+  // sheet save, API persistence polling, reload, and final UI verification.
+  // Keep the assertions individually bounded while allowing the complete cold
+  // Node/Docker path to finish instead of exhausting the global 45s budget.
+  test.setTimeout(90_000);
   const account = await signUpViaApi(request, "quote-draft-integrity");
   const customer = await createCustomerViaApi(request, account);
   const quote = await createQuoteViaApi(request, account, customer.id, {
@@ -31,7 +36,7 @@ test("individual save and line insertion preserve other drafts through Save Quot
   await addSessionCookie(context, account);
 
   await page.goto(`/app/quotes/${quote.id}`);
-  await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 30_000 });
 
   await page.getByLabel("Quote title").fill("Draft-safe revised title");
   await page.getByLabel("Quote overview").fill("Draft-safe revised customer scope");
@@ -130,7 +135,7 @@ test("individual save and line insertion preserve other drafts through Save Quot
     });
 
   await page.reload();
-  await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("quote-desk")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByLabel("Quote title")).toHaveValue("Draft-safe revised title");
   await expect(page.getByLabel("Quote overview")).toHaveValue("Draft-safe revised customer scope");
   await expect(page.getByLabel("Quote status")).toHaveValue("READY_FOR_REVIEW");

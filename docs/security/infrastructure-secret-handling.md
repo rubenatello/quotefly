@@ -6,7 +6,7 @@ This is QuoteFly's authoritative protocol for credentials, tokens, database URLs
 
 Never read, print, export, paste, screenshot, attach, or retain raw secret values. This includes provider CLI variable dumps, `.env` downloads, shell history, CI logs, tickets, chat, agent transcripts, browser recordings, and analytics.
 
-Use a provider's secret editor for writes and its masked view for manual confirmation. Use `npm run infra:variables:audit -- --profile <api|worker|migrations|web|quickbooks>` only for local process evidence. Its fixed JSON report proves configured/missing presence for that process only; it does not prove a remote provider's configuration and must not be used to retrieve values.
+Use a provider's secret editor for writes and its masked view for manual confirmation. Use `npm run infra:variables:audit -- --profile <fixed-profile>` only for local process evidence; run it with `--help` for the closed profile list, including the role-isolated QuickBooks signal profiles. Its fixed JSON report proves configured/missing presence for that process only; it does not prove a remote provider's configuration and must not be used to retrieve values.
 
 ## If disclosure is suspected or confirmed
 
@@ -26,3 +26,12 @@ Treat any raw-value disclosure as a compromise, even if the recipient is trusted
 For a QuickBooks client secret, webhook verifier, OAuth token, callback code/state, or token-encryption-key disclosure, immediately disable `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED` for the affected environment. Revoke affected QuickBooks connections and provider tokens before re-enabling workflows. A token-encryption-key exposure additionally requires treating every connection encrypted by that key as affected: revoke/disconnect it, invalidate the stored ciphertext path, issue a new independent key, and reconnect through fresh OAuth consent. Do not rely on token ciphertext rotation alone after key exposure.
 
 Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` until the issuer-side revocation, runtime restart, connection state, and safe verification evidence are complete.
+
+The QuickBooks API and worker signal-source tokens are monitoring credentials,
+not Intuit or accounting credentials. If either is disclosed, remove the
+affected sink pair from that backend runtime, rotate the token at the log
+provider, restore only its matching API or worker pair, and prove a sanitized
+canary delivery. Do not copy one runtime's source token into the other. A signal
+token disclosure alone does not require revoking customer OAuth grants, but it
+does require treating alerts from that source as untrusted until rotation and
+canary evidence are complete.

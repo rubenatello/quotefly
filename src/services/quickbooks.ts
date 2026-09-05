@@ -1,5 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import type { env } from "../config/env";
+import {
+  classifyQuickBooksProviderAttempt,
+  reportQuickBooksProviderAttempt,
+} from "./quickbooks-worker-operational";
 import { z } from "zod";
 
 const ACCOUNTING_SCOPE = "com.intuit.quickbooks.accounting";
@@ -123,6 +127,10 @@ const QuickBooksTokenSchema = z.object({
   token_type: z.string().min(1),
   expires_in: z.number().int().positive(),
   x_refresh_token_expires_in: z.number().int().positive().optional(),
+}).passthrough();
+
+const QuickBooksOAuthErrorSchema = z.object({
+  error: z.string().trim().min(1).max(100),
 }).passthrough();
 
 const QuickBooksCdcSchema = z.object({
@@ -268,6 +276,7 @@ export class QuickBooksProviderError extends Error {
     readonly statusCode?: number,
   ) {
     super(code);
+    this.name = "QuickBooksProviderError";
   }
 }
 
@@ -397,6 +406,24 @@ function waitForQuickBooksRetry(delayMs: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, delayMs));
 }
 
+function reportQuickBooksFetchAttempt(
+  startedAtMs: number,
+  result: Readonly<{ statusCode: number }> | Readonly<{ error: unknown }>,
+) {
+  try {
+    const statusCode = "statusCode" in result ? result.statusCode : undefined;
+    const errorName = "error" in result && result.error instanceof Error
+      ? result.error.name
+      : undefined;
+    reportQuickBooksProviderAttempt({
+      outcome: classifyQuickBooksProviderAttempt({ statusCode, errorName }),
+      durationMs: Date.now() - startedAtMs,
+    });
+  } catch {
+    // Observability can never change a provider outcome or retry decision.
+  }
+}
+
 async function quickBooksFetch(
   runtimeEnv: RuntimeEnv,
   url: string,
@@ -405,13 +432,16 @@ async function quickBooksFetch(
 ): Promise<Response> {
   const maxAttempts = retryRead ? runtimeEnv.QUICKBOOKS_PROVIDER_READ_RETRIES + 1 : 1;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const attemptStartedAtMs = Date.now();
     let response: Response;
     try {
       response = await fetch(url, {
         ...init,
         signal: AbortSignal.timeout(runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS),
       });
-    } catch {
+      reportQuickBooksFetchAttempt(attemptStartedAtMs, { statusCode: response.status });
+    } catch (error) {
+      reportQuickBooksFetchAttempt(attemptStartedAtMs, { error });
       if (retryRead && attempt + 1 < maxAttempts) {
         await waitForQuickBooksRetry(Math.min(2_000, 200 * (2 ** attempt)));
         continue;
@@ -1021,6 +1051,11 @@ export function verifySignedQuickBooksState(runtimeEnv: RuntimeEnv, state: strin
     const iv = Buffer.from(ivPart, "base64url");
     const authTag = Buffer.from(authTagPart, "base64url");
     const encrypted = Buffer.from(encryptedPart, "base64url");
+    if (
+      iv.toString("base64url") !== ivPart
+      || authTag.toString("base64url") !== authTagPart
+      || encrypted.toString("base64url") !== encryptedPart
+    ) return null;
     if (iv.length !== 12 || authTag.length !== 16 || encrypted.length === 0) return null;
     const key = createHash("sha256")
       .update("quotefly:quickbooks:oauth-state:qbo2\0", "utf8")
@@ -1066,7 +1101,22 @@ export async function exchangeQuickBooksAuthorizationCode(
   }, false);
 
   if (!response.ok) {
-    throw new Error(`QuickBooks token exchange failed with status ${response.status}.`);
+    // Intuit error descriptions can contain request details and must not cross
+    // the provider boundary. Retain only a bounded, recognized OAuth category
+    // so operators can distinguish configuration from expired/replayed codes.
+    let providerError: string | null = null;
+    try {
+      const parsed = QuickBooksOAuthErrorSchema.safeParse(await response.json());
+      if (parsed.success) providerError = parsed.data.error.toLowerCase();
+    } catch {
+      providerError = null;
+    }
+    const code = providerError === "invalid_client"
+      ? "QUICKBOOKS_TOKEN_EXCHANGE_INVALID_CLIENT"
+      : providerError === "invalid_grant"
+        ? "QUICKBOOKS_TOKEN_EXCHANGE_INVALID_GRANT"
+        : `QUICKBOOKS_TOKEN_EXCHANGE_HTTP_${response.status}`;
+    throw new QuickBooksProviderError(code, false, response.status);
   }
 
   return parseQuickBooksEntity(
@@ -1108,14 +1158,17 @@ export async function fetchQuickBooksCompanyInfo(
     throw new QuickBooksProviderError("QUICKBOOKS_COMPANY_INFO_RESPONSE_INVALID", false);
   }
 
-  const providerRealmId = payload.data.CompanyInfo.Id.trim();
+  const providerCompanyInfoId = payload.data.CompanyInfo.Id.trim();
   const companyName = (payload.data.CompanyInfo.CompanyName ?? payload.data.CompanyInfo.LegalName)?.trim();
-  if (!providerRealmId || providerRealmId !== realmId || !companyName) {
+  // Intuit binds the company realm in both URL path segments. CompanyInfo.Id is
+  // the entity identifier inside that realm (commonly "1"), not the OAuth
+  // realmId, so comparing the two rejects valid QuickBooks companies.
+  if (!providerCompanyInfoId || !companyName) {
     throw new QuickBooksProviderError("QUICKBOOKS_COMPANY_INFO_REALM_MISMATCH", false);
   }
 
   return {
-    realmId: providerRealmId,
+    realmId,
     companyName,
   };
 }

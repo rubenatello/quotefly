@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { FilePlus2, FileText, LayoutDashboard, ListTodo } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { useWorkspaceNavigationGuardCoordinator } from "../../hooks/workspace-navigation-guard-context";
 import { CustomerIcon } from "../Icons";
 import {
   WORKSPACE_PAGE_META,
@@ -77,6 +78,7 @@ function MobileTabButton({
 export function BottomTabBar() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { requestNavigation } = useWorkspaceNavigationGuardCoordinator();
   const location = useLocation();
   const currentPage = workspacePageFromPath(location.pathname);
   const activeNavigation = WORKSPACE_PAGE_META[currentPage].activeNavigation;
@@ -89,7 +91,7 @@ export function BottomTabBar() {
         tab={tab}
         label={t(tab.labelKey)}
         active={active}
-        onSelect={() => navigate(tab.path)}
+        onSelect={() => requestNavigation(() => navigate(tab.path))}
       />
     );
   };
@@ -103,7 +105,7 @@ export function BottomTabBar() {
         {PRIMARY_TABS.map(renderTab)}
         <button
           type="button"
-          onClick={() => navigate("/app/build")}
+          onClick={() => requestNavigation(() => navigate("/app/build"))}
           className="relative flex min-h-[64px] items-center justify-center rounded-xl text-[var(--qf-link)] focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-[var(--qf-focus)] active:scale-[0.98]"
           aria-label={t("navigation.newQuote")}
           title={t("navigation.newQuote")}

@@ -1,6 +1,6 @@
-# QuickBooks Owner Setup — Provider Workflows Paused
+# QuickBooks Owner Setup — Release-Candidate Containment
 
-Status: Engineering candidate only. Do not enable or market QuickBooks Online connection, invoice publishing, hosted payments, payment reconciliation, tax sync, CDC, or webhook automation for the current release.
+Status: production and customer availability remain disabled. OAuth-only sandbox staging is authorized for connection/replay/disconnect/revocation evidence; accounting mutations and production changes are not authorized.
 
 Authoritative references:
 
@@ -11,13 +11,13 @@ Authoritative references:
 
 ## Current production boundary
 
-- Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` in every deployed API environment.
-- Do not complete OAuth consent, subscribe Invoice or Payment webhooks, push a provider invoice, retrieve or share a hosted payment link, or record a QuickBooks payment.
+- Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` in production and every environment not covered by the recorded sandbox authorization.
+- In authorized staging only, use the `quickbooks-oauth` profile and stop at connection/replay/disconnect/revocation; do not subscribe Invoice or Payment webhooks, push a provider invoice, retrieve or share a hosted payment link, or record a QuickBooks payment.
 - Taxable invoice publishing remains blocked even in a future bounded pilot until a separate tax-mapping contract is approved.
 - QuickBooks status and local preview remain owner/admin surfaces; CSV export remains the supported accounting handoff.
 - Existing credentials, schema, UI, tests, or an engineering-candidate build do not authorize provider activity.
 
-No sandbox or production provider evidence is claimed by this document.
+The owner-observed sandbox connect/disconnect on a superseded SHA is partial evidence only. The final SHA and complete OAuth sequence remain pending; no accounting or production provider evidence is claimed.
 
 ## Safe environment posture
 
@@ -38,7 +38,7 @@ Keep client secrets, verifier values, token-encryption keys, OAuth tokens, hoste
 
 ## Owner evidence inventory
 
-Before any separately authorized sandbox run, record dated, sanitized evidence for:
+Before the final OAuth-only run, and again before any later accounting phase, record dated, sanitized evidence for:
 
 - candidate commit SHA and exact deployed image;
 - Intuit app name/environment, callback URI, webhook endpoint, approved scopes, and test company;
@@ -52,9 +52,9 @@ Inventory references must identify secrets by provider-side label or fingerprint
 
 ## Sandbox authorization boundary
 
-The checklist in [quickbooks-owner-testing-checklist.md](quickbooks-owner-testing-checklist.md) becomes executable only after the exact candidate passes its automated gate and receives explicit owner authorization for Intuit sandbox mutations. Authorization for sandbox does not authorize production credentials, production OAuth, production webhooks, production migrations, or customer exposure.
+The OAuth-only subset of [quickbooks-owner-testing-checklist.md](quickbooks-owner-testing-checklist.md) is executable after the exact candidate passes its automated gate and reaches staging under the recorded authorization. Every accounting, signed-webhook, CDC, and hosted-payment step requires separate explicit authorization. Sandbox authorization never authorizes production credentials, production OAuth, production webhooks, production migrations, customer exposure, or marketing.
 
-## Monitoring required before a sandbox run
+## Monitoring required before the final OAuth run and later automation
 
 Assign alert destinations and owners for:
 

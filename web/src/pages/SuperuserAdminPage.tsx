@@ -601,11 +601,14 @@ function TenantCard({ tenant }: { tenant: InternalTenantMetadata }) {
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-700">QuickBooks setup</p>
           <span className="text-xs text-slate-500">{tenant.quickBooks.environment ? readable(tenant.quickBooks.environment) : "No environment"}</span>
         </div>
-        <div className="mt-2 grid grid-cols-3 gap-2">
+        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
           <MetricCompact label="Customer maps" value={tenant.quickBooks.counts.customerMaps.toLocaleString()} />
           <MetricCompact label="Item maps" value={tenant.quickBooks.counts.itemMaps.toLocaleString()} />
-          <MetricCompact label="Invoice syncs" value={tenant.quickBooks.counts.invoiceSyncs.toLocaleString()} />
+          <MetricCompact label="Invoice operations" value={tenant.quickBooks.counts.invoiceSyncs.toLocaleString()} />
         </div>
+        <p className="mt-2 text-xs text-slate-500">
+          Current invoice-owned publish and reconciliation records; excludes retired quote-sync records.
+        </p>
         <p className="mt-2 text-xs text-slate-500">
           Last sync: {formatDate(tenant.quickBooks.lastSyncAtUtc)} · Confirmed: {formatDate(tenant.quickBooks.setupConfirmedAtUtc)}
         </p>

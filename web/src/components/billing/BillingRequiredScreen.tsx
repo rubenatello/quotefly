@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useLocation } from "react-router-dom";
 import { CheckIcon, LockIcon, PriceIcon } from "../Icons";
-import { Alert, Badge, Button, Card } from "../ui";
+import { Alert, Badge, Button, Card, ConfirmModal } from "../ui";
 import {
   api,
   type TenantEntitlements,
@@ -11,8 +11,16 @@ import {
 import { useLocale } from "../../i18n";
 import { localizedApiError } from "../../lib/localized-api-error";
 import { BASIC_PLAN } from "../../lib/plans";
+import { normalizeQuickBooksStatusPayload } from "../../lib/quickbooks";
 
-type BillingAction = "checkout" | "portal" | "refresh" | null;
+type BillingAction = "checkout" | "portal" | "refresh" | "quickbooksDisconnect" | null;
+
+type QuickBooksDisconnectResult = {
+  tone: "success" | "warning";
+  message: string;
+};
+
+type QuickBooksServiceState = "loading" | "connected" | "disconnected" | "error" | "support";
 
 export type BillingRequiredSession = {
   tenantName: string;
@@ -78,9 +86,19 @@ export function BillingRequiredScreen({
   const { locale } = useLocale();
   const [billingAction, setBillingAction] = useState<BillingAction>(null);
   const [error, setError] = useState<string | null>(null);
+  const [disconnectQuickBooksOpen, setDisconnectQuickBooksOpen] = useState(false);
+  const [quickBooksError, setQuickBooksError] = useState<string | null>(null);
+  const [quickBooksResult, setQuickBooksResult] = useState<QuickBooksDisconnectResult | null>(null);
+  const [quickBooksServiceState, setQuickBooksServiceState] = useState<QuickBooksServiceState>("loading");
+  const [quickBooksStatusError, setQuickBooksStatusError] = useState<string | null>(null);
+  const [quickBooksCanDisconnect, setQuickBooksCanDisconnect] = useState(false);
+  const quickBooksDisconnectTriggerRef = useRef<HTMLButtonElement>(null);
+  const restoreQuickBooksDisconnectFocusRef = useRef(false);
   const location = useLocation();
   const confirmingCheckout = new URLSearchParams(location.search).get("billing") === "success";
-  const ownerView = normalizeSessionRole(session.role) === "owner";
+  const normalizedRole = normalizeSessionRole(session.role);
+  const ownerView = normalizedRole === "owner";
+  const quickBooksManagerView = normalizedRole !== "member";
   const status = billingStatusText(session.subscriptionStatus, t);
   const firstPaidPrice = formatUsd(locale, BASIC_PLAN.firstPaidMonthPriceUsd);
   const monthlyPrice = t("billing.monthlyPrice", { price: formatUsd(locale, BASIC_PLAN.monthlyPriceUsd) });
@@ -93,6 +111,39 @@ export function BillingRequiredScreen({
   ];
   const canOpenPortal =
     ownerView && PAID_STATUS_WITH_PORTAL.has((session.subscriptionStatus ?? "").toLowerCase());
+
+  const loadQuickBooksStatus = useCallback(async () => {
+    if (!quickBooksManagerView) return;
+
+    setQuickBooksServiceState("loading");
+    setQuickBooksStatusError(null);
+    try {
+      const rawStatus = await api.integrations.quickbooks.status();
+      const statusPayload = normalizeQuickBooksStatusPayload(rawStatus);
+      if (!statusPayload || !statusPayload.canManage) {
+        throw new Error("QUICKBOOKS_STATUS_INVALID");
+      }
+      setQuickBooksCanDisconnect(statusPayload.setup.capabilities.canDisconnect);
+      setQuickBooksServiceState(
+        statusPayload.connection?.status === "ERROR"
+          ? "support"
+          : statusPayload.connection && statusPayload.connection.status !== "DISCONNECTED"
+            ? "connected"
+          : "disconnected",
+      );
+    } catch (err) {
+      setQuickBooksCanDisconnect(false);
+      setQuickBooksStatusError(localizedApiError(err, t, {
+        fallbackKey: "billing.connectedServices.quickBooksStatusFailed",
+      }));
+      setQuickBooksServiceState("error");
+    }
+  }, [quickBooksManagerView, t]);
+
+  useEffect(() => {
+    if (!quickBooksManagerView) return;
+    void loadQuickBooksStatus();
+  }, [loadQuickBooksStatus, quickBooksManagerView]);
 
   async function startBasicCheckout() {
     if (!ownerView) return;
@@ -140,8 +191,62 @@ export function BillingRequiredScreen({
     }
   }
 
+  function openQuickBooksDisconnect() {
+    if (!quickBooksManagerView || !quickBooksCanDisconnect || billingAction !== null) return;
+    setError(null);
+    setQuickBooksError(null);
+    restoreQuickBooksDisconnectFocusRef.current = true;
+    setDisconnectQuickBooksOpen(true);
+  }
+
+  function closeQuickBooksDisconnect() {
+    if (billingAction === "quickbooksDisconnect") return;
+    restoreQuickBooksDisconnectFocusRef.current = true;
+    setDisconnectQuickBooksOpen(false);
+    setQuickBooksError(null);
+  }
+
+  const restoreQuickBooksDisconnectFocus = useCallback((event: Event) => {
+    if (!restoreQuickBooksDisconnectFocusRef.current) return;
+    restoreQuickBooksDisconnectFocusRef.current = false;
+    event.preventDefault();
+    quickBooksDisconnectTriggerRef.current?.focus();
+  }, []);
+
+  async function disconnectQuickBooks() {
+    if (!quickBooksManagerView || billingAction !== null) return;
+
+    setBillingAction("quickbooksDisconnect");
+    setError(null);
+    setQuickBooksError(null);
+    setQuickBooksResult(null);
+    try {
+      const result = await api.integrations.quickbooks.disconnect();
+      const disconnected = result?.disconnected === true;
+      const revocationPending = result?.revocationPending === true;
+      if (disconnected === revocationPending) {
+        throw new Error("QUICKBOOKS_DISCONNECT_RESPONSE_INVALID");
+      }
+      restoreQuickBooksDisconnectFocusRef.current = false;
+      setDisconnectQuickBooksOpen(false);
+      setQuickBooksResult({
+        tone: revocationPending ? "warning" : "success",
+        message: revocationPending
+          ? t("billing.connectedServices.quickBooksRevocationPending")
+          : t("billing.connectedServices.quickBooksDisconnected"),
+      });
+      setQuickBooksServiceState(revocationPending ? "connected" : "disconnected");
+    } catch (err) {
+      setQuickBooksError(localizedApiError(err, t, {
+        fallbackKey: "billing.connectedServices.quickBooksDisconnectFailed",
+      }));
+    } finally {
+      setBillingAction(null);
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50 px-4 pb-[calc(env(safe-area-inset-bottom)+6rem)] pt-4 sm:px-6 sm:py-8">
+    <div className="min-h-screen bg-slate-50 px-4 pb-[calc(env(safe-area-inset-bottom)+9rem)] pt-4 sm:px-6 sm:py-8">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-5xl flex-col gap-4">
         <header className="flex items-center justify-between gap-3">
           <div className="min-w-0">
@@ -161,6 +266,11 @@ export function BillingRequiredScreen({
         {confirmingCheckout ? (
           <Alert tone="info">
             {t("billing.checkoutConfirming")}
+          </Alert>
+        ) : null}
+        {quickBooksResult ? (
+          <Alert tone={quickBooksResult.tone} onDismiss={() => setQuickBooksResult(null)}>
+            {quickBooksResult.message}
           </Alert>
         ) : null}
 
@@ -255,7 +365,60 @@ export function BillingRequiredScreen({
               {!ownerView ? (
                 <p className="mt-3 text-amber-700">{t("billing.ownerHelp")}</p>
               ) : null}
+              {!quickBooksManagerView ? (
+                <p className="mt-3 text-slate-600">{t("billing.connectedServices.managerHelp")}</p>
+              ) : null}
             </Card>
+
+            {quickBooksManagerView && quickBooksServiceState !== "disconnected" ? (
+              <Card
+                variant="default"
+                padding="md"
+                className="min-w-0 bg-white text-sm text-slate-600"
+                data-testid="billing-connected-services"
+              >
+                <p className="font-semibold text-slate-900">{t("billing.connectedServices.title")}</p>
+                {quickBooksServiceState === "loading" ? (
+                  <p className="mt-2 break-words leading-5" role="status">
+                    {t("billing.connectedServices.quickBooksStatusLoading")}
+                  </p>
+                ) : quickBooksServiceState === "error" ? (
+                  <div className="mt-3 space-y-3">
+                    {quickBooksStatusError ? <Alert tone="error">{quickBooksStatusError}</Alert> : null}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      fullWidth
+                      className="sm:w-auto"
+                      onClick={() => void loadQuickBooksStatus()}
+                      disabled={billingAction !== null}
+                    >
+                      {t("billing.connectedServices.quickBooksStatusRetry")}
+                    </Button>
+                  </div>
+                ) : quickBooksServiceState === "support" ? (
+                  <Alert tone="error">{t("billing.connectedServices.quickBooksSupportRequired")}</Alert>
+                ) : (
+                  <>
+                    <p className="mt-2 break-words leading-5">{t("billing.connectedServices.description")}</p>
+                    {quickBooksCanDisconnect ? (
+                      <Button
+                        type="button"
+                        variant="warning"
+                        fullWidth
+                        className="mt-4 sm:w-auto"
+                        ref={quickBooksDisconnectTriggerRef}
+                        onClick={openQuickBooksDisconnect}
+                        disabled={billingAction !== null}
+                        loading={billingAction === "quickbooksDisconnect"}
+                      >
+                        {t("billing.connectedServices.quickBooksDisconnectButton")}
+                      </Button>
+                    ) : null}
+                  </>
+                )}
+              </Card>
+            ) : null}
           </aside>
         </main>
       </div>
@@ -295,6 +458,20 @@ export function BillingRequiredScreen({
           </Button>
         </div>
       </div>
+
+      <ConfirmModal
+        open={disconnectQuickBooksOpen}
+        onClose={closeQuickBooksDisconnect}
+        onConfirm={() => void disconnectQuickBooks()}
+        title={t("billing.connectedServices.quickBooksDisconnectTitle")}
+        description={t("billing.connectedServices.quickBooksDisconnectDescription")}
+        confirmLabel={t("billing.connectedServices.quickBooksDisconnectConfirm")}
+        confirmVariant="warning"
+        loading={billingAction === "quickbooksDisconnect"}
+        onCloseAutoFocus={restoreQuickBooksDisconnectFocus}
+      >
+        {quickBooksError ? <Alert tone="error">{quickBooksError}</Alert> : null}
+      </ConfirmModal>
     </div>
   );
 }
