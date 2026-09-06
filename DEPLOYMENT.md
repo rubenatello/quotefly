@@ -153,6 +153,11 @@ When latency is reported:
 
 ## QuickBooks Release Candidate
 
+The successor's restricted Integration Health dashboard and independently operated
+watchdog are documented in [QuoteFly-owned monitoring](docs/runbooks/quickbooks-owned-monitoring.md).
+Follow its exact-image CI proof, secret isolation, external host/recipient, rollout,
+receipt, volume-restore, and rollback gates before enabling alert delivery.
+
 Direct QuickBooks remains unavailable in production and must keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` there. The owner-authorized staging phase may use the `quickbooks-oauth` profile for connection, replay, disconnect, and revocation evidence only; it must keep accounting actions, the worker, signed webhooks, CDC, and hosted payments disabled. Do not create an Intuit invoice, retrieve or share an InvoiceLink, or run any accounting mutation without separate explicit authorization. Taxable invoice publishing remains blocked.
 
 The authoritative acceptance contract is [docs/integrations/quickbooks-hosted-payments-reconciliation.md](docs/integrations/quickbooks-hosted-payments-reconciliation.md). Current product and API truth is recorded in [docs/integrations/quickbooks-api-progress.md](docs/integrations/quickbooks-api-progress.md).

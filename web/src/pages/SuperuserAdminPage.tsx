@@ -38,6 +38,7 @@ import {
   PageHeader,
   Select,
 } from "../components/ui";
+import { QuickBooksIntegrationHealthPanel } from "../components/admin/QuickBooksIntegrationHealthPanel";
 
 type ConsoleTab = "overview" | "tenants" | "catalog" | "permissions" | "validation" | "audit";
 
@@ -464,10 +465,27 @@ function OverviewPanel({
   ragIndex: InternalRagIndexSummary | null;
   onRefresh: () => void;
 }) {
-  if (!summary) return <Card padding="lg" className="text-sm text-slate-600">No platform summary is available.</Card>;
-  const valid = summary.liveValidation.status === "PASSED";
   return (
     <section className="space-y-4" aria-labelledby="overview-panel-title">
+      <QuickBooksIntegrationHealthPanel />
+      {!summary ? <Card padding="lg" className="text-sm text-slate-600">No platform summary is available.</Card> : null}
+      {summary ? <PlatformOverview summary={summary} ragIndex={ragIndex} onRefresh={onRefresh} /> : null}
+    </section>
+  );
+}
+
+function PlatformOverview({
+  summary,
+  ragIndex,
+  onRefresh,
+}: {
+  summary: InternalControlPlaneSummary;
+  ragIndex: InternalRagIndexSummary | null;
+  onRefresh: () => void;
+}) {
+  const valid = summary.liveValidation.status === "PASSED";
+  return (
+    <>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Active tenants" value={summary.totals.activeTenants.toLocaleString()} />
         <MetricCard label="Active users" value={summary.totals.activeUsers.toLocaleString()} />
@@ -560,7 +578,7 @@ function OverviewPanel({
         )}
       </Card>
       <Alert tone="info">{summary.mutationPolicy.reason}</Alert>
-    </section>
+    </>
   );
 }
 

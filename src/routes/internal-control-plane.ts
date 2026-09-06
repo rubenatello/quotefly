@@ -22,6 +22,10 @@ import {
 import { isQuickBooksConfigured, isQuickBooksWebhookConfigured } from "../services/quickbooks";
 import { loadQuickBooksOperationalAggregate } from "../services/quickbooks-operational-health";
 import {
+  loadQuickBooksIntegrationHealthReport,
+  type QuickBooksIntegrationHealthRuntime,
+} from "../services/quickbooks-integration-health";
+import {
   loadWorkerHeartbeatFleet,
   QUICKBOOKS_RECONCILIATION_WORKER_KEY,
   serializeWorkerHeartbeatFleet,
@@ -52,6 +56,7 @@ const CatalogQuerySchema = z.object({
 const BoundedListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
 });
+const EmptyQuerySchema = z.object({}).strict();
 
 const ValidationRateLimit = {
   config: {
@@ -65,6 +70,14 @@ const RagIndexSummaryRateLimit = {
   config: {
     rateLimit: {
       max: 6,
+      timeWindow: "1 minute",
+    },
+  },
+};
+const QuickBooksIntegrationHealthRateLimit = {
+  config: {
+    rateLimit: {
+      max: 12,
       timeWindow: "1 minute",
     },
   },
@@ -184,8 +197,74 @@ async function loadQuickBooksControlPlaneRow(
   return rows[0] ?? null;
 }
 
-export const internalControlPlaneRoutes: FastifyPluginAsync = async (app) => {
-  const apiReleaseSha = resolveRuntimeReleaseSha();
+type InternalControlPlaneRoutesOptions = Readonly<{
+  loadQuickBooksIntegrationHealth?: typeof loadQuickBooksIntegrationHealthReport;
+  now?: () => Date;
+  resolveReleaseSha?: () => string | null;
+}>;
+
+export const internalControlPlaneRoutes: FastifyPluginAsync<InternalControlPlaneRoutesOptions> = async (
+  app,
+  options,
+) => {
+  const apiReleaseSha = (options.resolveReleaseSha ?? resolveRuntimeReleaseSha)();
+  const loadQuickBooksIntegrationHealth = options.loadQuickBooksIntegrationHealth
+    ?? loadQuickBooksIntegrationHealthReport;
+  const now = options.now ?? (() => new Date());
+
+  app.get(
+    "/internal/control-plane/quickbooks-health",
+    { ...QuickBooksIntegrationHealthRateLimit, preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const claims = requireSuperuserAccess(request, reply);
+      if (!claims) return reply;
+      reply.header("Cache-Control", "private, no-store");
+      EmptyQuerySchema.parse(request.query);
+
+      const runtime: QuickBooksIntegrationHealthRuntime = {
+        environment: app.env.QUICKBOOKS_ENVIRONMENT,
+        providerWorkflowsEnabled: app.env.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED,
+        oauthOnlyMode: app.env.QUICKBOOKS_OAUTH_ONLY_MODE,
+        hostedPaymentsEnabled: app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED,
+        reconciliationWorkerEnabled: app.env.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED,
+        cdcWorkerEnabled: app.env.QUICKBOOKS_CDC_WORKER_ENABLED,
+        webhookConfigured: isQuickBooksWebhookConfigured(app.env),
+        requireWorkerReleaseIdentity: app.env.NODE_ENV === "production",
+        monitorBearer: app.env.QUICKBOOKS_MONITOR_BEARER,
+        apiSignalIngestUrl: app.env.QUICKBOOKS_API_SIGNAL_INGEST_URL,
+        apiSignalSourceToken: app.env.QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN,
+      };
+
+      try {
+        const report = await loadQuickBooksIntegrationHealth(app.prisma, runtime, {
+          apiReleaseSha,
+          now: now(),
+        });
+        await recordSuperuserAuditEvent(app.prisma, {
+          actorUserId: claims.userId,
+          requestId: request.id,
+          action: "QUICKBOOKS_INTEGRATION_HEALTH_VIEWED",
+          targetType: "QuickBooksOperationalSnapshot",
+          metadata: {
+            schema: report.schema,
+            environment: report.environment,
+            mode: report.mode,
+            state: report.state,
+          },
+        });
+        return report;
+      } catch {
+        request.log.error(
+          { eventCode: "QUICKBOOKS_INTEGRATION_HEALTH_EVALUATION_FAILED" },
+          "QuickBooks integration health evaluation failed.",
+        );
+        return reply.code(503).send({
+          code: "QUICKBOOKS_INTEGRATION_HEALTH_UNAVAILABLE",
+          error: "QuickBooks integration health is temporarily unavailable.",
+        });
+      }
+    },
+  );
 
   app.get("/internal/control-plane/summary", { preHandler: [app.authenticate] }, async (request, reply) => {
     const claims = requireSuperuserAccess(request, reply);

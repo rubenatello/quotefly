@@ -469,6 +469,27 @@ function buildQuickBooksExternalSignalPayload(
   return null;
 }
 
+/** Strict receiver-side contract. Reject additions instead of retaining arbitrary input. */
+export function isQuickBooksExternalEventCode(value: string): boolean {
+  return [QUICKBOOKS_OAUTH_CALLBACK_LEVEL, QUICKBOOKS_TOKEN_REFRESH_LEVEL,
+    QUICKBOOKS_PROVIDER_OPERATIONAL_LEVEL, QUICKBOOKS_RETENTION_OPERATIONAL_LEVEL]
+    .some(map => Object.prototype.hasOwnProperty.call(map, value));
+}
+
+export function parseQuickBooksExternalSignalPayload(
+  value: unknown,
+  runtimeRole: QuickBooksSignalSinkRuntimeRole,
+): QuickBooksExternalSignalPayload | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const payload = buildQuickBooksExternalSignalPayload(
+    runtimeRole, input.level as QuickBooksSignalLevel,
+    input as unknown as QuickBooksOAuthCallbackSignal,
+  );
+  if (!payload || Object.keys(input).length !== Object.keys(payload).length) return null;
+  return Object.entries(payload).every(([key, expected]) => input[key] === expected) ? payload : null;
+}
+
 export function resolveQuickBooksExternalSignalSinkConfig(
   runtimeRole: QuickBooksSignalSinkRuntimeRole,
   input: NodeJS.ProcessEnv = process.env,

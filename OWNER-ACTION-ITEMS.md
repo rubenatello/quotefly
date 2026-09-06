@@ -73,7 +73,15 @@ QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS=
 
 ### QuickBooks app setup
 
-QuickBooks is in release-candidate qualification, not production availability. On 2026-09-04 the owner authorized staging-only deployment, a disposable tenant, and sandbox OAuth connect/replay/disconnect/revocation testing. The owner-observed connect and disconnect passed on a superseded staging SHA; the final exact SHA and the complete OAuth matrix remain pending. Accounting mutations and all production changes remain unauthorized.
+Monitoring follow-up (2026-09-05): the owner selected an in-app Integration Health
+panel plus an independently operated watcher rather than a Better Stack subscription.
+Implementation does not purchase hosting or enable alerts. Choose an independent
+alert mailbox and host, then complete the [owned-monitoring setup and receipt checklist](docs/runbooks/quickbooks-owned-monitoring.md).
+The `6239f742f04b2815082c0fc7f108727a3e916258` staging owner connect, status refresh,
+disconnect, and empty Intuit integrations-screen observations passed on September 5;
+these do not establish accounting automation or the full replay/fault-recovery matrix.
+
+QuickBooks is in release-candidate qualification, not production availability. The September 4 staging authorization covered a disposable tenant and sandbox OAuth connect/replay/disconnect/revocation tests. The September 5 checkpoint above proves the normal connection lifecycle on the exact staging SHA; a real consumed-callback replay and live fault/revocation-retry recovery are still not established by those screenshots. This monitoring implementation does not authorize production deployment or accounting enablement.
 
 1. Keep direct QuickBooks workflows disabled in production. In staging, use the `quickbooks-oauth` profile until the final exact-SHA connection/replay/disconnect/revocation pass is recorded; keep the worker, accounting actions, hosted payments, CDC, and webhook processing off.
 2. Do not subscribe provider webhooks, push invoices, retrieve/share hosted links, record provider payments, or market direct QuickBooks Online sync until the separately authorized later phases pass.

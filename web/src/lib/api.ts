@@ -513,6 +513,180 @@ export type InternalControlPlaneSummary = {
   mutationPolicy: { enabled: false; reason: string };
 };
 
+export type QuickBooksIntegrationHealth = {
+  schema: "quotefly.integration-health/v1";
+  observedAtUtc: string;
+  environment: "sandbox" | "production";
+  mode: "disabled" | "oauth_only" | "accounting";
+  state: "healthy" | "warning" | "critical";
+  automation: {
+    providerActionsEnabled: boolean;
+    hostedPaymentsEnabled: boolean;
+    reconciliationEnabled: boolean;
+    cdcEnabled: boolean;
+    webhookConfigured: boolean;
+  };
+  monitors: {
+    bearerConfigured: boolean;
+    apiSignalSinkConfigured: boolean;
+    workerSignalSinkConfigured: boolean | null;
+    deliveryVerified: false;
+  };
+  worker: {
+    required: boolean;
+    status:
+      | "not_required"
+      | "missing"
+      | "starting"
+      | "running"
+      | "stopping"
+      | "stopped"
+      | "failed"
+      | "stale"
+      | "release_mismatch"
+      | "topology_invalid";
+    ready: boolean;
+    lastObservedAtUtc: string | null;
+    releaseMatches: boolean | null;
+  };
+  operations: InternalControlPlaneSummary["workers"]["quickBooksOperations"];
+};
+
+const QUICKBOOKS_INTEGRATION_HEALTH_WORKER_STATUSES = new Set([
+  "not_required",
+  "missing",
+  "starting",
+  "running",
+  "stopping",
+  "stopped",
+  "failed",
+  "stale",
+  "release_mismatch",
+  "topology_invalid",
+]);
+
+const QUICKBOOKS_OPERATION_COUNT_FIELDS = [
+  "webhookOutstandingCount",
+  "webhookDeadCount",
+  "reconciliationRequiredCount",
+  "cdcCursorCount",
+  "cdcTerminalCount",
+  "cdcOverdueCount",
+  "connectionRevocationPendingCount",
+  "connectionRevocationDeadCount",
+  "orphanRevocationPendingCount",
+  "orphanRevocationDeadCount",
+  "tokenRefreshFailureConnectionCount",
+  "tokenRefreshReauthRequiredCount",
+] as const;
+
+const QUICKBOOKS_OPERATION_AGE_FIELDS = [
+  "oldestWebhookOutstandingAgeMs",
+  "oldestReconciliationRequiredAgeMs",
+  "maximumCdcLagMs",
+  "oldestConnectionRevocationPendingAgeMs",
+  "oldestOrphanRevocationPendingAgeMs",
+  "oldestTokenRefreshFailureAgeMs",
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
+
+function isIsoUtc(value: unknown): value is string {
+  if (typeof value !== "string" || !value.endsWith("Z")) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function parseQuickBooksIntegrationHealth(value: unknown): QuickBooksIntegrationHealth {
+  const invalid = (): never => {
+    throw new ApiError(
+      "QuickBooks integration health returned an invalid response.",
+      502,
+      { code: "QUICKBOOKS_INTEGRATION_HEALTH_INVALID_RESPONSE" },
+    );
+  };
+
+  if (!isRecord(value) || !hasExactKeys(value, [
+    "schema",
+    "observedAtUtc",
+    "environment",
+    "mode",
+    "state",
+    "automation",
+    "monitors",
+    "worker",
+    "operations",
+  ])) return invalid();
+
+  const { automation, monitors, worker, operations } = value;
+  if (
+    value.schema !== "quotefly.integration-health/v1"
+    || !isIsoUtc(value.observedAtUtc)
+    || typeof value.environment !== "string"
+    || !["sandbox", "production"].includes(value.environment)
+    || typeof value.mode !== "string"
+    || !["disabled", "oauth_only", "accounting"].includes(value.mode)
+    || typeof value.state !== "string"
+    || !["healthy", "warning", "critical"].includes(value.state)
+    || !isRecord(automation)
+    || !hasExactKeys(automation, [
+      "providerActionsEnabled",
+      "hostedPaymentsEnabled",
+      "reconciliationEnabled",
+      "cdcEnabled",
+      "webhookConfigured",
+    ])
+    || !Object.values(automation).every((entry) => typeof entry === "boolean")
+    || !isRecord(monitors)
+    || !hasExactKeys(monitors, [
+      "bearerConfigured",
+      "apiSignalSinkConfigured",
+      "workerSignalSinkConfigured",
+      "deliveryVerified",
+    ])
+    || typeof monitors.bearerConfigured !== "boolean"
+    || typeof monitors.apiSignalSinkConfigured !== "boolean"
+    || !(monitors.workerSignalSinkConfigured === null || typeof monitors.workerSignalSinkConfigured === "boolean")
+    || monitors.deliveryVerified !== false
+    || !isRecord(worker)
+    || !hasExactKeys(worker, [
+      "required",
+      "status",
+      "ready",
+      "lastObservedAtUtc",
+      "releaseMatches",
+    ])
+    || typeof worker.required !== "boolean"
+    || typeof worker.status !== "string"
+    || !QUICKBOOKS_INTEGRATION_HEALTH_WORKER_STATUSES.has(worker.status)
+    || typeof worker.ready !== "boolean"
+    || !(worker.lastObservedAtUtc === null || isIsoUtc(worker.lastObservedAtUtc))
+    || !(worker.releaseMatches === null || typeof worker.releaseMatches === "boolean")
+    || !isRecord(operations)
+    || !hasExactKeys(operations, [
+      ...QUICKBOOKS_OPERATION_COUNT_FIELDS,
+      ...QUICKBOOKS_OPERATION_AGE_FIELDS,
+    ])
+    || !QUICKBOOKS_OPERATION_COUNT_FIELDS.every((field) => isNonNegativeInteger(operations[field]))
+    || !QUICKBOOKS_OPERATION_AGE_FIELDS.every((field) => (
+      operations[field] === null || isNonNegativeInteger(operations[field])
+    ))
+  ) return invalid();
+
+  return value as QuickBooksIntegrationHealth;
+}
+
 export type InternalTenantMetadata = {
   id: string;
   name: string;
@@ -2407,6 +2581,11 @@ export const api = {
   internal: {
     controlPlane: {
       summary: () => request<InternalControlPlaneSummary>("/v1/internal/control-plane/summary"),
+      quickBooksHealth: async (options?: { signal?: AbortSignal }) => parseQuickBooksIntegrationHealth(
+        await request<unknown>("/v1/internal/control-plane/quickbooks-health", {
+          signal: options?.signal,
+        }),
+      ),
       tenants: (query?: {
         limit?: number;
         offset?: number;
