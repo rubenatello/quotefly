@@ -1,9 +1,11 @@
-import { expect, type APIRequestContext, type APIResponse, type BrowserContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type APIResponse, type BrowserContext, type Page } from "@playwright/test";
 
 export const apiBaseUrl =
   process.env.E2E_API_URL || `http://127.0.0.1:${process.env.E2E_API_PORT || "4100"}`;
 
 const sessionCookieName = process.env.SESSION_COOKIE_NAME || "qf_session";
+const MAX_FIXTURE_SIGN_IN_RETRY_AFTER_SECONDS = 60;
+const FIXTURE_SIGN_IN_RETRY_CUSHION_MS = 100;
 
 export type E2eAccount = {
   email: string;
@@ -84,6 +86,45 @@ async function expectStatus(response: APIResponse, expectedStatus: number) {
   }
 }
 
+function fixtureSignInRetryDelayMs(response: APIResponse): number | null {
+  if (response.status() !== 429) return null;
+
+  const retryAfter = response.headers()["retry-after"]?.trim();
+  if (!retryAfter || !/^\d+$/.test(retryAfter)) return null;
+
+  const retryAfterSeconds = Number(retryAfter);
+  if (
+    !Number.isSafeInteger(retryAfterSeconds)
+    || retryAfterSeconds < 0
+    || retryAfterSeconds > MAX_FIXTURE_SIGN_IN_RETRY_AFTER_SECONDS
+  ) {
+    return null;
+  }
+
+  return retryAfterSeconds * 1_000 + FIXTURE_SIGN_IN_RETRY_CUSHION_MS;
+}
+
+async function postFixtureSignInWithSingleRetry(
+  request: APIRequestContext,
+  email: string,
+  password: string,
+): Promise<APIResponse> {
+  const signIn = () => request.post(`${apiBaseUrl}/v1/auth/signin`, {
+    data: { email, password },
+  });
+  let response = await signIn();
+  const retryDelayMs = fixtureSignInRetryDelayMs(response);
+
+  if (retryDelayMs !== null) {
+    const testInfo = test.info();
+    testInfo.setTimeout(testInfo.timeout + retryDelayMs);
+    await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
+    response = await signIn();
+  }
+
+  return response;
+}
+
 export async function signUpViaApi(
   request: APIRequestContext,
   prefix = "beta",
@@ -107,9 +148,7 @@ export async function signUpViaApi(
   });
 
   if (response.status() === 409 && emailOverride) {
-    response = await request.post(`${apiBaseUrl}/v1/auth/signin`, {
-      data: { email, password },
-    });
+    response = await postFixtureSignInWithSingleRetry(request, email, password);
     await expectStatus(response, 200);
   } else {
     await expectStatus(response, 201);
@@ -199,9 +238,7 @@ export async function addWorkspaceMemberViaApi(
   await expectStatus(created, 201);
   const member = (await created.json()) as { member: { id: string } };
 
-  const signedIn = await request.post(`${apiBaseUrl}/v1/auth/signin`, {
-    data: { email, password },
-  });
+  const signedIn = await postFixtureSignInWithSingleRetry(request, email, password);
   await expectStatus(signedIn, 200);
   const payload = (await signedIn.json()) as Pick<E2eAccount, "user" | "tenant">;
   const cookie = extractSessionCookie(signedIn);

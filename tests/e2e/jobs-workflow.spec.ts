@@ -1300,7 +1300,9 @@ test("QuickBooks review guards accepted quote and job navigation controls", asyn
 
   await backToJobs.click();
   await quickBooksLeave.getByRole("button", { name: "Leave review", exact: true }).click();
-  await expect(page).toHaveURL(/\/app\/jobs$/);
+  // Jobs canonicalizes its filters into the query string with replaceState.
+  // The handoff must reach the exact route without racing that normalization.
+  await expect(page).toHaveURL((url) => url.pathname === "/app/jobs");
   await expect.poll(() => page.evaluate(() => window.history.state?.idx as number)).toBe(backHistoryIndex + 1);
 
   dirtyReview = await makeQuickBooksReviewDirty(
