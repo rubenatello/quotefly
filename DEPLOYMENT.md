@@ -217,7 +217,7 @@ The web app must not receive backend secrets. `VITE_*` values are public.
 3. Deploy the exact migrated candidate API to Railway/Render staging with only the least-privileged runtime database credential.
 4. Confirm `GET /v1/health` returns OK and `GET /v1/ready` reports database readiness before starting any worker or routing the web app to the candidate.
 5. Start separately enabled workers from the same exact SHA, then confirm their readiness/heartbeat and API release-parity checks. Keep the QuickBooks worker off for the OAuth-only stage.
-6. Promote the exact ready `quotefly-web` Git preview to Vercel staging with `VITE_API_BASE_URL` pointed at the ready staging API. Confirm the staging domain resolves to that project and commit; do not use an obsolete root project or manual CLI build as release evidence.
+6. Only after API readiness and any enabled worker's readiness/parity checks, deploy the recorded exact 40-character Git SHA to the separate `quotefly-staging` Vercel project. Its Vercel production target is staging-only and must use `VITE_API_BASE_URL` pointed at the ready staging API. Require `READY`, verify the returned Git-source commit SHA equals the recorded SHA, and verify the `staging.quotefly.us` alias resolves to that deployment. A `quotefly-web` PR preview is branch-build evidence only and must never be promoted to staging; the obsolete `quotefly` project and manual CLI builds are not staging release evidence.
 7. Run staging smoke checks.
 8. Keep Stripe, Twilio, and OpenAI in test/sandbox modes. Keep QuickBooks provider workflows disabled unless a separate owner-authorized sandbox checklist is active.
 
