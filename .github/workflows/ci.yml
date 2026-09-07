@@ -135,6 +135,9 @@ jobs:
           "$scan_dir/trivy" --version --cache-dir "$scan_dir/cache"
           sha256sum "$scan_dir/image.tar" "$scan_dir/results.json"
           image_id="$(docker image inspect --format '{{.Id}}' quotefly-qbo-watchdog:local-ci-${{ github.run_id }})"
+          node scripts/quickbooks-image-archive.mjs "$scan_dir/image.tar" \
+            quotefly-qbo-watchdog:local-ci-${{ github.run_id }} "$image_id" >/dev/null
+          echo QBO_IMAGE_ARCHIVE_EVIDENCE_VALID
           node scripts/quickbooks-image-scan-policy.mjs "$scan_dir/results.json" "$scan_dir/cache/db/metadata.json" \
             "$scan_dir/image.tar" quotefly-qbo-watchdog:local-ci-${{ github.run_id }} "$image_id" \
             docs/security/quickbooks-watchdog-image-dispositions.json

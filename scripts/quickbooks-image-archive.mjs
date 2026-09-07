@@ -10,6 +10,10 @@ const SAFE_MEMBER_PATTERN = /^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\/?$/;
 const JSON_LIMIT_BYTES = 2 * 1024 * 1024;
 const LIST_LIMIT_BYTES = 8 * 1024 * 1024;
 const MEMBER_LIMIT = 20_000;
+const OCI_INDEX_MEDIA_TYPE = 'application/vnd.oci.image.index.v1+json';
+const OCI_MANIFEST_MEDIA_TYPE = 'application/vnd.oci.image.manifest.v1+json';
+const OCI_CONFIG_MEDIA_TYPE = 'application/vnd.oci.image.config.v1+json';
+const OCI_LAYER_MEDIA_TYPE = 'application/vnd.oci.image.layer.v1.tar';
 
 const fail = () => { throw new Error('QBO_IMAGE_ARCHIVE_INVALID'); };
 
@@ -18,6 +22,14 @@ function exactKeys(value, keys) {
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) fail();
+}
+
+function exactKeysWithOptional(value, required, optional) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail();
+  const actual = Object.keys(value);
+  const allowed = new Set([...required, ...optional]);
+  if (actual.some((key) => !allowed.has(key))
+    || required.some((key) => !Object.hasOwn(value, key))) fail();
 }
 
 function digestMember(digest) {
@@ -166,13 +178,85 @@ async function verifyManifest(archivePath, members, descriptor) {
   const configResult = await readDescriptor(archivePath, members, configDescriptor, { json: true });
   const config = configResult.value;
   if (config?.os !== 'linux' || config?.architecture !== 'amd64') fail();
-  for (const layer of manifest.layers) await readDescriptor(archivePath, members, layer);
+  const layers = [];
+  for (const layer of manifest.layers) {
+    const result = await readDescriptor(archivePath, members, layer);
+    layers.push({ descriptor: layer, result });
+  }
   return {
     manifestDigest: descriptor.digest,
     configDigest: configDescriptor.digest,
     configMember: digestMember(configDescriptor.digest),
     layerMembers: manifest.layers.map((layer) => digestMember(layer.digest)),
+    layerDescriptors: manifest.layers,
+    layerResults: layers.map(({ result }) => result),
     layerCount: manifest.layers.length,
+    config,
+  };
+}
+
+function validateMobyTagDescriptor(descriptor, expectedTag) {
+  exactKeysWithOptional(
+    descriptor,
+    ['mediaType', 'digest', 'size', 'annotations'],
+    ['platform'],
+  );
+  validateDescriptor(descriptor);
+  if (descriptor.mediaType !== OCI_MANIFEST_MEDIA_TYPE) fail();
+  exactKeys(descriptor.annotations, ['io.containerd.image.name', 'org.opencontainers.image.ref.name']);
+  if (descriptor.annotations['io.containerd.image.name'] !== `docker.io/library/${expectedTag}`
+    || descriptor.annotations['org.opencontainers.image.ref.name'] !== tagName(expectedTag)) fail();
+  if (descriptor.platform !== undefined) {
+    exactKeys(descriptor.platform, ['os', 'architecture']);
+    if (!isTargetPlatform(descriptor)) fail();
+  }
+}
+
+async function verifyMobyConfigIdentityManifest(
+  archivePath,
+  members,
+  descriptor,
+  expectedEngineImageId,
+  expectedTag,
+) {
+  validateMobyTagDescriptor(descriptor, expectedTag);
+  const manifestResult = await readDescriptor(archivePath, members, descriptor, { json: true });
+  const manifest = manifestResult.value;
+  exactKeys(manifest, ['schemaVersion', 'mediaType', 'config', 'layers']);
+  if (manifest.schemaVersion !== 2 || manifest.mediaType !== OCI_MANIFEST_MEDIA_TYPE
+    || !Array.isArray(manifest.layers) || !manifest.layers.length) fail();
+
+  exactKeys(manifest.config, ['mediaType', 'digest', 'size']);
+  const configDescriptor = validateDescriptor(manifest.config);
+  if (configDescriptor.mediaType !== OCI_CONFIG_MEDIA_TYPE
+    || configDescriptor.digest !== expectedEngineImageId) fail();
+  const configResult = await readDescriptor(archivePath, members, configDescriptor, { json: true });
+  const config = configResult.value;
+  const diffIds = config?.rootfs?.diff_ids;
+  if (config?.os !== 'linux' || config?.architecture !== 'amd64'
+    || config?.rootfs?.type !== 'layers' || !Array.isArray(diffIds) || !diffIds.length
+    || diffIds.length !== manifest.layers.length
+    || !diffIds.every((diffId) => typeof diffId === 'string' && DIGEST_PATTERN.test(diffId))) fail();
+
+  const layerResults = [];
+  for (let index = 0; index < manifest.layers.length; index++) {
+    const layer = manifest.layers[index];
+    exactKeys(layer, ['mediaType', 'digest', 'size']);
+    validateDescriptor(layer);
+    if (layer.mediaType !== OCI_LAYER_MEDIA_TYPE || layer.digest !== diffIds[index]) fail();
+    layerResults.push(await readDescriptor(archivePath, members, layer));
+  }
+
+  return {
+    manifestDigest: descriptor.digest,
+    configDigest: configDescriptor.digest,
+    configMember: digestMember(configDescriptor.digest),
+    layerMembers: manifest.layers.map((layer) => digestMember(layer.digest)),
+    layerDescriptors: manifest.layers,
+    layerResults,
+    layerCount: manifest.layers.length,
+    config,
+    diffIds,
   };
 }
 
@@ -196,13 +280,76 @@ async function verifyLegacyAgreement(archivePath, members, expectedTag, verified
     || entry.Layers.some((layer, index) => layer !== verified.layerMembers[index])) fail();
 }
 
-async function inspectOciArchive(archivePath, members, expectedTag, expectedOuterImageDigest) {
+async function verifyMobyLegacyAgreement(archivePath, members, expectedTag, verified) {
+  if (!members.has('manifest.json')) fail();
+  const legacy = await readJson(archivePath, members, 'manifest.json');
+  if (!Array.isArray(legacy.value)) fail();
+  const matches = legacy.value.filter(
+    (entry) => Array.isArray(entry?.RepoTags) && entry.RepoTags.includes(expectedTag),
+  );
+  if (matches.length !== 1) fail();
+  const entry = matches[0];
+  exactKeysWithOptional(entry, ['Config', 'RepoTags', 'Layers'], ['Parent', 'LayerSources']);
+  if (typeof entry.Config !== 'string' || !Array.isArray(entry.RepoTags)
+    || !entry.RepoTags.every((tag) => typeof tag === 'string')
+    || !Array.isArray(entry.Layers) || !entry.Layers.length
+    || entry.Config !== verified.configMember
+    || entry.Layers.length !== verified.layerMembers.length
+    || entry.Layers.some((layer, index) => layer !== verified.layerMembers[index])) fail();
+  if (entry.Parent !== undefined
+    && (typeof entry.Parent !== 'string' || !DIGEST_PATTERN.test(entry.Parent))) fail();
+
+  const sources = entry.LayerSources;
+  if (sources === undefined) return;
+  if (!sources || typeof sources !== 'object' || Array.isArray(sources)) fail();
+  const sourceKeys = Object.keys(sources);
+  const uniqueDiffIds = [...new Set(verified.diffIds)];
+  if (sourceKeys.length !== uniqueDiffIds.length
+    || sourceKeys.some((key) => !uniqueDiffIds.includes(key))) fail();
+  for (const diffId of uniqueDiffIds) {
+    const index = verified.diffIds.indexOf(diffId);
+    const source = sources[diffId];
+    exactKeys(source, ['mediaType', 'digest', 'size']);
+    validateDescriptor(source);
+    if (source.mediaType !== OCI_LAYER_MEDIA_TYPE || source.digest !== diffId
+      || source.size !== verified.layerResults[index].size) fail();
+  }
+}
+
+async function inspectOciArchive(archivePath, members, expectedTag, expectedEngineImageId) {
   const root = await readJson(archivePath, members, 'index.json');
   if (root.value?.schemaVersion !== 2 || !Array.isArray(root.value.manifests)) fail();
   const roots = root.value.manifests.filter((descriptor) => descriptorTagAgrees(descriptor, expectedTag));
   if (roots.length !== 1) fail();
   const rootDescriptor = validateDescriptor(roots[0]);
-  if (rootDescriptor.digest !== expectedOuterImageDigest) fail();
+  const rootIdentityMode = rootDescriptor.digest === expectedEngineImageId;
+
+  if (!rootIdentityMode) {
+    exactKeys(root.value, ['schemaVersion', 'mediaType', 'manifests']);
+    if (root.value.mediaType !== OCI_INDEX_MEDIA_TYPE || root.value.manifests.length !== 1
+      || !isLeafManifest(rootDescriptor)) fail();
+    const verified = await verifyMobyConfigIdentityManifest(
+      archivePath,
+      members,
+      rootDescriptor,
+      expectedEngineImageId,
+      expectedTag,
+    );
+    await verifyMobyLegacyAgreement(archivePath, members, expectedTag, verified);
+    return {
+      schema: 'quotefly.watchdog-image-archive/v1',
+      format: 'oci',
+      identityMode: 'config_digest',
+      imageTag: expectedTag,
+      engineImageId: expectedEngineImageId,
+      rootDescriptorDigest: rootDescriptor.digest,
+      outerImageDigest: rootDescriptor.digest,
+      manifestDigest: verified.manifestDigest,
+      imageConfigDigest: verified.configDigest,
+      platform: 'linux/amd64',
+      layerCount: verified.layerCount,
+    };
+  }
 
   let leafDescriptor = rootDescriptor;
   if (isIndex(rootDescriptor)) {
@@ -220,8 +367,11 @@ async function inspectOciArchive(archivePath, members, expectedTag, expectedOute
   return {
     schema: 'quotefly.watchdog-image-archive/v1',
     format: 'oci',
+    identityMode: 'root_digest',
     imageTag: expectedTag,
-    outerImageDigest: expectedOuterImageDigest,
+    engineImageId: expectedEngineImageId,
+    rootDescriptorDigest: rootDescriptor.digest,
+    outerImageDigest: rootDescriptor.digest,
     manifestDigest: verified.manifestDigest,
     imageConfigDigest: verified.configDigest,
     platform: 'linux/amd64',
@@ -237,11 +387,11 @@ function legacyConfigDigest(configMember) {
   fail();
 }
 
-async function inspectTraditionalArchive(archivePath, members, expectedTag, expectedOuterImageDigest) {
+async function inspectTraditionalArchive(archivePath, members, expectedTag, expectedEngineImageId) {
   const legacy = await readJson(archivePath, members, 'manifest.json');
   const entry = selectLegacyEntry(legacy.value, expectedTag);
   const expectedConfigDigest = legacyConfigDigest(entry.Config);
-  if (expectedConfigDigest !== expectedOuterImageDigest) fail();
+  if (expectedConfigDigest !== expectedEngineImageId) fail();
   const configResult = await readJson(archivePath, members, entry.Config);
   if (configResult.digest !== expectedConfigDigest) fail();
   const config = configResult.value;
@@ -258,8 +408,11 @@ async function inspectTraditionalArchive(archivePath, members, expectedTag, expe
   return {
     schema: 'quotefly.watchdog-image-archive/v1',
     format: 'docker',
+    identityMode: 'config_digest',
     imageTag: expectedTag,
-    outerImageDigest: expectedOuterImageDigest,
+    engineImageId: expectedEngineImageId,
+    rootDescriptorDigest: null,
+    outerImageDigest: expectedEngineImageId,
     manifestDigest: null,
     imageConfigDigest: expectedConfigDigest,
     platform: 'linux/amd64',
@@ -267,17 +420,17 @@ async function inspectTraditionalArchive(archivePath, members, expectedTag, expe
   };
 }
 
-export async function inspectQuickBooksImageArchive(archivePath, expectedTag, expectedOuterImageDigest) {
+export async function inspectQuickBooksImageArchive(archivePath, expectedTag, expectedEngineImageId) {
   if (typeof archivePath !== 'string' || !isAbsolute(archivePath)
     || typeof expectedTag !== 'string' || !TAG_PATTERN.test(expectedTag)
-    || typeof expectedOuterImageDigest !== 'string' || !DIGEST_PATTERN.test(expectedOuterImageDigest)) fail();
+    || typeof expectedEngineImageId !== 'string' || !DIGEST_PATTERN.test(expectedEngineImageId)) fail();
   try {
     if (!statSync(archivePath, { throwIfNoEntry: false })?.isFile()) fail();
     const members = await listMembers(archivePath);
     if (members.has('index.json')) {
-      return await inspectOciArchive(archivePath, members, expectedTag, expectedOuterImageDigest);
+      return await inspectOciArchive(archivePath, members, expectedTag, expectedEngineImageId);
     }
-    return await inspectTraditionalArchive(archivePath, members, expectedTag, expectedOuterImageDigest);
+    return await inspectTraditionalArchive(archivePath, members, expectedTag, expectedEngineImageId);
   } catch {
     fail();
   }

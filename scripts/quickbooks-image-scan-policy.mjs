@@ -71,6 +71,38 @@ function residualKey(finding) {
   return JSON.stringify([finding.VulnerabilityID, finding.PkgName, finding.InstalledVersion]);
 }
 
+function validateArchiveIdentity(identity) {
+  exactKeys(identity, [
+    'schema', 'format', 'identityMode', 'imageTag', 'engineImageId', 'rootDescriptorDigest',
+    'outerImageDigest', 'manifestDigest', 'imageConfigDigest', 'platform', 'layerCount',
+  ]);
+  if (identity.schema !== 'quotefly.watchdog-image-archive/v1'
+    || identity.platform !== 'linux/amd64'
+    || typeof identity.imageTag !== 'string'
+    || typeof identity.engineImageId !== 'string' || !digestPattern.test(identity.engineImageId)
+    || typeof identity.outerImageDigest !== 'string' || !digestPattern.test(identity.outerImageDigest)
+    || typeof identity.imageConfigDigest !== 'string' || !digestPattern.test(identity.imageConfigDigest)
+    || !Number.isSafeInteger(identity.layerCount) || identity.layerCount < 1) fail();
+
+  if (identity.format === 'oci') {
+    if (typeof identity.rootDescriptorDigest !== 'string' || !digestPattern.test(identity.rootDescriptorDigest)
+      || identity.outerImageDigest !== identity.rootDescriptorDigest
+      || typeof identity.manifestDigest !== 'string' || !digestPattern.test(identity.manifestDigest)) fail();
+    if (identity.identityMode === 'root_digest') {
+      if (identity.engineImageId !== identity.rootDescriptorDigest) fail();
+    } else if (identity.identityMode === 'config_digest') {
+      if (identity.engineImageId !== identity.imageConfigDigest
+        || identity.engineImageId === identity.rootDescriptorDigest) fail();
+    } else fail();
+    return;
+  }
+
+  if (identity.format !== 'docker' || identity.identityMode !== 'config_digest'
+    || identity.rootDescriptorDigest !== null || identity.manifestDigest !== null
+    || identity.engineImageId !== identity.imageConfigDigest
+    || identity.outerImageDigest !== identity.engineImageId) fail();
+}
+
 function validateDispositions(dispositions, residuals, archiveIdentity, now, sourceRoot) {
   exactKeys(dispositions, [
     'schema', 'reviewedAtUtc', 'expiresAtUtc', 'reviewer', 'platform', 'baseDigest', 'scopeFiles', 'entries',
@@ -116,13 +148,11 @@ function validateDispositions(dispositions, residuals, archiveIdentity, now, sou
 // selected linux/amd64 manifest, config, and every layer. This policy binds that
 // config and tag to Trivy without printing image configuration or findings.
 export function evaluateImageScan(report, database, dispositions, archiveIdentity, now = Date.now(), sourceRoot = process.cwd()) {
+  validateArchiveIdentity(archiveIdentity);
   if (report?.SchemaVersion !== 2 || report.ArtifactType !== 'container_image'
     || typeof report.Metadata?.ImageID !== 'string'
     || !digestPattern.test(report.Metadata.ImageID)
     || report.Metadata.ImageID !== archiveIdentity?.imageConfigDigest
-    || archiveIdentity?.schema !== 'quotefly.watchdog-image-archive/v1'
-    || archiveIdentity.platform !== 'linux/amd64'
-    || typeof archiveIdentity.imageTag !== 'string'
     || !Array.isArray(report.Metadata.RepoTags)
     || !report.Metadata.RepoTags.every((tag) => typeof tag === 'string')
     || !report.Metadata.RepoTags.includes(archiveIdentity.imageTag)

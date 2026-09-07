@@ -12,7 +12,8 @@ const imageTag = 'quotefly-qbo-watchdog:local-policy-test';
 const configDigest = `sha256:${'a'.repeat(64)}`;
 const baseDigest = `sha256:${'b'.repeat(64)}`;
 const identity = {
-  schema: 'quotefly.watchdog-image-archive/v1', format: 'oci', imageTag,
+  schema: 'quotefly.watchdog-image-archive/v1', format: 'oci', identityMode: 'root_digest', imageTag,
+  engineImageId: `sha256:${'c'.repeat(64)}`, rootDescriptorDigest: `sha256:${'c'.repeat(64)}`,
   outerImageDigest: `sha256:${'c'.repeat(64)}`, manifestDigest: `sha256:${'d'.repeat(64)}`,
   imageConfigDigest: configDigest, platform: 'linux/amd64', layerCount: 1,
 };
@@ -164,6 +165,30 @@ test('rejects report/archive identity, tag, or platform mismatches without coerc
   assert.throws(
     () => evaluateImageScan(fixture([]), database, dispositions(), { ...identity, platform: 'linux/arm64' }, now, sourceRoot),
     /EVIDENCE_INVALID/,
+  );
+  for (const invalidIdentity of [
+    { ...identity, identityMode: 'config_digest' },
+    { ...identity, engineImageId: configDigest },
+    { ...identity, outerImageDigest: `sha256:${'e'.repeat(64)}` },
+    { ...identity, rootDescriptorDigest: null },
+    { ...identity, engineImageId: [identity.engineImageId] },
+    { ...identity, unexpected: true },
+  ]) {
+    assert.throws(
+      () => evaluateImageScan(fixture([]), database, dispositions(), invalidIdentity, now, sourceRoot),
+      /EVIDENCE_INVALID/,
+    );
+  }
+  const configIdentity = {
+    ...identity,
+    identityMode: 'config_digest',
+    engineImageId: configDigest,
+    rootDescriptorDigest: identity.manifestDigest,
+    outerImageDigest: identity.manifestDigest,
+  };
+  assert.equal(
+    evaluateImageScan(fixture([]), database, dispositions(), configIdentity, now, sourceRoot).passed,
+    true,
   );
 });
 
