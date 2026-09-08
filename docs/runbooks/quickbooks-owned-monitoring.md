@@ -6,6 +6,68 @@ real email, purchase a service, or establish production readiness merely by exis
 The previously validated staging candidate is `6239f742f04b2815082c0fc7f108727a3e916258`;
 this successor needs its own gates, review, and authorized deployment.
 
+## Owner budget decision — September 8, 2026
+
+The owner selected an operational email address outside `quotefly.us` and explicitly
+declined any additional paid server or hosting. Keep that private address in the
+notification configuration/evidence, not public source. The dedicated paid watchdog
+host proposal is withdrawn. Do not purchase a host, activate a paid plan, or continue
+asking for paid-host approval. The standalone implementation below is an optional
+deployment mode, not an immutable requirement for QuickBooks integration.
+
+The no-new-hosting alternative under qualification is the existing public
+repository's standard GitHub Actions runner and GitHub-native incident notifications.
+It is not configured or delivery-verified merely by being proposed:
+
+- Before an attended accounting sandbox test, run a bounded, manually dispatched
+  monitor for that environment, polling the API and both authenticated QBO warning/
+  critical endpoints once per minute. Keep the owner present and stop accounting
+  test actions if monitoring stops. Never use a healthy public API probe alone as
+  evidence of QBO health.
+- For a later production pilot, a five-minute scheduled probe can cover persisted
+  operational conditions. The existing thirty-minute public-health workflow is not
+  a complete QBO monitor and must not be represented as one.
+- Use a dedicated environment-scoped monitor bearer, fixed API origins, no redirects,
+  minimal workflow permissions, trusted reviewed code, and content-free incident/
+  recovery notifications. Do not move application, QBO, or database credentials into
+  GitHub. Keep incident state bounded and deduplicated; test escalation and recovery.
+- Before adding a monitor secret, protect the production default branch and restrict
+  its environment secret to that branch. Pin reviewed actions to full commit SHAs
+  (or remove action dependencies), scope the bearer to the probe step, and reject
+  untrusted/manual branch dispatches. A staging-only attended run needs its own
+  approved protected-ref/environment boundary; do not expose production secrets.
+- Identify automation incidents by a restricted label and expected bot identity,
+  not title alone: ordinary users can open same-title issues in the public repository.
+  Test that an untrusted same-title issue cannot suppress or resolve a real incident.
+  Preserve a first-clean marker and require two consecutive completed clean runs
+  before recovery; any unhealthy run resets it. Assign/mention the responder on
+  trusted incident, escalation, recovery, and canary notifications.
+- Verify that GitHub notifications actually reach the owner-selected verified email
+  address, including a canary and failure/recovery receipt. An issue, mention, or
+  successful workflow does not itself prove email delivery. If direct mail is needed,
+  use a dedicated restricted sending key on the existing provider; never copy the
+  application's email key into CI.
+- GitHub schedules can be delayed/dropped and public schedules can disable after
+  inactivity. There is no continuous signal receiver, durable mail outbox, guaranteed
+  detection latency, or redundant responder in this alternative. A daily canary
+  needs an explicitly assigned owner who notices its absence. Document and obtain
+  acceptance of these limitations before relying on unattended production monitoring.
+  Also obtain acceptance of sanitized public incident metadata and GitHub being both
+  scheduler and notification provider. Record actual scheduling delay over a documented
+  observation window during the controlled pilot; seven days is a recommended baseline
+  before broad unattended rollout, not a gate to attended sandbox testing. Historical
+  observations cannot guarantee future latency. Refusing paid hosting is not acceptance
+  of these risks or of GitHub's lack of a detection-time SLA.
+
+See [GitHub runner billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions),
+[schedule limitations](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule),
+and [email notification configuration](https://docs.github.com/en/subscriptions-and-notifications/get-started/configuring-notifications).
+No paid host is necessary to qualify this alternative, but actual implementation,
+secret provisioning, notification receipt, failure/recovery drills and independent
+review remain required. It does not waive Intuit access, accounting/webhook/CDC proof,
+backup/restore, or the final release decision. Until qualified, keep the unused
+standalone watcher and external signal sink pairs unconfigured.
+
 ## What lives where
 
 - QuoteFly platform admin: manual, audited, read-only health snapshot; no tenant,
@@ -23,7 +85,10 @@ No Better Stack subscription is required by this implementation. Hosting and ema
 quotas/costs depend on the owner-selected accounts. Do not provision a paid host or
 activate a plan without owner approval.
 
-## Deployment gates — not completed by local tests
+## Standalone deployment gates — not completed by local tests
+
+These host/volume/receiver requirements apply if the standalone mode is selected.
+They do not mandate buying a server for the no-new-hosting alternative above.
 
 1. Owner selects a host outside the API/database failure domain. Another service
    in the same Railway project/provider does **not** establish provider-outage
@@ -54,7 +119,7 @@ activate a plan without owner approval.
    QBO accounting/webhook/payment/CDC proof and Intuit production approval remain
    separate gates. OAuth connect/disconnect is not proof of full accounting sync.
 
-## Configuration (names only)
+## Standalone configuration (names only)
 
 Safe first-rollout order: provision the watchdog HTTPS URL, private volume, and
 secrets while the service is stopped; configure API monitor bearer and API sink pair
@@ -82,7 +147,7 @@ Watchdog owns both receiver credentials but never receives the QBO client secret
 OAuth credentials, JWT, webhook verifier, or database URLs. Worker provisioning does
 not authorize enabling worker execution or accounting workflows.
 
-## Build and operate
+## Standalone build and operation
 
 From the repository root, after local tests and review:
 
@@ -152,7 +217,7 @@ Use the host's secret editor; do not use secret-bearing shell arguments or env d
   Direct non-Linux development uses an exclusive file lock with manual crash recovery;
   that fallback is not the production deployment mode.
 
-## Alert semantics and limitations
+## Standalone alert semantics and limitations
 
 The authoritative fleet incident is critical for unavailable/unauthorized/rate-limited,
 nonempty/malformed probe responses or critical 503; warning for warning 503 with
@@ -187,7 +252,7 @@ replace audit records, durable business queues, platform logs, backup testing, o
 independent monitor of its own host. Daily canary absence must be noticed by the named
 responder; email-provider acceptance alone cannot detect bounces or inbox filtering.
 
-## Recovery and rollback
+## Standalone recovery and rollback
 
 - Never reset state automatically. Production uses a crash-released OS lock; a
   second active process exits 73. Never delete `process.lock` while running because
@@ -210,7 +275,7 @@ responder; email-provider acceptance alone cannot detect bounces or inbox filter
   Record that external alerting is absent; do not change QBO signatures or accounting
   flags. Reintroduce the reviewed watcher with a fresh owner receipt test.
 
-## Required staged proof
+## Standalone required staged proof
 
 Record exact candidate identity and UTC evidence for: unauthorized rejection and
 cross-role rejection; authorized signal canary reaching inbox; controlled warning and

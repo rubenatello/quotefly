@@ -155,8 +155,12 @@ When latency is reported:
 
 The successor's restricted Integration Health dashboard and independently operated
 watchdog are documented in [QuoteFly-owned monitoring](docs/runbooks/quickbooks-owned-monitoring.md).
-Follow its exact-image CI proof, secret isolation, external host/recipient, rollout,
-receipt, volume-restore, and rollback gates before enabling alert delivery.
+The owner declined additional paid hosting on September 8. Follow the selected
+mode's secret isolation, rollout, receipt, recovery, and rollback gates before
+relying on alert delivery. The proposed GitHub Actions/email alternative requires
+its own implementation and live evidence; standalone image/host/volume gates apply
+only to the standalone mode. Do not treat a paid monitor server as a prerequisite
+or either mode's code/configuration as proof that alerts actually reach the owner.
 
 Direct QuickBooks remains unavailable in production and must keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` there. The owner-authorized staging phase may use the `quickbooks-oauth` profile for connection, replay, disconnect, and revocation evidence only; it must keep accounting actions, the worker, signed webhooks, CDC, and hosted payments disabled. Do not create an Intuit invoice, retrieve or share an InvoiceLink, or run any accounting mutation without separate explicit authorization. Taxable invoice publishing remains blocked.
 
