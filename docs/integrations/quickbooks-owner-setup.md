@@ -1,6 +1,6 @@
-# QuickBooks Owner Setup — Provider Workflows Paused
+# QuickBooks Owner Setup — Release-Candidate Containment
 
-Status: Engineering candidate only. Do not enable or market QuickBooks Online connection, invoice publishing, hosted payments, payment reconciliation, tax sync, CDC, or webhook automation for the current release.
+Status: production and customer availability remain disabled. The September 6 owner authorization covers bounded non-destructive, non-real-money staging/production testing, expanding the earlier OAuth-only scope. The deployed checkpoint remains OAuth-only; later phases require the readiness gates in the [release evidence record](quickbooks-release-candidate-evidence.md#owner-controlled-release-gate). Destructive actions, actual funds movement, and customer go-live are not approved by that testing authorization.
 
 Authoritative references:
 
@@ -11,17 +11,17 @@ Authoritative references:
 
 ## Current production boundary
 
-- Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` in every deployed API environment.
-- Do not complete OAuth consent, subscribe Invoice or Payment webhooks, push a provider invoice, retrieve or share a hosted payment link, or record a QuickBooks payment.
+- Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` in production and every environment not covered by the recorded sandbox authorization.
+- Begin authorized staging with the `quickbooks-oauth` profile for connection/replay/disconnect/revocation, with accounting and the worker off. Advance only through the ordered profiles after their exact-candidate, environment, monitoring, and provider prerequisites pass; do not enable accounting merely because OAuth succeeds.
 - Taxable invoice publishing remains blocked even in a future bounded pilot until a separate tax-mapping contract is approved.
 - QuickBooks status and local preview remain owner/admin surfaces; CSV export remains the supported accounting handoff.
 - Existing credentials, schema, UI, tests, or an engineering-candidate build do not authorize provider activity.
 
-No sandbox or production provider evidence is claimed by this document.
+The owner-observed sandbox connect/disconnect on a superseded SHA is partial evidence only. The final SHA and complete OAuth sequence remain pending; no accounting or production provider evidence is claimed.
 
 ## Safe environment posture
 
-The deployed environment may retain reserved credentials for development or local cleanup, but the kill switch must remain false:
+Production may retain reserved credentials, but its kill switch must remain false until the final qualified pilot is explicitly approved. Staging uses only the separately qualified profile for its current test phase:
 
 ```env
 QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false
@@ -38,7 +38,7 @@ Keep client secrets, verifier values, token-encryption keys, OAuth tokens, hoste
 
 ## Owner evidence inventory
 
-Before any separately authorized sandbox run, record dated, sanitized evidence for:
+Before the final OAuth-only run, and again before any later accounting phase, record dated, sanitized evidence for:
 
 - candidate commit SHA and exact deployed image;
 - Intuit app name/environment, callback URI, webhook endpoint, approved scopes, and test company;
@@ -52,9 +52,9 @@ Inventory references must identify secrets by provider-side label or fingerprint
 
 ## Sandbox authorization boundary
 
-The checklist in [quickbooks-owner-testing-checklist.md](quickbooks-owner-testing-checklist.md) becomes executable only after the exact candidate passes its automated gate and receives explicit owner authorization for Intuit sandbox mutations. Authorization for sandbox does not authorize production credentials, production OAuth, production webhooks, production migrations, or customer exposure.
+The OAuth-only subset of [quickbooks-owner-testing-checklist.md](quickbooks-owner-testing-checklist.md) is executable after the exact candidate passes its automated gate and reaches staging under the recorded authorization. Bounded benign accounting, signed-webhook, CDC, and hosted-link sandbox proof is within the September 6 non-destructive testing authorization, but still requires the applicable readiness gates, owner-assisted scope, and staged enablement. Destructive cleanup, void/refund/reversal, actual funds movement, and the final customer pilot/go-live need separately reviewed scope and approval. Production testing remains contingent on Intuit access and completed staging/operations evidence; neither this document nor a sandbox pass grants customer exposure or marketing approval.
 
-## Monitoring required before a sandbox run
+## Monitoring required before the final OAuth run and later automation
 
 Assign alert destinations and owners for:
 

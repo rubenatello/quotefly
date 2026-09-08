@@ -1,0 +1,73 @@
+name: QuickBooks attended monitor
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Approved environment to monitor (no accounting writes)
+        required: true
+        type: choice
+        default: staging
+        options:
+          - staging
+          - production
+      duration_minutes:
+        description: Attended one-minute samples, integer 1 through 240
+        required: true
+        default: "5"
+        type: string
+      canary:
+        description: Request a deduplicated daily email-notification canary
+        required: true
+        default: true
+        type: boolean
+
+# Deliberately no schedule, push, PR, or workflow_run trigger. Adding this file does
+# not enable monitoring. Environment approval/secret provisioning and receipt proof
+# are separate operations; do not add repository-wide QBO secrets.
+permissions:
+  contents: read
+
+concurrency:
+  group: qbo-attended-monitor-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    if: >-
+      github.repository == 'rubenatello/quotefly' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref_type == 'branch' && github.ref_protected
+    environment: qbo-monitor-${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 245
+    permissions:
+      contents: read
+      issues: write
+    env:
+      QBO_MONITOR_ENVIRONMENT: ${{ inputs.environment }}
+      QBO_MONITOR_MINUTES: ${{ inputs.duration_minutes }}
+      QBO_MONITOR_CANARY: ${{ inputs.canary }}
+    steps:
+      - name: Checkout reviewed protected ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup reviewed Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.23.2
+          package-manager-cache: false
+      - name: Check admission without monitor secret
+        env:
+          QBO_MONITOR_APPROVED_REF: ${{ vars.QBO_MONITOR_APPROVED_REF }}
+          QBO_MONITOR_ENABLED: ${{ vars.QBO_MONITOR_ENABLED }}
+        run: node scripts/quickbooks-github-monitor.mjs --admission-only
+      - name: Attended read-only probes and sanitized issue notifications
+        env:
+          QBO_MONITOR_BEARER: ${{ secrets.QBO_MONITOR_BEARER }}
+          GH_TOKEN: ${{ github.token }}
+          QBO_MONITOR_APPROVED_REF: ${{ vars.QBO_MONITOR_APPROVED_REF }}
+          QBO_MONITOR_ENABLED: ${{ vars.QBO_MONITOR_ENABLED }}
+        run: node scripts/quickbooks-github-monitor.mjs

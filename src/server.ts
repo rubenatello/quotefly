@@ -1,9 +1,14 @@
 import "dotenv/config";
 import { buildServer } from "./app";
 import { env } from "./config/env";
+import { installGracefulApiShutdown } from "./lib/graceful-shutdown";
 
 async function start() {
   const app = buildServer();
+  installGracefulApiShutdown({
+    close: () => app.close(),
+    logger: app.log,
+  });
 
   try {
     await app.listen({

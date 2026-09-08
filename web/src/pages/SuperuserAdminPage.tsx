@@ -38,6 +38,7 @@ import {
   PageHeader,
   Select,
 } from "../components/ui";
+import { QuickBooksIntegrationHealthPanel } from "../components/admin/QuickBooksIntegrationHealthPanel";
 
 type ConsoleTab = "overview" | "tenants" | "catalog" | "permissions" | "validation" | "audit";
 
@@ -464,10 +465,27 @@ function OverviewPanel({
   ragIndex: InternalRagIndexSummary | null;
   onRefresh: () => void;
 }) {
-  if (!summary) return <Card padding="lg" className="text-sm text-slate-600">No platform summary is available.</Card>;
-  const valid = summary.liveValidation.status === "PASSED";
   return (
     <section className="space-y-4" aria-labelledby="overview-panel-title">
+      <QuickBooksIntegrationHealthPanel />
+      {!summary ? <Card padding="lg" className="text-sm text-slate-600">No platform summary is available.</Card> : null}
+      {summary ? <PlatformOverview summary={summary} ragIndex={ragIndex} onRefresh={onRefresh} /> : null}
+    </section>
+  );
+}
+
+function PlatformOverview({
+  summary,
+  ragIndex,
+  onRefresh,
+}: {
+  summary: InternalControlPlaneSummary;
+  ragIndex: InternalRagIndexSummary | null;
+  onRefresh: () => void;
+}) {
+  const valid = summary.liveValidation.status === "PASSED";
+  return (
+    <>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Active tenants" value={summary.totals.activeTenants.toLocaleString()} />
         <MetricCard label="Active users" value={summary.totals.activeUsers.toLocaleString()} />
@@ -560,7 +578,7 @@ function OverviewPanel({
         )}
       </Card>
       <Alert tone="info">{summary.mutationPolicy.reason}</Alert>
-    </section>
+    </>
   );
 }
 
@@ -601,11 +619,14 @@ function TenantCard({ tenant }: { tenant: InternalTenantMetadata }) {
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-700">QuickBooks setup</p>
           <span className="text-xs text-slate-500">{tenant.quickBooks.environment ? readable(tenant.quickBooks.environment) : "No environment"}</span>
         </div>
-        <div className="mt-2 grid grid-cols-3 gap-2">
+        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
           <MetricCompact label="Customer maps" value={tenant.quickBooks.counts.customerMaps.toLocaleString()} />
           <MetricCompact label="Item maps" value={tenant.quickBooks.counts.itemMaps.toLocaleString()} />
-          <MetricCompact label="Invoice syncs" value={tenant.quickBooks.counts.invoiceSyncs.toLocaleString()} />
+          <MetricCompact label="Invoice operations" value={tenant.quickBooks.counts.invoiceSyncs.toLocaleString()} />
         </div>
+        <p className="mt-2 text-xs text-slate-500">
+          Current invoice-owned publish and reconciliation records; excludes retired quote-sync records.
+        </p>
         <p className="mt-2 text-xs text-slate-500">
           Last sync: {formatDate(tenant.quickBooks.lastSyncAtUtc)} · Confirmed: {formatDate(tenant.quickBooks.setupConfirmedAtUtc)}
         </p>

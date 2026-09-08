@@ -1,0 +1,436 @@
+{
+  "schema": "quotefly.watchdog-image-dispositions/v1",
+  "reviewedAtUtc": "2026-09-06T21:57:00Z",
+  "expiresAtUtc": "2026-10-05T21:57:00Z",
+  "reviewer": "sentinel",
+  "platform": "linux/amd64",
+  "baseDigest": "sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
+  "scopeFiles": [
+    {
+      "path": "ops/quickbooks-watchdog/Dockerfile",
+      "sha256": "sha256:bc0b9618f29a8ce59405934058fd9875a7395839207c6f9020dc7bf9c2796d5a"
+    },
+    {
+      "path": "src/watchdog/core.ts",
+      "sha256": "sha256:b908f6983f73883e5ac044181e370ac394818b2e48d794658d0c0afcd5e53525"
+    },
+    {
+      "path": "src/watchdog/main.ts",
+      "sha256": "sha256:17205f6eb4b36491e7f43a67f5384ddc9d6685f7f8cef4d90051fab33caac259"
+    },
+    {
+      "path": "src/watchdog/process-lock.ts",
+      "sha256": "sha256:96ed428bdfa752de5e0a29cb6f90e83ffad8f08ea0b303b6ccb46da5522f1189"
+    },
+    {
+      "path": "src/watchdog/server.ts",
+      "sha256": "sha256:59693c00b83d595563d0fde8afa8a6295120215c69c95f6ca594a251489559e3"
+    },
+    {
+      "path": "src/watchdog/store.ts",
+      "sha256": "sha256:761327abe71b6dc1688cd1bbadee02056569f1f21b39105b67017c50ff2a9c74"
+    },
+    {
+      "path": "src/services/quickbooks-observability.ts",
+      "sha256": "sha256:b44aa15979edbab999e7d22cbdd8c17eef5c181a67080d00cb434140e66a0c36"
+    },
+    {
+      "path": "src/services/quickbooks-worker-operational.ts",
+      "sha256": "sha256:dc477e3603dccdf2c93a8ad58bc9b4767bc2a7a12e2b9650741d04538c76effa"
+    }
+  ],
+  "entries": [
+    {
+      "vulnerabilityId": "CVE-2023-45853",
+      "packageName": "zlib1g",
+      "installedVersion": "1:1.2.13.dfsg-1",
+      "rationale": "Not affected in Debian Bookworm: the vulnerable MiniZip code is not built into this zlib binary package, as recorded by Debian. The watchdog does not expose a MiniZip API.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2023-45853"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-13221",
+      "packageName": "perl-base",
+      "installedVersion": "5.36.0-7+deb12u3",
+      "rationale": "Not reachable in the reviewed runtime: the fixed entrypoint executes Node and flock only; it never invokes Perl or compiles attacker-controlled Perl regular expressions.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-13221"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-42496",
+      "packageName": "perl-base",
+      "installedVersion": "5.36.0-7+deb12u3",
+      "rationale": "Not reachable in the reviewed runtime: the watchdog never invokes Perl Archive::Tar and accepts no archive uploads or archive-extraction inputs.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-42496"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-8376",
+      "packageName": "perl-base",
+      "installedVersion": "5.36.0-7+deb12u3",
+      "rationale": "Not applicable to this linux/amd64 image because the vulnerability requires a 32-bit Perl build; the reviewed runtime is x64 and does not invoke Perl.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-8376"
+    },
+    {
+      "vulnerabilityId": "CVE-2025-69720",
+      "packageName": "libtinfo6",
+      "installedVersion": "6.4-4",
+      "rationale": "Not reachable in the reviewed runtime: this issue is in the infocmp CLI, which the Node-and-flock entrypoint never invokes; no terminal database input is accepted.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2025-69720"
+    },
+    {
+      "vulnerabilityId": "CVE-2025-69720",
+      "packageName": "ncurses-base",
+      "installedVersion": "6.4-4",
+      "rationale": "Not reachable in the reviewed runtime: this issue is in the infocmp CLI, which the Node-and-flock entrypoint never invokes; no terminal database input is accepted.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2025-69720"
+    },
+    {
+      "vulnerabilityId": "CVE-2025-69720",
+      "packageName": "ncurses-bin",
+      "installedVersion": "6.4-4",
+      "rationale": "Not reachable in the reviewed runtime: this issue is in the infocmp CLI, which the Node-and-flock entrypoint never invokes; no terminal database input is accepted.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2025-69720"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-16742",
+      "packageName": "libsystemd0",
+      "installedVersion": "252.39-1~deb12u2",
+      "rationale": "Not applicable to this container: systemd-homed is not running, there are no homed-managed interactive users, and the process runs as the non-root node user.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-16742"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-16742",
+      "packageName": "libudev1",
+      "installedVersion": "252.39-1~deb12u2",
+      "rationale": "Not applicable to this container: systemd-homed is not running, there are no homed-managed interactive users, and the process runs as the non-root node user.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-16742"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-41992",
+      "packageName": "gzip",
+      "installedVersion": "1.12-1",
+      "rationale": "Not reachable in the reviewed runtime: the watchdog never invokes gzip and accepts no compressed-file or archive input; request bodies are bounded JSON only.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-41992"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-42497",
+      "packageName": "perl-base",
+      "installedVersion": "5.36.0-7+deb12u3",
+      "rationale": "Not reachable in the reviewed runtime: the watchdog never invokes Perl Archive::Tar and accepts no archive uploads or archive-extraction inputs.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-42497"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-48962",
+      "packageName": "perl-base",
+      "installedVersion": "5.36.0-7+deb12u3",
+      "rationale": "Not reachable in the reviewed runtime: the watchdog never invokes Perl IO::Compress or passes attacker-controlled output globs to Perl.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-48962"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-53613",
+      "packageName": "bsdutils",
+      "installedVersion": "1:2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding affects privileged mount path handling. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-53613"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-53613",
+      "packageName": "libblkid1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding affects privileged mount path handling. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-53613"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-53613",
+      "packageName": "libmount1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding affects privileged mount path handling. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-53613"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-53613",
+      "packageName": "libsmartcols1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding affects privileged mount path handling. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-53613"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-53613",
+      "packageName": "libuuid1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding affects privileged mount path handling. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-53613"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-53613",
+      "packageName": "mount",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding affects privileged mount path handling. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-53613"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-53613",
+      "packageName": "util-linux",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding affects privileged mount path handling. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-53613"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-53613",
+      "packageName": "util-linux-extra",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding affects privileged mount path handling. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-53613"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-54369",
+      "packageName": "libacl1",
+      "installedVersion": "2.3.1-3",
+      "rationale": "Not reachable in the reviewed runtime: Node and flock do not link libacl, and the non-root service performs no privileged ACL operations on attacker-controlled paths.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-54369"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-57432",
+      "packageName": "perl-base",
+      "installedVersion": "5.36.0-7+deb12u3",
+      "rationale": "Not reachable in the reviewed runtime: the watchdog never invokes Perl or supplies untrusted templates to Perl pack or unpack operations.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-57432"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-57433",
+      "packageName": "perl-base",
+      "installedVersion": "5.36.0-7+deb12u3",
+      "rationale": "Not reachable in the reviewed runtime: the watchdog never invokes Perl Storable or deserializes attacker-supplied Storable data.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-57433"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-76642",
+      "packageName": "bsdutils",
+      "installedVersion": "1:2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires privileged mount helpers and post-mount hooks. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-76642"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-76642",
+      "packageName": "libblkid1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires privileged mount helpers and post-mount hooks. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-76642"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-76642",
+      "packageName": "libmount1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires privileged mount helpers and post-mount hooks. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-76642"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-76642",
+      "packageName": "libsmartcols1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires privileged mount helpers and post-mount hooks. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-76642"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-76642",
+      "packageName": "libuuid1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires privileged mount helpers and post-mount hooks. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-76642"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-76642",
+      "packageName": "mount",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires privileged mount helpers and post-mount hooks. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-76642"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-76642",
+      "packageName": "util-linux",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires privileged mount helpers and post-mount hooks. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-76642"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-76642",
+      "packageName": "util-linux-extra",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires privileged mount helpers and post-mount hooks. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-76642"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78408",
+      "packageName": "bsdutils",
+      "installedVersion": "1:2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires a privileged nsenter --join-cgroup invocation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78408"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78408",
+      "packageName": "libblkid1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires a privileged nsenter --join-cgroup invocation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78408"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78408",
+      "packageName": "libmount1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires a privileged nsenter --join-cgroup invocation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78408"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78408",
+      "packageName": "libsmartcols1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires a privileged nsenter --join-cgroup invocation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78408"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78408",
+      "packageName": "libuuid1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires a privileged nsenter --join-cgroup invocation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78408"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78408",
+      "packageName": "mount",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires a privileged nsenter --join-cgroup invocation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78408"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78408",
+      "packageName": "util-linux",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires a privileged nsenter --join-cgroup invocation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78408"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78408",
+      "packageName": "util-linux-extra",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires a privileged nsenter --join-cgroup invocation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78408"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78409",
+      "packageName": "bsdutils",
+      "installedVersion": "1:2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged X-mount.subdir operation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78409"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78409",
+      "packageName": "libblkid1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged X-mount.subdir operation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78409"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78409",
+      "packageName": "libmount1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged X-mount.subdir operation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78409"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78409",
+      "packageName": "libsmartcols1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged X-mount.subdir operation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78409"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78409",
+      "packageName": "libuuid1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged X-mount.subdir operation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78409"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78409",
+      "packageName": "mount",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged X-mount.subdir operation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78409"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78409",
+      "packageName": "util-linux",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged X-mount.subdir operation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78409"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78409",
+      "packageName": "util-linux-extra",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged X-mount.subdir operation. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78409"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78410",
+      "packageName": "bsdutils",
+      "installedVersion": "1:2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged restricted bind mount. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78410"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78410",
+      "packageName": "libblkid1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged restricted bind mount. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78410"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78410",
+      "packageName": "libmount1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged restricted bind mount. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78410"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78410",
+      "packageName": "libsmartcols1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged restricted bind mount. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78410"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78410",
+      "packageName": "libuuid1",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged restricted bind mount. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78410"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78410",
+      "packageName": "mount",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged restricted bind mount. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78410"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78410",
+      "packageName": "util-linux",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged restricted bind mount. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78410"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-78410",
+      "packageName": "util-linux-extra",
+      "installedVersion": "2.38.1-5+deb12u3",
+      "rationale": "Not reachable in the defined runtime: this source-package finding requires an fstab-authorized privileged restricted bind mount. The service invokes only flock, runs non-root, has no SUID/SGID files, and requires dropped capabilities.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-78410"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-9538",
+      "packageName": "perl-base",
+      "installedVersion": "5.36.0-7+deb12u3",
+      "rationale": "Not reachable in the reviewed runtime: the watchdog never invokes Perl Archive::Tar and accepts no crafted tar input or archive-extraction operation.",
+      "sourceUrl": "https://security-tracker.debian.org/tracker/CVE-2026-9538"
+    }
+  ]
+}

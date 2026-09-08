@@ -1,8 +1,8 @@
 # QuickBooks API Progress
 
-Last updated: 2026-09-02
+Last updated: 2026-09-08
 
-Status: Hosted-payment and reconciliation engineering candidate in progress. Provider workflows remain default-off, unavailable to customers, and unapproved for sandbox or production enablement.
+Status: release-candidate qualification. Provider workflows remain default-off and unavailable to customers or production. The September 6 owner authorization covers bounded non-destructive, non-real-money staging/production testing, expanding the earlier OAuth-only scope. Staging still runs the OAuth-only checkpoint; advancing accounting phases requires the exact-candidate, monitoring, environment, and provider gates in the [release evidence record](quickbooks-release-candidate-evidence.md). Destructive actions, actual funds movement, customer go-live, and marketing remain separately gated.
 
 The acceptance contract is [QuickBooks Hosted Payments And Reconciliation](quickbooks-hosted-payments-reconciliation.md). That contract defines the authoritative workflow, security boundary, state projection, recovery behavior, and evidence required before enablement.
 
@@ -12,7 +12,7 @@ The acceptance contract is [QuickBooks Hosted Payments And Reconciliation](quick
 - Export accounting data through the QuickBooks-friendly CSV workflow.
 - Allow current owners/admins to inspect local QuickBooks configuration state or disconnect locally stored credentials.
 
-QuoteFly does not currently offer customer-available QuickBooks Online connection, invoice creation, hosted-payment delivery, invoice/payment reconciliation, tax sync, or webhook automation. No Intuit sandbox result, QuickBooks Payments eligibility, production app approval, or production provider operation is claimed.
+QuoteFly does not currently offer customer-available QuickBooks Online connection, invoice creation, hosted-payment delivery, invoice/payment reconciliation, tax sync, or webhook automation. An owner-observed connect and disconnect passed against the expected Intuit sandbox company on a superseded staging SHA; the final SHA, replay/revocation sequence, QuickBooks Payments eligibility, accounting automation, production app approval, and production provider operation remain unproven.
 
 ## Engineering candidate
 
@@ -31,7 +31,7 @@ The repository contains a default-off candidate for:
 - tenant-composite relationships and forced RLS for tenant-owned QuickBooks records;
 - projection into QuoteFly's internal Invoice and InvoicePayment ledger.
 
-Presence in the schema or code is not availability. The candidate must pass the exact automated, migration, sandbox, security, operational, and independent-review evidence below before the provider flag may be changed.
+Presence in the schema or code is not availability. Before enabling a corresponding sandbox profile, pass the exact automated, migration, security, and independent-review gates plus that phase's environment and monitoring prerequisites. Collect its live sandbox evidence during the bounded test phase; that evidence gates later phases and production. Production/pilot enablement requires the completed sandbox and operations evidence as well as the final owner go/no-go.
 
 The current worktree includes automated provider-shaped coverage for bounded
 `RefundReceipt` reads, webhook and CDC recognition, partial/full ledger
@@ -40,7 +40,7 @@ test evidence only: it does not prove how a live Intuit sandbox company links a
 refund receipt, payment, and invoice, and it does not satisfy the owner-managed
 sandbox refund/reversal checkbox below.
 
-`QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` remains the required release posture:
+`QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` remains the required production and default release posture. The initial/current OAuth-only staging checkpoint uses `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=true` together with `QUICKBOOKS_OAUTH_ONLY_MODE=true`, with every accounting capability false. Later authorized staging profiles follow the ordered readiness gates in the sandbox runbook; they are not enabled by an OAuth pass alone. Throughout these phases:
 
 - provider-capable connect, callback, publish, refresh, reconciliation, and webhook-processing paths must make no Intuit call while paused;
 - taxable invoice publishing remains blocked until a separate tax-mapping contract is approved;
@@ -78,7 +78,7 @@ sandbox refund/reversal checkbox below.
 - [ ] Intuit sandbox app, exact HTTPS callback, webhook verifier, dedicated sandbox company, and QuickBooks Payments test eligibility are recorded without storing secrets in Git.
 - [ ] One sanitized, explicitly approved internal tenant completes OAuth and one-time callback behavior.
 - [ ] Reviewed customer/item mapping and one non-taxable invoice complete without blind customer/item creation.
-- [ ] The hosted invoice link is retrieved and presented safely, then partial payment, full payment, refund/reversal, and void states reconcile.
+- [ ] The hosted invoice link is retrieved and presented safely; simulated partial/full payments reconcile without actual funds movement. Refund/reversal and void tests require separately reviewed destructive-test scope and approval.
 - [ ] Duplicate and out-of-order webhooks, worker restart, dropped webhook repaired by CDC, and provider timeout produce one durable outcome.
 - [ ] Disconnect revokes tokens, a simulated revocation failure becomes `REVOCATION_PENDING`, and reconnect cannot cross company/realm boundaries.
 - [ ] Queue age, retries, dead letters, reconciliation-required records, token failures, CDC lag, and provider latency are visible to named alert owners.
@@ -93,7 +93,7 @@ sandbox refund/reversal checkbox below.
 
 ## Migration risks to carry into review
 
-The uncommitted migration `20260827120000_add_quickbooks_hosted_payment_reconciliation` is additive but coordinated:
+The committed migration `20260827120000_add_quickbooks_hosted_payment_reconciliation` is additive but coordinated:
 
 - it enables and forces RLS on existing QuickBooks tables, so a binary that does not set `app.tenant_id` for those paths cannot safely run after migration;
 - it backfills `Invoice.billingEmailSnapshot`, changes the InvoicePayment provider-application uniqueness rule, and adds indexes/foreign keys that require production-like lock and data-shape rehearsal;

@@ -1,6 +1,6 @@
-# QuickBooks Owner Testing Checklist — Paused
+# QuickBooks Owner Testing Checklist — Progressive Sandbox Gate
 
-Status: Acceptance checklist for a future, separately authorized sandbox run. It is not a production or current launch procedure. Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` until every prerequisite is approved.
+Status: the September 6 owner authorization covers bounded non-destructive, non-real-money staging/production testing, expanding the earlier OAuth-only authorization. The deployed staging checkpoint remains OAuth-only. Advancing accounting phases still requires the exact-candidate, monitoring, environment, and provider gates below. Destructive cleanup, void/refund/reversal, actual funds movement, customer go-live, and marketing are not authorized by that testing scope. See the [release evidence record](quickbooks-release-candidate-evidence.md#owner-controlled-release-gate).
 
 Use this with [QuickBooks Hosted Payments And Reconciliation](quickbooks-hosted-payments-reconciliation.md). Mocked tests, local builds, and schema presence are not Intuit sandbox evidence.
 
@@ -21,7 +21,7 @@ in an explicitly authorized sandbox run.
 - [ ] Exact candidate containment tests prove paused connect, callback, publish, refresh, reconcile, and signed webhook paths make zero Intuit calls.
 - [ ] Exact candidate confirms taxable invoices remain blocked and the legacy Quote-based provider write remains retired.
 
-Do not execute the sections below until the automated candidate gate, migration rehearsal, Sentinel review, Opera approval, and explicit sandbox authorization are recorded.
+Do not execute accounting-mutation steps below until the automated candidate gate, migration rehearsal, specialist review, Opera approval, monitoring receipt, and bounded sandbox scope are recorded. The non-destructive sandbox authorization is already recorded; it does not waive those readiness gates. The final OAuth-only subset may proceed after exact-SHA CI and the ordered staging deployment, with every accounting capability and worker disabled.
 
 ## Automated candidate gate
 
@@ -39,6 +39,7 @@ Do not execute the sections below until the automated candidate gate, migration 
 - [ ] Unpaid, partial, paid, partial/full refund, reversal, payment deletion, multi-invoice payment, void, duplicate, delayed, and out-of-order states are covered.
 - [ ] Hosted invoice-link hostname, authorization, no-store, no-referrer, no-log, no-analytics, and no-AI boundaries are covered.
 - [ ] Provider timeouts, throttling, `Retry-After`, schema validation, queue limits, and sanitized logs/metrics are covered.
+- [ ] Every Accounting transport selects exactly one `minorversion=75` while preserving request identity and other parameters; OAuth endpoints remain separate. Synthetic additive-field and malformed-envelope tests are labeled as local tests, not captured provider evidence.
 
 ## Production-like migration rehearsal
 
@@ -55,12 +56,13 @@ Do not execute the sections below until the automated candidate gate, migration 
 - [ ] Record sandbox authorization, candidate SHA, app/environment, exact callback URI, webhook endpoint, test company, approved scopes, and evidence owner.
 - [ ] Confirm the webhook verifier and independent current token-encryption key are configured server-side only.
 - [ ] Connect one sanitized approved internal tenant; prove state replay, expired state, role removal, realm mismatch, and cross-tenant access fail closed.
+- [ ] Record exact-candidate version-75 CompanyInfo, customer/item searches, invoice/InvoiceLink, Payment, RefundReceipt, and CDC response compatibility using the approved sandbox scope. Do not infer provider compatibility from mocked fixtures.
 - [ ] Review customer, item, company, billing email, payment-method choices, totals, due date, and every line before publishing.
 - [ ] Create one non-taxable invoice and prove an idempotent replay creates no duplicate.
 - [ ] Retrieve and safely present the QuickBooks-hosted invoice link without logging or caching it.
 - [ ] Complete partial payment and full payment; verify QuoteFly remains `OPEN` then becomes `PAID` only after canonical provider reconciliation.
-- [ ] Complete partial/full refund or reversal and confirm the balance reopens while append-only history remains.
-- [ ] Void the provider invoice and confirm the bounded QuoteFly projection.
+- [ ] Under separately reviewed destructive-test authorization, complete partial/full refund or reversal and confirm the balance reopens while append-only history remains.
+- [ ] Under separately reviewed destructive-test authorization, void the provider invoice and confirm the bounded QuoteFly projection.
 - [ ] Deliver duplicate and out-of-order Invoice/Payment webhooks and prove one durable ledger outcome.
 - [ ] Drop one webhook and prove overlapping CDC repairs it without duplicating payment applications or events.
 - [ ] Simulate provider timeout and process restart; reconcile the unknown result without another invoice mutation.

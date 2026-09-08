@@ -1405,6 +1405,7 @@ export function BrandingPage({ tenantId, effectivePlanCode = "starter" }: Brandi
           confirmLabel={t("branding.leaveConfirm")}
           cancelLabel={t("common.cancel")}
           confirmVariant="warning"
+          layer="navigationGuard"
         />
     </div>
   );

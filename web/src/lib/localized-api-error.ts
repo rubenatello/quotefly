@@ -66,6 +66,7 @@ const DEFAULT_CODE_KEYS: Readonly<Record<string, string>> = {
   MERGE_CONTACT_CONFLICT: "apiErrors.customerContactConflict",
   PHONE_CONFLICT: "apiErrors.customerPhoneConflict",
   PLAN_FEATURE_REQUIRED: "apiErrors.featurePlanRequired",
+  QUICKBOOKS_CONNECTION_SUPPORT_REQUIRED: "billing.connectedServices.quickBooksSupportRequired",
   PLAN_LIMIT_EXCEEDED: "apiErrors.planLimit",
   PRODUCT_CATALOG_LIMIT: "apiErrors.productCatalogLimit",
   PRODUCT_NAME_CONFLICT: "apiErrors.productNameConflict",

@@ -141,6 +141,12 @@ function CommandGroup({
           <CommandPrimitive.Item
             key={item.page ?? item.action}
             value={`${item.label} ${item.description}`}
+            onPointerDown={(event) => {
+              // cmdk uses active-descendant focus on the search input. Keep
+              // pointer selection from blurring that input before a guarded
+              // navigation captures the initiating control.
+              event.preventDefault();
+            }}
             onSelect={() => onSelect(item)}
             className={cn(
               "group flex cursor-pointer items-center justify-between rounded-2xl border border-transparent px-3 py-3 text-sm text-slate-700 outline-none transition",
@@ -218,7 +224,6 @@ export function CrmCommandPalette({
                 items={visibleCommandItems.filter((item) => item.group === "Actions")}
                 onSelect={(item) => {
                   if (item.action) onQuickAction(item.action);
-                  onOpenChange(false);
                 }}
               />
 
@@ -227,7 +232,6 @@ export function CrmCommandPalette({
                 items={visibleCommandItems.filter((item) => item.group === "Workflow")}
                 onSelect={(item) => {
                   if (item.page) onNavigate(item.page);
-                  onOpenChange(false);
                 }}
               />
 
@@ -236,7 +240,6 @@ export function CrmCommandPalette({
                 items={visibleCommandItems.filter((item) => item.group === "Workspace")}
                 onSelect={(item) => {
                   if (item.page) onNavigate(item.page);
-                  onOpenChange(false);
                 }}
               />
             </CommandPrimitive.List>

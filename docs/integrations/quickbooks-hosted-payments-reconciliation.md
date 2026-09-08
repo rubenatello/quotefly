@@ -36,7 +36,9 @@ The confirmation must be bound to the exact tenant, invoice version, connection,
 
 ### Hosted payment link
 
-The QuickBooks invoice request may enable online payments only when the reviewed customer has a valid billing email and the connected company is eligible. After creation, QuoteFly retrieves the authoritative invoice with `include=invoiceLink` and the centrally pinned `minorversion=36` contract, then stores the returned link as restricted provider data. Any future minor-version change requires a contract-test update and a fresh sandbox evidence run; the provider and hosted-payment feature flags remain default-off until that evidence is attached.
+The QuickBooks invoice request may enable online payments only when the reviewed customer has a valid billing email and the connected company is eligible. After creation, QuoteFly retrieves the authoritative invoice with `include=invoiceLink`, then stores the returned link as restricted provider data. All Accounting API requests explicitly select `minorversion=75` through one URL builder; OAuth token and revocation requests are outside that contract.
+
+Intuit's [Accounting API version notice](https://medium.com/intuitdev/changes-to-our-accounting-api-that-may-impact-your-application-c330bd1a06f5), rechecked September 8, 2026, states that versions below 75 are ignored and omitted versions default to 75. The previous `minorversion=36` setting did not pin a version-36 response. Version 75 still permits additive fields: accept unknown additions while validating required known fields and envelopes. Local transport and synthetic-response tests prove only the implemented request/validation behavior, not live Intuit compatibility. Collect exact-candidate sandbox CompanyInfo, search, invoice/InvoiceLink, Payment, RefundReceipt, and CDC evidence during the ordered, qualified staging phases; require it before production/pilot enablement. Future version changes require reviewed tests and fresh sandbox evidence. Provider and hosted-payment flags remain default-off except for the corresponding explicitly scoped, qualified staging phase; a source change or local test never enables them.
 
 The link must:
 
@@ -68,7 +70,7 @@ The public webhook route must:
 
 1. Enforce the body-size limit.
 2. Verify `intuit-signature` against the exact raw body.
-3. Validate the supported `eventNotifications` envelope.
+3. Validate the supported legacy `eventNotifications` envelope or CloudEvents v1.0 batch; use the current CloudEvents format for new Intuit sandbox qualification.
 4. Resolve known realms through a minimal non-secret routing record.
 5. Insert or deduplicate each supported entity notification transactionally.
 6. Return `2xx` only after durable persistence.
@@ -139,4 +141,4 @@ No sandbox result may be inferred from mocked tests. Record the exact committed 
 - token revocation and reconnect;
 - provider queue, dead-letter, reconciliation, and CDC metrics.
 
-Provider workflows must remain disabled until this evidence, Sentinel review, and an independent Opera approval are complete. Production enablement, migration application, webhook subscription, OAuth consent, and QuickBooks sandbox mutations require separate owner authorization.
+Production provider workflows must remain disabled until this evidence, Sentinel review, and independent Opera approval are complete. The September 6 owner authorization covers bounded non-destructive, non-real-money staging/production testing; it is not execution evidence or customer go-live approval. Follow the ordered staging profiles and controls in the release evidence record. Destructive cleanup, void/refund/reversal, actual funds movement, and the final customer pilot/go-live require separately reviewed scope and owner approval.

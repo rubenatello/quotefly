@@ -60,6 +60,7 @@ test("restricted fields are excluded from RAG while reviewed content fields are 
     "QuickBooksConnection.accessTokenEncrypted",
     "QuickBooksConnection.refreshTokenEncrypted",
     "QuickBooksInvoiceOperation.providerInvoiceLink",
+    "WorkerHeartbeatInstance.instanceRefHash",
   ]) {
     assert.equal(fields.get(fieldName)?.classification, "C4_RESTRICTED", fieldName);
     assert.equal(fields.get(fieldName)?.ragStatus, "EXCLUDED", fieldName);
@@ -99,6 +100,13 @@ test("restricted fields are excluded from RAG while reviewed content fields are 
   assert.equal(fields.get("QuoteDraftRecovery.payload")?.ragStatus, "EXCLUDED");
   assert.equal(fields.get("WorkPreset.catalogContentHash")?.classification, "C3_FINANCIAL_CONFIDENTIAL");
   assert.equal(fields.get("WorkPreset.catalogContentHash")?.ragStatus, "EXCLUDED");
+  for (const workerField of [
+    "WorkerHeartbeatInstance.observedAtUtc",
+    "WorkerHeartbeatInstance.releaseSha",
+  ]) {
+    assert.equal(fields.get(workerField)?.classification, "C1_BUSINESS_INTERNAL", workerField);
+    assert.equal(fields.get(workerField)?.ragStatus, "EXCLUDED", workerField);
+  }
   for (const scheduleField of [
     "Job.scheduledAtUtc",
     "Job.dispatchedAtUtc",

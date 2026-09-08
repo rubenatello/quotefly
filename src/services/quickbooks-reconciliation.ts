@@ -20,6 +20,7 @@ import {
   isQuickBooksReauthorizationError,
   runQuickBooksProviderRequestWithRefresh,
 } from "./quickbooks-credentials";
+import type { QuickBooksSignalWriter } from "./quickbooks-observability";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
 
 type RuntimeEnv = typeof env;
@@ -606,6 +607,7 @@ export async function reconcileQuickBooksInvoice(params: {
   trigger: QuickBooksReconciliationTrigger;
   providerOperation?: string | null;
   getAccessToken: (connection: ReconciliationContext["connection"]) => Promise<string>;
+  signalWriter?: QuickBooksSignalWriter;
 }): Promise<QuickBooksReconciliationResult> {
   const context = await loadContext(params.prisma, params.tenantId, params.invoiceId);
   const expectedGeneration = {
@@ -620,6 +622,7 @@ export async function reconcileQuickBooksInvoice(params: {
       runtimeEnv: params.runtimeEnv,
       connection: context.connection,
       getAccessToken: params.getAccessToken,
+      signalWriter: params.signalWriter,
       operation: (accessToken) => fetchQuickBooksInvoice(
         params.runtimeEnv,
         context.connection.realmId,
@@ -727,6 +730,7 @@ export async function reconcileQuickBooksInvoice(params: {
       runtimeEnv: params.runtimeEnv,
       connection: context.connection,
       getAccessToken: params.getAccessToken,
+      signalWriter: params.signalWriter,
       operation: (accessToken) => fetchPaymentEvidence(
         params.runtimeEnv,
         context.connection.realmId,

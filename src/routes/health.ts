@@ -55,6 +55,11 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
               FROM "Quote"
               LIMIT 0
             ),
+            quickbooks_connection_probe AS (
+              SELECT "id", "tokenRefreshFailureStartedAtUtc"
+              FROM "QuickBooksConnection"
+              LIMIT 0
+            ),
             ai_document_probe AS (
               SELECT "id", "contentHash"
               FROM "AiRetrievalDocument"
@@ -69,6 +74,11 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
               SELECT "workerKey", "heartbeatAtUtc", "status"
               FROM "WorkerHeartbeat"
               LIMIT 0
+            ),
+            worker_heartbeat_instance_probe AS (
+              SELECT "workerKey", "heartbeatAtUtc", "status"
+              FROM "WorkerHeartbeatInstance"
+              LIMIT 0
             )
           SELECT true AS "ready"
           FROM user_probe
@@ -76,9 +86,11 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
           FULL JOIN brand_asset_probe ON false
           FULL JOIN customer_assignment_probe ON false
           FULL JOIN quote_assignment_probe ON false
+          FULL JOIN quickbooks_connection_probe ON false
           FULL JOIN ai_document_probe ON false
           FULL JOIN ai_chunk_probe ON false
           FULL JOIN worker_heartbeat_probe ON false
+          FULL JOIN worker_heartbeat_instance_probe ON false
         `;
         await assertAiRetrievalRlsReady(app.prisma, {
           requireRuntimeRole: app.env.NODE_ENV === "production",

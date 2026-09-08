@@ -12,6 +12,7 @@ import { ZodError } from "zod";
 import { env } from "./config/env";
 import { getJwtClaims, LiveAuthMembershipSelect } from "./lib/auth";
 import { safeRequestLogSerializer } from "./lib/request-logging";
+import { trustRailwayProxy } from "./lib/railway-trust-proxy";
 import { prisma } from "./lib/prisma";
 import { buildTenantEntitlements } from "./lib/subscription";
 import { healthRoutes } from "./routes/health";
@@ -31,6 +32,7 @@ import { orgUserRoutes } from "./routes/org-users";
 import { quickBooksRoutes } from "./routes/quickbooks";
 import { internalAdminRoutes } from "./routes/internal-admin";
 import { internalControlPlaneRoutes } from "./routes/internal-control-plane";
+import { quickBooksOperationalMonitorRoutes } from "./routes/quickbooks-operational-monitor";
 import { aiAssistantRoutes } from "./routes/ai-assistant";
 import { aiBusinessInsightRoutes } from "./routes/ai-business-insights";
 import { feedbackRoutes } from "./routes/feedback";
@@ -38,6 +40,7 @@ import { workspaceRoutes } from "./routes/workspace";
 import { activityRoutes } from "./routes/activities";
 import { notificationRoutes } from "./routes/notifications";
 import { swaggerPlugin } from "./plugins/swagger";
+import { flushQuickBooksExternalSignals } from "./services/quickbooks-observability";
 import {
   applyRequestPerformanceHeaders,
   clearRequestPerformance,
@@ -98,6 +101,10 @@ const PUBLIC_PROVIDER_MUTATION_PATHS = new Set([
   "/v1/integrations/quickbooks/webhook",
   "/v1/integrations/quickbooks/webhook/",
 ]);
+const BILLING_INDEPENDENT_LIFECYCLE_MUTATION_PATHS = new Set([
+  "/v1/integrations/quickbooks/disconnect",
+  "/v1/integrations/quickbooks/disconnect/",
+]);
 
 function requestPathname(url: string): string {
   return url.split("?")[0] ?? url;
@@ -108,6 +115,14 @@ function requiresWorkspaceAccess(method: string, url: string): boolean {
   const normalizedMethod = method.toUpperCase();
 
   if (PUBLIC_PROVIDER_MUTATION_PATHS.has(pathname)) {
+    return false;
+  }
+
+  // Billing loss must stop new provider/accounting work, but it must never
+  // trap an owner in an integration whose credential can no longer be revoked.
+  // The route still enforces session, live-manager, origin, tenant-RLS, and
+  // durable revocation controls.
+  if (BILLING_INDEPENDENT_LIFECYCLE_MUTATION_PATHS.has(pathname)) {
     return false;
   }
 
@@ -156,10 +171,29 @@ declare module "fastify" {
   }
 }
 
+export function assertQuickBooksOperationalMonitorApiConfiguration(
+  runtimeEnv: Pick<
+    typeof env,
+    | "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED"
+    | "QUICKBOOKS_CDC_WORKER_ENABLED"
+    | "QUICKBOOKS_MONITOR_BEARER"
+  >,
+): void {
+  if (
+    (runtimeEnv.QUICKBOOKS_RECONCILIATION_WORKER_ENABLED || runtimeEnv.QUICKBOOKS_CDC_WORKER_ENABLED)
+    && runtimeEnv.QUICKBOOKS_MONITOR_BEARER.trim().length < 32
+  ) {
+    throw new Error(
+      "QUICKBOOKS_MONITOR_BEARER is required on the API before QuickBooks reconciliation or CDC workers can be enabled.",
+    );
+  }
+}
+
 export function buildServer() {
+  assertQuickBooksOperationalMonitorApiConfiguration(env);
   const app = Fastify({
     bodyLimit: 6 * 1024 * 1024,
-    trustProxy: env.NODE_ENV === "production",
+    trustProxy: env.NODE_ENV === "production" ? trustRailwayProxy : false,
     logger: {
       serializers: {
         req: safeRequestLogSerializer,
@@ -400,12 +434,14 @@ export function buildServer() {
   app.register(aiBusinessInsightRoutes, { prefix: "/v1" });
   app.register(internalAdminRoutes, { prefix: "/v1" });
   app.register(internalControlPlaneRoutes, { prefix: "/v1" });
+  app.register(quickBooksOperationalMonitorRoutes, { prefix: "/v1" });
   if (env.ENABLE_TWILIO_SMS) {
     app.register(smsRoutes, { prefix: "/v1" });
   }
   app.register(brandingRoutes, { prefix: "/v1" });
 
   app.addHook("onClose", async () => {
+    await flushQuickBooksExternalSignals();
     await app.prisma.$disconnect();
   });
 

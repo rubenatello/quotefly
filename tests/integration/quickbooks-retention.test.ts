@@ -302,6 +302,49 @@ describe("QuickBooks security-record retention", () => {
     await expect(prisma.quickBooksOAuthState.findUnique({ where: { id: secondState.id } })).resolves.not.toBeNull();
   });
 
+  test("cascades only tenant-bound webhook data while preserving unknown-realm quarantine", async () => {
+    const first = await createTenant("QuickBooks Webhook Cascade First");
+    const second = await createTenant("QuickBooks Webhook Cascade Second");
+    const firstEvent = await createWebhookEvent({
+      tenantId: first.id,
+      label: "cascade-first",
+      status: "PROCESSED",
+      processedAtUtc: NOW,
+    });
+    const secondEvent = await createWebhookEvent({
+      tenantId: second.id,
+      label: "cascade-second",
+      status: "PROCESSED",
+      processedAtUtc: NOW,
+    });
+    const unboundEvent = await createWebhookEvent({
+      label: "cascade-unbound",
+      status: "RECEIVED",
+      lastError: "QUICKBOOKS_REALM_UNBOUND",
+    });
+    const firstConnectionId = connectionIdsByTenant.get(first.id)!;
+    const secondConnectionId = connectionIdsByTenant.get(second.id)!;
+
+    await prisma.tenant.delete({ where: { id: first.id } });
+
+    await expect(prisma.quickBooksConnection.findUnique({ where: { id: firstConnectionId } }))
+      .resolves.toBeNull();
+    await expect(prisma.quickBooksWebhookEvent.findUnique({ where: { id: firstEvent.id } }))
+      .resolves.toBeNull();
+    await expect(prisma.quickBooksWebhookEvent.findUnique({ where: { id: secondEvent.id } }))
+      .resolves.not.toBeNull();
+    await expect(prisma.quickBooksWebhookEvent.findUnique({ where: { id: unboundEvent.id } }))
+      .resolves.not.toBeNull();
+
+    await prisma.quickBooksConnection.delete({ where: { id: secondConnectionId } });
+
+    await expect(prisma.tenant.findUnique({ where: { id: second.id } })).resolves.not.toBeNull();
+    await expect(prisma.quickBooksWebhookEvent.findUnique({ where: { id: secondEvent.id } }))
+      .resolves.toBeNull();
+    await expect(prisma.quickBooksWebhookEvent.findUnique({ where: { id: unboundEvent.id } }))
+      .resolves.not.toBeNull();
+  });
+
   test("runtime-role cleanup can delete only its current tenant terminal records", async () => {
     const first = await createTenant("QuickBooks Runtime First");
     const second = await createTenant("QuickBooks Runtime Second");
@@ -410,7 +453,7 @@ describe("QuickBooks security-record retention", () => {
     await expect(prisma.quickBooksWebhookEvent.findUnique({ where: { id: adopted.id } })).resolves.not.toBeNull();
   });
 
-  test("unknown-realm ingress deletes only old quarantine for its exact realm", async () => {
+  test("runtime-role unknown-realm ingress batches, deduplicates, and deletes old quarantine only for its exact realm", async () => {
     // Ingress cleanup intentionally uses the wall clock. Keep these fixtures
     // relative to the same clock instead of the fixed policy-test timestamp so
     // this assertion cannot age into the seven-day retention window in CI.
@@ -453,14 +496,24 @@ describe("QuickBooks security-record retention", () => {
     const runtimePrisma = new PrismaClient({ datasources: { db: { url: runtimeDatabaseUrl(password) } } });
     try {
       await runtimePrisma.$connect();
-      const result = await persistQuickBooksWebhookNotifications(runtimePrisma, [{
+      const notifications = Array.from({ length: 500 }, (_, index) => ({
+        providerEventId: `runtime-batch-${Date.now()}-${index}`,
+        providerEventSource: "quickbooks://sandbox",
         realmId,
         name: "Invoice",
-        id: "fresh-invoice",
+        id: `fresh-invoice-${index}`,
         operation: "Update",
         lastUpdated: NOW.toISOString(),
-      }]);
-      expect(result).toEqual({ persisted: 1, duplicate: 0, unknownRealm: 1 });
+      }));
+      const startedAt = performance.now();
+      const result = await persistQuickBooksWebhookNotifications(runtimePrisma, notifications);
+      expect(performance.now() - startedAt).toBeLessThan(3_000);
+      expect(result).toEqual({ persisted: 500, duplicate: 0, unknownRealm: 500 });
+
+      const replayStartedAt = performance.now();
+      const replay = await persistQuickBooksWebhookNotifications(runtimePrisma, notifications);
+      expect(performance.now() - replayStartedAt).toBeLessThan(3_000);
+      expect(replay).toEqual({ persisted: 0, duplicate: 500, unknownRealm: 500 });
     } finally {
       await runtimePrisma.$disconnect();
       await prisma.$executeRaw`ALTER ROLE quotefly_runtime NOLOGIN`;
@@ -469,5 +522,8 @@ describe("QuickBooks security-record retention", () => {
     await expect(prisma.quickBooksWebhookEvent.findUnique({ where: { id: currentSameRealm.id } })).resolves.not.toBeNull();
     await expect(prisma.quickBooksWebhookEvent.findUnique({ where: { id: oldOtherRealm.id } })).resolves.not.toBeNull();
     await expect(prisma.quickBooksWebhookEvent.findUnique({ where: { id: oldNonQuarantine.id } })).resolves.not.toBeNull();
+    await expect(prisma.quickBooksWebhookEvent.count({
+      where: { realmId, lastError: "QUICKBOOKS_REALM_UNBOUND" },
+    })).resolves.toBe(501);
   });
 });

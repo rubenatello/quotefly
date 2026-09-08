@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { buildServer } from "../../src/app";
 import { env } from "../../src/config/env";
+import { getDataClassificationCatalog } from "../../src/lib/data-governance-catalog";
 import { prisma } from "../../src/lib/prisma";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
 
@@ -116,7 +117,7 @@ describe("superuser data-governance control plane", () => {
       where: { id: other.tenant.id },
       data: { stripeCustomerId: privateProviderId },
     });
-    await prisma.customer.create({
+    const privateCustomer = await prisma.customer.create({
       data: {
         tenantId: other.tenant.id,
         fullName: "Private Customer Sentinel",
@@ -149,7 +150,73 @@ describe("superuser data-governance control plane", () => {
         cdcCursor: { create: { changedSinceUtc: new Date() } },
       },
     });
+    const privateQuote = await prisma.quote.create({
+      data: {
+        tenantId: other.tenant.id,
+        customerId: privateCustomer.id,
+        serviceType: "ROOFING",
+        status: "ACCEPTED",
+        title: "Private QuickBooks invoice source",
+        scopeText: "Private scope that must not render in the control plane.",
+        internalCostSubtotal: 50,
+        customerPriceSubtotal: 100,
+        taxAmount: 0,
+        totalAmount: 100,
+      },
+    });
+    const privateJob = await prisma.job.create({
+      data: {
+        tenantId: other.tenant.id,
+        customerId: privateCustomer.id,
+        sourceQuoteId: privateQuote.id,
+        jobNumber: 1,
+        title: privateQuote.title,
+        scopeSnapshot: privateQuote.scopeText,
+        serviceType: privateQuote.serviceType,
+        acceptedAtUtc: new Date(),
+      },
+    });
+    const privateInvoice = await prisma.invoice.create({
+      data: {
+        tenantId: other.tenant.id,
+        customerId: privateCustomer.id,
+        jobId: privateJob.id,
+        sourceQuoteId: privateQuote.id,
+        invoiceNumber: 1,
+        titleSnapshot: privateQuote.title,
+        subtotalAmount: 100,
+        taxAmount: 0,
+        totalAmount: 100,
+        balanceDue: 100,
+      },
+    });
+    const privateOperationProviderId = "quickbooks-operation-provider-id-must-not-render";
+    const privateOperationRequestId = "quickbooks-operation-request-id-must-not-render";
+    await prisma.quickBooksInvoiceOperation.create({
+      data: {
+        tenantId: other.tenant.id,
+        invoiceId: privateInvoice.id,
+        quickBooksConnectionId: quickBooksConnection.id,
+        requestedByTenantUserId: otherMembership.id,
+        status: "SUCCEEDED",
+        commandKeyHash: "c".repeat(64),
+        payloadHash: "d".repeat(64),
+        providerRealmId: quickBooksRealm,
+        providerRequestId: privateOperationRequestId,
+        providerInvoiceId: privateOperationProviderId,
+        providerDocNumber: "QF-000001",
+        processingStartedAtUtc: new Date(),
+        lastAttemptAtUtc: new Date(),
+        succeededAtUtc: new Date(),
+      },
+    });
     const operationalNow = new Date();
+    await prisma.quickBooksConnection.update({
+      where: { id: quickBooksConnection.id },
+      data: {
+        tokenRefreshFailureStartedAtUtc: new Date(operationalNow.getTime() - 120_000),
+      },
+    });
     await prisma.quickBooksCdcCursor.update({
       where: { quickBooksConnectionId: quickBooksConnection.id },
       data: {
@@ -223,6 +290,21 @@ describe("superuser data-governance control plane", () => {
         lastError: "QUICKBOOKS_TOKEN_REVOCATION_PENDING",
       },
     });
+    const reauthFailureRealm = "realm-refresh-failure-must-not-render";
+    const reauthFailureTenant = await signUp(
+      "quickbooks-refresh-failure@example.com",
+      "Refresh Failure",
+    );
+    await prisma.quickBooksConnection.create({
+      data: {
+        tenantId: reauthFailureTenant.tenant.id,
+        realmId: reauthFailureRealm,
+        environment: "sandbox",
+        status: "NEEDS_REAUTH",
+        tokenRefreshFailureStartedAtUtc: new Date(operationalNow.getTime() - 180_000),
+        lastError: "QUICKBOOKS_REAUTH_REQUIRED",
+      },
+    });
     const deadRevocationTenant = await signUp(
       "quickbooks-dead-revocation@example.com",
       "Dead Revocation",
@@ -256,6 +338,7 @@ describe("superuser data-governance control plane", () => {
         status: "CONNECTED",
         setupPhase: "CONFIRMED",
         environment: "sandbox",
+        counts: { invoiceSyncs: 1 },
       },
     });
     expect(tenantBody.fieldsExcluded).toContain("customer records");
@@ -268,6 +351,39 @@ describe("superuser data-governance control plane", () => {
     expect(tenantsResponse.body).not.toContain("encrypted-access-superuser-sentinel");
     expect(tenantsResponse.body).not.toContain("encrypted-refresh-superuser-sentinel");
     expect(tenantsResponse.body).not.toContain("com.intuit.quickbooks.accounting");
+    expect(tenantsResponse.body).not.toContain(privateOperationProviderId);
+    expect(tenantsResponse.body).not.toContain(privateOperationRequestId);
+
+    const originalOauthOnlyMode = app.env.QUICKBOOKS_OAUTH_ONLY_MODE;
+    app.env.QUICKBOOKS_OAUTH_ONLY_MODE = true;
+    try {
+      const confirmedInOauthOnlyMode = await app.inject({
+        method: "GET",
+        url: "/v1/internal/control-plane/tenants?lifecycle=all&quickBooks=confirmed&limit=25&search=Private",
+        headers: { cookie: superuser.cookie },
+      });
+      expect(confirmedInOauthOnlyMode.statusCode).toBe(200);
+      expect((confirmedInOauthOnlyMode.json() as { tenants: unknown[] }).tenants).toHaveLength(0);
+
+      const attentionInOauthOnlyMode = await app.inject({
+        method: "GET",
+        url: "/v1/internal/control-plane/tenants?lifecycle=all&quickBooks=attention&limit=25&search=Private",
+        headers: { cookie: superuser.cookie },
+      });
+      expect(attentionInOauthOnlyMode.statusCode).toBe(200);
+      expect((attentionInOauthOnlyMode.json() as {
+        tenants: Array<{ quickBooks: { setupPhase: string; setupConfirmedAtUtc: string | null } }>;
+      }).tenants).toEqual([
+        expect.objectContaining({
+          quickBooks: expect.objectContaining({
+            setupPhase: "CONNECTION_VERIFIED",
+            setupConfirmedAtUtc: null,
+          }),
+        }),
+      ]);
+    } finally {
+      app.env.QUICKBOOKS_OAUTH_ONLY_MODE = originalOauthOnlyMode;
+    }
 
     const summaryResponse = await app.inject({
       method: "GET",
@@ -290,6 +406,8 @@ describe("superuser data-governance control plane", () => {
           connectionRevocationDeadCount: 1,
           orphanRevocationPendingCount: 1,
           orphanRevocationDeadCount: 1,
+          tokenRefreshFailureConnectionCount: 2,
+          tokenRefreshReauthRequiredCount: 1,
         },
       },
     });
@@ -300,10 +418,12 @@ describe("superuser data-governance control plane", () => {
     expect(operations.maximumCdcLagMs).toBeGreaterThanOrEqual(90_000);
     expect(operations.oldestConnectionRevocationPendingAgeMs).toBeGreaterThanOrEqual(75_000);
     expect(operations.oldestOrphanRevocationPendingAgeMs).toBeGreaterThanOrEqual(45_000);
+    expect(operations.oldestTokenRefreshFailureAgeMs).toBeGreaterThanOrEqual(180_000);
     expect(summaryResponse.body).not.toContain("encrypted-orphan-pending");
     expect(summaryResponse.body).not.toContain("encrypted-orphan-dead");
     expect(summaryResponse.body).not.toContain("encrypted-connection-pending");
     expect(summaryResponse.body).not.toContain("encrypted-connection-dead");
+    expect(summaryResponse.body).not.toContain(reauthFailureRealm);
 
     const catalogResponse = await app.inject({
       method: "GET",
@@ -547,6 +667,9 @@ describe("superuser data-governance control plane", () => {
   });
 
   test("persists deterministic validation evidence and the operator audit atomically", async () => {
+    const catalog = getDataClassificationCatalog();
+    const expectedModelCount = catalog.models.length;
+    const expectedFieldCount = catalog.models.reduce((count, model) => count + model.fields.length, 0);
     const superuser = await signUp("superuser-integration@example.com", "Superuser");
     const response = await app.inject({
       method: "POST",
@@ -567,8 +690,8 @@ describe("superuser data-governance control plane", () => {
     };
     expect(body.run).toMatchObject({
       status: "PASSED",
-      modelCount: 57,
-      fieldCount: 880,
+      modelCount: expectedModelCount,
+      fieldCount: expectedFieldCount,
       issueCount: 0,
     });
     expect(body.run.schemaHash).toBe(body.run.baselineHash);

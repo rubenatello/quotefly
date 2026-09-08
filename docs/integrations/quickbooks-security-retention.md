@@ -14,6 +14,8 @@ QuickBooks credentials, OAuth replay state, and webhook envelopes are restricted
 
 `RECEIVED`, `PROCESSING`, and retryable `FAILED` events are not automatically removed. They need an explicit operational outcome first. Retention is deletion of terminal records, not a substitute for provider/accounting retention requirements.
 
+Hard deletion of a tenant or QuickBooks connection cascades its tenant-bound webhook envelopes so provider data cannot become indefinite tenantless quarantine. Genuine unknown-realm quarantine rows are already unbound and are unaffected by those cascades.
+
 ## Execution boundary
 
 `runQuickBooksRetentionForTenant` operates only inside a forced-RLS tenant transaction, takes a per-tenant advisory lock, and deletes at most 100 rows per tenant invocation. The QuickBooks reconciliation worker scans at most one 50-tenant keyset page on its hourly retention cadence; each cadence has its own cursor so webhook, revocation, CDC, and retention work cannot starve one another.

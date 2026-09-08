@@ -16,6 +16,7 @@ import { DashboardProvider, type DashboardSession } from "./dashboard/DashboardC
 import type { AppSession } from "../lib/app-session";
 import { resolveAiUsagePresentation } from "../lib/ai-credits";
 import { notificationJobPath } from "../lib/notification-display";
+import { useWorkspaceNavigationGuardCoordinator } from "../hooks/workspace-navigation-guard-context";
 
 const KodyAssistant = lazy(() => import("./ai/KodyAssistant").then((module) => ({ default: module.KodyAssistant })));
 const AiUsageMilestoneNotifier = lazy(() => import("./ai/AiUsageMilestoneNotifier").then((module) => ({ default: module.AiUsageMilestoneNotifier })));
@@ -56,18 +57,21 @@ function toDashboardSession(s: AppSession): DashboardSession {
   };
 }
 
+type CrmAppLayoutProps = {
+  session: AppSession;
+  onLogout: () => void;
+  onRefreshSession: () => Promise<void>;
+};
+
 export function CrmAppLayout({
   session,
   onLogout,
   onRefreshSession,
-}: {
-  session: AppSession;
-  onLogout: () => void;
-  onRefreshSession: () => Promise<void>;
-}) {
+}: CrmAppLayoutProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
+  const { requestNavigation } = useWorkspaceNavigationGuardCoordinator();
   const canManageCatalog = ["owner", "admin"].includes(session.role.trim().toLowerCase());
   const workspaceLocked =
     session.entitlements?.billingRequired === true &&
@@ -178,8 +182,8 @@ export function CrmAppLayout({
       </Suspense>
       <DashboardProvider
         session={toDashboardSession(session)}
-        onNavigateToQuote={(quoteId) => navigate(`/app/quotes/${quoteId}`)}
-        onNavigateToBuilder={() => navigate("/app/build")}
+        onNavigateToQuote={(quoteId) => requestNavigation(() => navigate(`/app/quotes/${quoteId}`))}
+        onNavigateToBuilder={() => requestNavigation(() => navigate("/app/build"))}
       >
         <main id="main-content" className="qf-workspace-main min-h-screen bg-qf-canvas px-3 pb-[var(--qf-mobile-content-clearance)] pt-3 sm:px-6 sm:pt-6 lg:px-8 lg:pb-8 lg:pt-8 xl:px-10 2xl:px-12">
           <div className="mx-auto w-full max-w-[1560px]">
@@ -245,6 +249,7 @@ export function CrmAppLayout({
             aiUsageAccountingUnavailable={aiUsage.accountingUnavailable}
             aiUsageRenewsAtUtc={aiUsage.renewsAtUtc}
             displayTimeZone={session.timezone}
+            requestWorkspaceNavigation={requestNavigation}
           />
         </Suspense>
       </DashboardProvider>

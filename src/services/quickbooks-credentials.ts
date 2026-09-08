@@ -9,7 +9,10 @@ import {
   refreshQuickBooksAccessToken,
   revokeQuickBooksToken,
 } from "./quickbooks";
-import { retryQuickBooksOrphanCredentialRevocation } from "./quickbooks-orphan-revocations";
+import {
+  retryQuickBooksOrphanCredentialRevocation,
+  revokeOrEnqueueQuickBooksOrphanCredential,
+} from "./quickbooks-orphan-revocations";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
 import {
   currentQuickBooksConnectionGeneration,
@@ -17,6 +20,10 @@ import {
   recordQuickBooksConnectionEvent,
   type QuickBooksConnectionEventContext,
 } from "./quickbooks-connection-events";
+import {
+  emitQuickBooksTokenRefreshSignal,
+  type QuickBooksSignalWriter,
+} from "./quickbooks-observability";
 
 type RuntimeEnv = typeof env;
 
@@ -26,7 +33,7 @@ export type QuickBooksTokenConnection = Readonly<{
   realmId: string;
 }>;
 
-export type QuickBooksDisconnectResult = "disconnected" | "pending";
+export type QuickBooksDisconnectResult = "disconnected" | "pending" | "support_required";
 
 const QUICKBOOKS_CREDENTIAL_CLAIM_MINIMUM_MS = 120_000;
 export const QUICKBOOKS_CONNECTION_REVOCATION_MAX_ATTEMPTS = 8;
@@ -139,6 +146,7 @@ async function refreshQuickBooksAccessTokenAfterResourceUnauthorized(params: {
   runtimeEnv: RuntimeEnv;
   connection: QuickBooksTokenConnection;
   rejectedAccessToken: string;
+  signalWriter?: QuickBooksSignalWriter;
 }): Promise<string> {
   const liveConnection = await withTenantRlsContext(params.prisma, params.connection.tenantId, (transaction) =>
     transaction.quickBooksConnection.findFirst({
@@ -200,6 +208,7 @@ export async function runQuickBooksProviderRequestWithRefresh<T>(params: {
   connection: QuickBooksTokenConnection;
   operation: (accessToken: string) => Promise<T>;
   getAccessToken?: (connection: QuickBooksTokenConnection) => Promise<string>;
+  signalWriter?: QuickBooksSignalWriter;
 }): Promise<T> {
   const accessToken = await (params.getAccessToken
     ? params.getAccessToken(params.connection)
@@ -215,6 +224,7 @@ export async function runQuickBooksProviderRequestWithRefresh<T>(params: {
     runtimeEnv: params.runtimeEnv,
     connection: params.connection,
     rejectedAccessToken: accessToken,
+    signalWriter: params.signalWriter,
   });
   try {
     return await params.operation(refreshedAccessToken);
@@ -228,6 +238,7 @@ export async function getSerializedQuickBooksAccessToken(params: {
   prisma: PrismaClient;
   runtimeEnv: RuntimeEnv;
   connection: QuickBooksTokenConnection;
+  signalWriter?: QuickBooksSignalWriter;
 }): Promise<string> {
   const { prisma, runtimeEnv, connection } = params;
   const liveConnection = await withTenantRlsContext(prisma, connection.tenantId, (transaction) =>
@@ -297,14 +308,18 @@ export async function getSerializedQuickBooksAccessToken(params: {
     throw new QuickBooksProviderError("QUICKBOOKS_TOKEN_REFRESH_BUSY", false, 503);
   }
 
+  let issuedRotatedRefreshToken: string | null = null;
+  let rotatedAccessTokenEncrypted: string | null = null;
+  let rotatedRefreshTokenEncrypted: string | null = null;
   try {
     const refreshed = await refreshQuickBooksAccessToken(
       runtimeEnv,
       decryptQuickBooksSecret(runtimeEnv, liveConnection.refreshTokenEncrypted),
     );
+    issuedRotatedRefreshToken = refreshed.refresh_token;
     const refreshedAtUtc = new Date();
-    const rotatedAccessTokenEncrypted = encryptQuickBooksSecret(runtimeEnv, refreshed.access_token);
-    const rotatedRefreshTokenEncrypted = encryptQuickBooksSecret(runtimeEnv, refreshed.refresh_token);
+    rotatedAccessTokenEncrypted = encryptQuickBooksSecret(runtimeEnv, refreshed.access_token);
+    rotatedRefreshTokenEncrypted = encryptQuickBooksSecret(runtimeEnv, refreshed.refresh_token);
     const rotatedAccessTokenExpiresAtUtc = new Date(refreshedAtUtc.getTime() + refreshed.expires_in * 1_000);
 
     const finalization = await withTenantRlsContext(prisma, connection.tenantId, async (transaction) => {
@@ -329,6 +344,7 @@ export async function getSerializedQuickBooksAccessToken(params: {
           refreshTokenRotatedAtUtc: refreshedAtUtc,
           tokenRefreshClaimHash: null,
           tokenRefreshClaimExpiresAtUtc: null,
+          tokenRefreshFailureStartedAtUtc: null,
           lastError: null,
         },
       });
@@ -358,24 +374,48 @@ export async function getSerializedQuickBooksAccessToken(params: {
           revocationNextAttemptAtUtc: refreshedAtUtc,
           tokenRefreshClaimHash: null,
           tokenRefreshClaimExpiresAtUtc: null,
+          tokenRefreshFailureStartedAtUtc: null,
           lastError: "QUICKBOOKS_TOKEN_REVOCATION_PENDING",
         },
       });
       return savedForRevocation.count === 1 ? "revocation_pending" as const : "stale" as const;
     });
 
-    if (finalization === "connected") return refreshed.access_token;
+    if (finalization === "connected") {
+      issuedRotatedRefreshToken = null;
+      return refreshed.access_token;
+    }
     if (finalization === "revocation_pending") {
+      // The rotated credential is already durably retained on the connection
+      // for the revocation worker. Do not also enqueue it as an orphan.
+      issuedRotatedRefreshToken = null;
       throw new QuickBooksProviderError("QUICKBOOKS_CONNECTION_NOT_CONNECTED", false);
     }
 
-    // This is unreachable while the provider respects its timeout and the
-    // claim lease remains fenced. Best-effort revocation prevents a rotated
-    // token from remaining active if an operator changed the row manually.
-    await revokeQuickBooksToken(runtimeEnv, refreshed.refresh_token).catch(() => undefined);
     throw new QuickBooksProviderError("QUICKBOOKS_TOKEN_REFRESH_STALE", false);
   } catch (error) {
-    await withTenantRlsContext(prisma, connection.tenantId, async (transaction) => {
+    let issuedCredentialCleanupDurable = false;
+    let issuedCredentialCleanupError: unknown = null;
+    if (issuedRotatedRefreshToken) {
+      try {
+        await revokeOrEnqueueQuickBooksOrphanCredential({
+          prisma,
+          runtimeEnv,
+          tenantId: connection.tenantId,
+          refreshToken: issuedRotatedRefreshToken,
+        });
+        issuedCredentialCleanupDurable = true;
+      } catch (cleanupError) {
+        // If both immediate revocation and durable outbox persistence fail,
+        // preserve the stored credential snapshot and surface that stronger
+        // lifecycle failure after releasing the stale claim best-effort.
+        issuedCredentialCleanupError = cleanupError;
+      }
+    }
+
+    let failurePersistenceOutcome: "reauth_required" | "transient_failure" | "lifecycle_changed" | "stale";
+    try {
+      failurePersistenceOutcome = await withTenantRlsContext(prisma, connection.tenantId, async (transaction) => {
       const retainedForRevocation = await transaction.quickBooksConnection.updateMany({
         where: {
           id: liveConnection.id,
@@ -395,8 +435,97 @@ export async function getSerializedQuickBooksAccessToken(params: {
           lastError: "QUICKBOOKS_TOKEN_REVOCATION_PENDING",
         },
       });
+      if (retainedForRevocation.count === 1) return "lifecycle_changed" as const;
       if (retainedForRevocation.count === 0) {
-        if (isQuickBooksReauthorizationError(error)) {
+        if (issuedCredentialCleanupDurable) {
+          // Revoking (or durably scheduling revocation of) the rotated token
+          // invalidates the grant. Fail closed if the row still contains
+          // either the pre-refresh snapshot or a commit whose outcome was
+          // unknown to this process. Ciphertext fencing protects a newer
+          // reconnect from being overwritten.
+          const credentialSnapshots: Prisma.QuickBooksConnectionWhereInput[] = [{
+            accessTokenEncrypted: liveConnection.accessTokenEncrypted,
+            refreshTokenEncrypted: liveConnection.refreshTokenEncrypted,
+            tokenRefreshClaimHash: claimTokenHash,
+          }, {
+            accessTokenEncrypted: liveConnection.accessTokenEncrypted,
+            refreshTokenEncrypted: liveConnection.refreshTokenEncrypted,
+            tokenRefreshClaimHash: null,
+          }];
+          if (rotatedAccessTokenEncrypted && rotatedRefreshTokenEncrypted) {
+            credentialSnapshots.push({
+              accessTokenEncrypted: rotatedAccessTokenEncrypted,
+              refreshTokenEncrypted: rotatedRefreshTokenEncrypted,
+              tokenRefreshClaimHash: null,
+            });
+          }
+          const refreshFailureStartedAtUtc = new Date();
+          await transaction.quickBooksConnection.updateMany({
+            where: {
+              id: liveConnection.id,
+              tenantId: connection.tenantId,
+              status: "CONNECTED",
+              disconnectRequestedAtUtc: null,
+              tokenRefreshFailureStartedAtUtc: null,
+              OR: credentialSnapshots,
+            },
+            data: { tokenRefreshFailureStartedAtUtc: refreshFailureStartedAtUtc },
+          });
+          const transitioned = await transaction.quickBooksConnection.updateMany({
+            where: {
+              id: liveConnection.id,
+              tenantId: connection.tenantId,
+              status: "CONNECTED",
+              disconnectRequestedAtUtc: null,
+              OR: credentialSnapshots,
+            },
+            data: {
+              status: "NEEDS_REAUTH",
+              accessTokenEncrypted: null,
+              refreshTokenEncrypted: null,
+              accessTokenExpiresAtUtc: null,
+              setupConfirmedAtUtc: null,
+              setupConfirmedByTenantUserId: null,
+              setupChecklistVersion: null,
+              tokenRefreshClaimHash: null,
+              tokenRefreshClaimExpiresAtUtc: null,
+              lastError: "QUICKBOOKS_REAUTH_REQUIRED",
+            },
+          });
+          if (transitioned.count === 1) {
+            const reauthAtUtc = new Date();
+            await invalidateQuickBooksHostedPaymentLinks(
+              transaction,
+              connection.tenantId,
+              liveConnection.id,
+              reauthAtUtc,
+            );
+            await recordQuickBooksConnectionEvent(transaction, {
+              tenantId: connection.tenantId,
+              quickBooksConnectionId: liveConnection.id,
+              actorTenantUserId: null,
+              requestId: `system:quickbooks-refresh-cleanup:${liveConnection.id}`,
+              action: "REAUTH_REQUIRED",
+              outcome: "SUCCEEDED",
+              connectionGeneration: await currentQuickBooksConnectionGeneration(transaction, connection.tenantId),
+            });
+            return "reauth_required" as const;
+          }
+        } else if (isQuickBooksReauthorizationError(error)) {
+          const refreshFailureStartedAtUtc = new Date();
+          await transaction.quickBooksConnection.updateMany({
+            where: {
+              id: liveConnection.id,
+              tenantId: connection.tenantId,
+              status: "CONNECTED",
+              disconnectRequestedAtUtc: null,
+              accessTokenEncrypted: liveConnection.accessTokenEncrypted,
+              refreshTokenEncrypted: liveConnection.refreshTokenEncrypted,
+              tokenRefreshClaimHash: claimTokenHash,
+              tokenRefreshFailureStartedAtUtc: null,
+            },
+            data: { tokenRefreshFailureStartedAtUtc: refreshFailureStartedAtUtc },
+          });
           const transitioned = await transaction.quickBooksConnection.updateMany({
             where: {
               id: liveConnection.id,
@@ -437,12 +566,29 @@ export async function getSerializedQuickBooksAccessToken(params: {
               outcome: "SUCCEEDED",
               connectionGeneration: await currentQuickBooksConnectionGeneration(transaction, connection.tenantId),
             });
+            return "reauth_required" as const;
           }
         } else {
+          const refreshFailureStartedAtUtc = new Date();
           await transaction.quickBooksConnection.updateMany({
             where: {
               id: liveConnection.id,
               tenantId: connection.tenantId,
+              status: "CONNECTED",
+              disconnectRequestedAtUtc: null,
+              accessTokenEncrypted: liveConnection.accessTokenEncrypted,
+              refreshTokenEncrypted: liveConnection.refreshTokenEncrypted,
+              tokenRefreshClaimHash: claimTokenHash,
+              tokenRefreshFailureStartedAtUtc: null,
+            },
+            data: { tokenRefreshFailureStartedAtUtc: refreshFailureStartedAtUtc },
+          });
+          const retainedFailure = await transaction.quickBooksConnection.updateMany({
+            where: {
+              id: liveConnection.id,
+              tenantId: connection.tenantId,
+              status: "CONNECTED",
+              disconnectRequestedAtUtc: null,
               accessTokenEncrypted: liveConnection.accessTokenEncrypted,
               refreshTokenEncrypted: liveConnection.refreshTokenEncrypted,
               tokenRefreshClaimHash: claimTokenHash,
@@ -453,10 +599,34 @@ export async function getSerializedQuickBooksAccessToken(params: {
               lastError: "QUICKBOOKS_TOKEN_REFRESH_FAILED",
             },
           });
+          if (retainedFailure.count === 1) return "transient_failure" as const;
         }
       }
-    }).catch(() => undefined);
-    throw error;
+      return "stale" as const;
+      });
+    } catch {
+      emitQuickBooksTokenRefreshSignal(params.signalWriter, {
+        eventCode: "QUICKBOOKS_TOKEN_REFRESH_PERSISTENCE_FAILED",
+        refreshStage: "FAILURE_PERSISTENCE",
+        outcome: "FAILED",
+      });
+      throw issuedCredentialCleanupError ?? error;
+    }
+    if (failurePersistenceOutcome === "reauth_required") {
+      emitQuickBooksTokenRefreshSignal(params.signalWriter, {
+        eventCode: "QUICKBOOKS_TOKEN_REFRESH_REAUTH_REQUIRED",
+        refreshStage: "TOKEN_REFRESH",
+        outcome: "REAUTH_REQUIRED",
+      });
+      throw new QuickBooksProviderError("QUICKBOOKS_REAUTH_REQUIRED", false, 401);
+    } else if (failurePersistenceOutcome === "transient_failure") {
+      emitQuickBooksTokenRefreshSignal(params.signalWriter, {
+        eventCode: "QUICKBOOKS_TOKEN_REFRESH_TRANSIENT_FAILURE",
+        refreshStage: "TOKEN_REFRESH",
+        outcome: "FAILED",
+      });
+    }
+    throw issuedCredentialCleanupError ?? error;
   }
 }
 
@@ -470,6 +640,18 @@ export async function disconnectQuickBooksConnection(params: {
   const now = new Date();
   const claimTokenHash = newCredentialClaimHash();
   const claimedConnection = await withTenantRlsContext(params.prisma, params.tenantId, async (transaction) => {
+    // Disconnect is a new tenant-wide OAuth generation. Serialize it with
+    // connect/callback finalization and invalidate every outstanding state so
+    // a callback whose provider exchange is already in flight cannot install
+    // fresh credentials after this disconnect commits.
+    await transaction.$queryRaw<Array<{ locked: number }>>`
+      SELECT 1::int AS "locked"
+      FROM (
+        SELECT pg_advisory_xact_lock(
+          hashtextextended(${`quickbooks-oauth-init:${params.tenantId}`}, 0)
+        )
+      ) acquired
+    `;
     const connection = await transaction.quickBooksConnection.findFirst({
       where: { tenantId: params.tenantId, deletedAtUtc: null },
       select: {
@@ -481,7 +663,16 @@ export async function disconnectQuickBooksConnection(params: {
         disconnectRequestedAtUtc: true,
       },
     });
-    if (!connection) return { result: "disconnected" as const };
+    if (!connection) {
+      await transaction.quickBooksOAuthState.deleteMany({
+        where: { tenantId: params.tenantId },
+      });
+      return { result: "disconnected" as const };
+    }
+    if (connection.status === "ERROR") return { result: "support_required" as const };
+    await transaction.quickBooksOAuthState.deleteMany({
+      where: { tenantId: params.tenantId },
+    });
     await invalidateQuickBooksHostedPaymentLinks(
       transaction,
       params.tenantId,
@@ -521,6 +712,7 @@ export async function disconnectQuickBooksConnection(params: {
           revocationPendingAtUtc: null,
           revocationAttemptCount: 0,
           revocationNextAttemptAtUtc: null,
+          tokenRefreshFailureStartedAtUtc: null,
           lastError: null,
         },
       });
@@ -630,6 +822,7 @@ export async function disconnectQuickBooksConnection(params: {
           revocationNextAttemptAtUtc: null,
           tokenRefreshClaimHash: null,
           tokenRefreshClaimExpiresAtUtc: null,
+          tokenRefreshFailureStartedAtUtc: null,
           lastError: null,
         },
       });
@@ -867,6 +1060,7 @@ export async function retryQuickBooksRevocation(params: {
           revocationNextAttemptAtUtc: null,
           tokenRefreshClaimHash: null,
           tokenRefreshClaimExpiresAtUtc: null,
+          tokenRefreshFailureStartedAtUtc: null,
           lastError: null,
         },
       });

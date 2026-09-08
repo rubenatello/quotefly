@@ -37,6 +37,7 @@ jobs:
           --health-retries 5
 
     env:
+      QBO_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       NODE_ENV: test
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/quotefly_test?schema=public
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/quotefly_test?schema=public
@@ -67,11 +68,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$QBO_CANDIDATE_SHA"
 
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 22
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -94,3 +100,44 @@ jobs:
 
       - name: Verify launch readiness
         run: npm run verify:launch
+
+      - name: Build exact-candidate standalone QuickBooks watchdog
+        run: docker build --platform linux/amd64 --label org.opencontainers.image.revision="$QBO_CANDIDATE_SHA" -f ops/quickbooks-watchdog/Dockerfile -t quotefly-qbo-watchdog:local-ci-${{ github.run_id }} .
+
+      - name: Prove standalone watchdog crash recovery and exclusion
+        run: node scripts/quickbooks-watchdog-container-test.mjs quotefly-qbo-watchdog:local-ci-${{ github.run_id }}
+
+      - name: Record reviewed watchdog image identity
+        run: |
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' quotefly-qbo-watchdog:local-ci-${{ github.run_id }})" = "$QBO_CANDIDATE_SHA"
+          docker image inspect --format 'Watchdog image ID {{.Id}} revision {{index .Config.Labels "org.opencontainers.image.revision"}}' quotefly-qbo-watchdog:local-ci-${{ github.run_id }}
+
+      - name: Scan exact watchdog image with pinned Trivy
+        shell: bash
+        run: |
+          set -euo pipefail
+          scan_dir="$(mktemp -d "$RUNNER_TEMP/qbo-image-scan.XXXXXX")"
+          curl --fail --show-error --silent --location --proto '=https' --proto-redir '=https' --max-time 120 \
+            https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz \
+            --output "$scan_dir/trivy.tar.gz"
+          SCANNER_ARCHIVE="$scan_dir/trivy.tar.gz" node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            import { createHash } from "node:crypto";
+            const actual = createHash("sha256").update(readFileSync(process.env.SCANNER_ARCHIVE)).digest("hex");
+            if (actual !== "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a") process.exit(1);
+          '
+          tar -xzf "$scan_dir/trivy.tar.gz" -C "$scan_dir" trivy
+          docker image save --output "$scan_dir/image.tar" quotefly-qbo-watchdog:local-ci-${{ github.run_id }}
+          "$scan_dir/trivy" image --input "$scan_dir/image.tar" --scanners vuln --pkg-types os,library \
+            --ignorefile /dev/null --ignore-unfixed=false --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+            --format json --output "$scan_dir/results.json" --cache-dir "$scan_dir/cache" \
+            --timeout 10m --skip-version-check --quiet
+          "$scan_dir/trivy" --version --cache-dir "$scan_dir/cache"
+          sha256sum "$scan_dir/image.tar" "$scan_dir/results.json"
+          image_id="$(docker image inspect --format '{{.Id}}' quotefly-qbo-watchdog:local-ci-${{ github.run_id }})"
+          node scripts/quickbooks-image-archive.mjs "$scan_dir/image.tar" \
+            quotefly-qbo-watchdog:local-ci-${{ github.run_id }} "$image_id" >/dev/null
+          echo QBO_IMAGE_ARCHIVE_EVIDENCE_VALID
+          node scripts/quickbooks-image-scan-policy.mjs "$scan_dir/results.json" "$scan_dir/cache/db/metadata.json" \
+            "$scan_dir/image.tar" quotefly-qbo-watchdog:local-ci-${{ github.run_id }} "$image_id" \
+            docs/security/quickbooks-watchdog-image-dispositions.json

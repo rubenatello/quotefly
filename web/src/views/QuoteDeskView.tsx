@@ -1882,7 +1882,11 @@ export function QuoteDeskView() {
                 {t("quoteDesk.lifecycle.bookWithKody")}
               </Button>
             ) : null}
-            <Button variant="outline" size="sm" onClick={() => navigate(`/app/jobs/${acceptedJobAction.id}`)}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => requestNavigation(() => navigate(`/app/jobs/${acceptedJobAction.id}`))}
+            >
               <ExternalLink size={15} />
               {t("quoteDesk.lifecycle.openJob")}
             </Button>
@@ -2897,6 +2901,7 @@ export function QuoteDeskView() {
         description={t("quoteDesk.leave.description")}
         confirmLabel={t("quoteDesk.leave.confirm")}
         confirmVariant="warning"
+        layer="navigationGuard"
       />
 
       <ConfirmModal

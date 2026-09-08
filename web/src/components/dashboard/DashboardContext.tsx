@@ -34,6 +34,7 @@ import { formatUsPhoneDisplay, toPhoneHrefValue } from "../../lib/phone";
 import { notify } from "../../lib/notifications";
 import { localizedApiError } from "../../lib/localized-api-error";
 import { publishKodyOutcome } from "../ai/kody-events";
+import { useWorkspaceNavigationGuardCoordinator } from "../../hooks/workspace-navigation-guard-context";
 
 /* ─────────────── Types ─────────────── */
 
@@ -481,6 +482,7 @@ export function DashboardProvider({
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
+  const { requestNavigation } = useWorkspaceNavigationGuardCoordinator();
   const routeQuoteId = useMemo(() => {
     const match = location.pathname.match(/^\/app\/quotes\/([^/]+)\/?$/);
     if (!match?.[1]) return null;
@@ -891,18 +893,20 @@ export function DashboardProvider({
     if (!canUseChatToQuote) { setError(t("quoteFeedback.chat.unavailable")); return; }
     const prompt = chatPrompt.trim();
     if (!prompt) { setError(t("quoteFeedback.chat.promptRequired")); return; }
-    setError(null);
-    setChatParsed(null);
-    setChatPrompt("");
-    setNotice(t("quoteFeedback.chat.opening"));
-    navigate("/app/build", {
-      state: {
-        kodyQuoteDraft: {
-          prompt,
+    requestNavigation(() => {
+      setError(null);
+      setChatParsed(null);
+      setChatPrompt("");
+      setNotice(t("quoteFeedback.chat.opening"));
+      navigate("/app/build", {
+        state: {
+          kodyQuoteDraft: {
+            prompt,
+          },
         },
-      },
+      });
     });
-  }, [canUseChatToQuote, chatPrompt, navigate, t]);
+  }, [canUseChatToQuote, chatPrompt, navigate, requestNavigation, t]);
 
   const applyTradeSetup = useCallback(async (event: FormEvent) => {
     event.preventDefault();

@@ -14,17 +14,27 @@ type QuickBooksSetupGuideProps = {
   environment: "sandbox" | "production";
   companyName?: string | null;
   operations: QuickBooksSetupReadiness["operations"];
+  oauthOnlyMode: boolean;
   canConnect: boolean;
   connectLabel: string;
   onConnect: () => void;
 };
 
-const guideStepKeys = [
+const fullWorkflowGuideStepKeys = [
   "prepare",
   "authorize",
   "verify",
   "confirm",
   "test",
+] as const;
+
+const connectionOnlyGuideStepKeys = [
+  "prepare",
+  "authorize",
+  "verify",
+  "replay",
+  "refresh",
+  "disconnect",
 ] as const;
 
 export function QuickBooksSetupGuide({
@@ -33,6 +43,7 @@ export function QuickBooksSetupGuide({
   environment,
   companyName,
   operations,
+  oauthOnlyMode,
   canConnect,
   connectLabel,
   onConnect,
@@ -40,12 +51,15 @@ export function QuickBooksSetupGuide({
   const { t } = useTranslation();
   const title = t("admin.quickBooksSetup.guide.title");
   const paymentTestReady = operations.hostedPaymentsReady && operations.reconciliationReady;
+  const guideStepKeys = oauthOnlyMode ? connectionOnlyGuideStepKeys : fullWorkflowGuideStepKeys;
 
   return (
     <Modal open={open} onClose={onClose} size="lg" ariaLabel={title}>
       <ModalHeader
         title={title}
-        description={t("admin.quickBooksSetup.guide.description")}
+        description={t(oauthOnlyMode
+          ? "admin.quickBooksSetup.guide.connectionOnlyDescription"
+          : "admin.quickBooksSetup.guide.description")}
         onClose={onClose}
       />
       <ModalBody className="space-y-5">
@@ -120,9 +134,15 @@ export function QuickBooksSetupGuide({
         </section>
 
         <div className="rounded-2xl border border-[var(--qf-info-border)] bg-[var(--qf-info-surface)] p-4">
-          <p className="font-semibold text-[var(--qf-text)]">{t("admin.quickBooksSetup.guide.safeTestTitle")}</p>
+          <p className="font-semibold text-[var(--qf-text)]">
+            {t(oauthOnlyMode
+              ? "admin.quickBooksSetup.guide.connectionOnlySafeTestTitle"
+              : "admin.quickBooksSetup.guide.safeTestTitle")}
+          </p>
           <p className="mt-1 text-sm leading-6 text-[var(--qf-text-soft)]">
-            {t("admin.quickBooksSetup.guide.safeTestDescription")}
+            {t(oauthOnlyMode
+              ? "admin.quickBooksSetup.guide.connectionOnlySafeTestDescription"
+              : "admin.quickBooksSetup.guide.safeTestDescription")}
           </p>
         </div>
 

@@ -58,6 +58,9 @@ test("Pixel builder autosaves across bottom navigation and restores quick-custom
   if (await backAfterReload.isVisible()) await backAfterReload.click();
 
   await page.getByRole("navigation", { name: "Mobile workspace" }).getByRole("button", { name: "Customers", exact: true }).click();
+  const leaveDraft = page.getByRole("dialog", { name: "Leave this quote draft?" });
+  await expect(leaveDraft).toBeVisible();
+  await leaveDraft.getByRole("button", { name: "Keep draft and leave", exact: true }).click();
   await expect(page).toHaveURL(/\/app\/customers/);
   await page.getByTestId("mobile-quick-quote").click();
   await expect(page).toHaveURL(/\/app\/build$/);

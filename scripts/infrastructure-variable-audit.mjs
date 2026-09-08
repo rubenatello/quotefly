@@ -25,8 +25,11 @@ const ALL_RUNTIME_SECRETS = [
   "TWILIO_WEBHOOK_AUTH_TOKEN",
   "QUICKBOOKS_CLIENT_SECRET",
   "QUICKBOOKS_WEBHOOK_VERIFIER",
+  "QUICKBOOKS_MONITOR_BEARER",
   "QUICKBOOKS_TOKEN_ENCRYPTION_KEY",
   "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS",
+  "QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN",
+  "QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN",
 ];
 
 const CLASSIFICATIONS = Object.fromEntries([
@@ -39,11 +42,72 @@ const CLASSIFICATIONS = Object.fromEntries([
   ["QUICKBOOKS_ENVIRONMENT", CONFIGURATION],
   ["QUICKBOOKS_SANDBOX_STAGING_ORIGINS", ORIGIN],
   ["QUICKBOOKS_REDIRECT_URI", ORIGIN],
+  ["QUICKBOOKS_API_SIGNAL_INGEST_URL", ORIGIN],
+  ["QUICKBOOKS_WORKER_SIGNAL_INGEST_URL", ORIGIN],
+  ["QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS", CONFIGURATION],
   ["QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED", CONFIGURATION],
   ["QUICKBOOKS_OAUTH_ONLY_MODE", CONFIGURATION],
   ["QUICKBOOKS_HOSTED_PAYMENTS_ENABLED", CONFIGURATION],
   ["QUICKBOOKS_RECONCILIATION_WORKER_ENABLED", CONFIGURATION],
   ["QUICKBOOKS_CDC_WORKER_ENABLED", CONFIGURATION],
+]);
+
+const QUICKBOOKS_BASE_REQUIRED = [
+  "NODE_ENV",
+  "DATABASE_URL",
+  "JWT_SECRET",
+  "APP_URL",
+  "API_URL",
+  "QUICKBOOKS_CLIENT_ID",
+  "QUICKBOOKS_CLIENT_SECRET",
+  "QUICKBOOKS_ENVIRONMENT",
+  "QUICKBOOKS_REDIRECT_URI",
+  "QUICKBOOKS_TOKEN_ENCRYPTION_KEY",
+];
+
+const quickBooksProfile = ({
+  environment = ["sandbox", "production"],
+  oauthOnly,
+  hostedPayments,
+  reconciliation,
+  cdc,
+}) => ({
+  required: [
+    ...QUICKBOOKS_BASE_REQUIRED,
+    ...(reconciliation ? ["QUICKBOOKS_WEBHOOK_VERIFIER"] : []),
+    "QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED",
+    "QUICKBOOKS_OAUTH_ONLY_MODE",
+    "QUICKBOOKS_HOSTED_PAYMENTS_ENABLED",
+    "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED",
+    "QUICKBOOKS_CDC_WORKER_ENABLED",
+  ],
+  forbidden: [
+    "DIRECT_DATABASE_URL",
+    ...(!reconciliation ? ["QUICKBOOKS_WEBHOOK_VERIFIER"] : []),
+  ],
+  expected: {
+    QUICKBOOKS_ENVIRONMENT: environment,
+    QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: ["true"],
+    QUICKBOOKS_OAUTH_ONLY_MODE: [oauthOnly ? "true" : "false"],
+    QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: [hostedPayments ? "true" : "false"],
+    QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: [reconciliation ? "true" : "false"],
+    QUICKBOOKS_CDC_WORKER_ENABLED: [cdc ? "true" : "false"],
+  },
+});
+
+const QUICKBOOKS_FULL_PROFILE = quickBooksProfile({
+  oauthOnly: false,
+  hostedPayments: true,
+  reconciliation: true,
+  cdc: true,
+});
+
+const QUICKBOOKS_PROFILE_NAMES = new Set([
+  "quickbooks-oauth",
+  "quickbooks-reconciliation",
+  "quickbooks-cdc",
+  "quickbooks-hosted-payments",
+  "quickbooks",
 ]);
 
 const PROFILES = {
@@ -53,7 +117,7 @@ const PROFILES = {
   },
   worker: {
     required: ["NODE_ENV", "DATABASE_URL", "JWT_SECRET"],
-    forbidden: ["DIRECT_DATABASE_URL"],
+    forbidden: ["DIRECT_DATABASE_URL", "QUICKBOOKS_MONITOR_BEARER"],
   },
   migrations: {
     required: ["NODE_ENV", "DIRECT_DATABASE_URL"],
@@ -63,67 +127,59 @@ const PROFILES = {
     required: ["VITE_API_BASE_URL"],
     forbidden: ALL_RUNTIME_SECRETS,
   },
-  quickbooks: {
+  "quickbooks-oauth": quickBooksProfile({
+    environment: ["sandbox"],
+    oauthOnly: true,
+    hostedPayments: false,
+    reconciliation: false,
+    cdc: false,
+  }),
+  "quickbooks-reconciliation": quickBooksProfile({
+    oauthOnly: false,
+    hostedPayments: false,
+    reconciliation: true,
+    cdc: false,
+  }),
+  "quickbooks-cdc": quickBooksProfile({
+    oauthOnly: false,
+    hostedPayments: false,
+    reconciliation: true,
+    cdc: true,
+  }),
+  "quickbooks-hosted-payments": QUICKBOOKS_FULL_PROFILE,
+  // Backward-compatible alias for the complete hosted-payments runtime.
+  quickbooks: QUICKBOOKS_FULL_PROFILE,
+  "quickbooks-signals-api": {
     required: [
-      "NODE_ENV",
-      "DATABASE_URL",
-      "JWT_SECRET",
-      "QUICKBOOKS_CLIENT_ID",
-      "QUICKBOOKS_CLIENT_SECRET",
-      "QUICKBOOKS_ENVIRONMENT",
-      "QUICKBOOKS_REDIRECT_URI",
-      "QUICKBOOKS_WEBHOOK_VERIFIER",
-      "QUICKBOOKS_TOKEN_ENCRYPTION_KEY",
-      "QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED",
-      "QUICKBOOKS_OAUTH_ONLY_MODE",
-      "QUICKBOOKS_HOSTED_PAYMENTS_ENABLED",
-      "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED",
-      "QUICKBOOKS_CDC_WORKER_ENABLED",
-    ],
-    forbidden: ["DIRECT_DATABASE_URL"],
-    expected: {
-      QUICKBOOKS_ENVIRONMENT: ["sandbox", "production"],
-      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: ["true"],
-      QUICKBOOKS_OAUTH_ONLY_MODE: ["false"],
-      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: ["true"],
-      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: ["true"],
-      QUICKBOOKS_CDC_WORKER_ENABLED: ["true"],
-    },
-  },
-  "quickbooks-oauth": {
-    required: [
-      "NODE_ENV",
-      "DATABASE_URL",
-      "JWT_SECRET",
-      "QUICKBOOKS_CLIENT_ID",
-      "QUICKBOOKS_CLIENT_SECRET",
-      "QUICKBOOKS_ENVIRONMENT",
-      "QUICKBOOKS_REDIRECT_URI",
-      "QUICKBOOKS_TOKEN_ENCRYPTION_KEY",
-      "QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED",
-      "QUICKBOOKS_OAUTH_ONLY_MODE",
-      "QUICKBOOKS_HOSTED_PAYMENTS_ENABLED",
-      "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED",
-      "QUICKBOOKS_CDC_WORKER_ENABLED",
+      "QUICKBOOKS_MONITOR_BEARER",
+      "QUICKBOOKS_API_SIGNAL_INGEST_URL",
+      "QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN",
+      "QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS",
     ],
     forbidden: [
       "DIRECT_DATABASE_URL",
-      "QUICKBOOKS_WEBHOOK_VERIFIER",
+      "QUICKBOOKS_WORKER_SIGNAL_INGEST_URL",
+      "QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN",
     ],
-    expected: {
-      QUICKBOOKS_ENVIRONMENT: ["sandbox"],
-      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: ["true"],
-      QUICKBOOKS_OAUTH_ONLY_MODE: ["true"],
-      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: ["false"],
-      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: ["false"],
-      QUICKBOOKS_CDC_WORKER_ENABLED: ["false"],
-    },
+  },
+  "quickbooks-signals-worker": {
+    required: [
+      "QUICKBOOKS_WORKER_SIGNAL_INGEST_URL",
+      "QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN",
+      "QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS",
+    ],
+    forbidden: [
+      "DIRECT_DATABASE_URL",
+      "QUICKBOOKS_MONITOR_BEARER",
+      "QUICKBOOKS_API_SIGNAL_INGEST_URL",
+      "QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN",
+    ],
   },
 };
 
 function usage() {
   process.stdout.write(
-    "Usage: node scripts/infrastructure-variable-audit.mjs --profile <api|worker|migrations|web|quickbooks|quickbooks-oauth>\n"
+    "Usage: node scripts/infrastructure-variable-audit.mjs --profile <api|worker|migrations|web|quickbooks-oauth|quickbooks-reconciliation|quickbooks-cdc|quickbooks-hosted-payments|quickbooks|quickbooks-signals-api|quickbooks-signals-worker>\n"
     + "Emits current-process presence metadata only; it never prints environment values.\n",
   );
 }
@@ -141,6 +197,13 @@ if (args.length !== 2 || args[0] !== "--profile" || !(args[1] in PROFILES)) {
 
 const profile = args[1];
 const registry = PROFILES[profile];
+const requiredNames = [...registry.required];
+if (
+  QUICKBOOKS_PROFILE_NAMES.has(profile)
+  && process.env.QUICKBOOKS_ENVIRONMENT?.trim() === "sandbox"
+) {
+  requiredNames.push("QUICKBOOKS_SANDBOX_STAGING_ORIGINS");
+}
 const describe = (name) => {
   const configuredValue = process.env[name]?.trim();
   const expectedValues = registry.expected?.[name];
@@ -158,7 +221,7 @@ const describeForbidden = (name) => ({
   classification: CLASSIFICATIONS[name] ?? CONFIGURATION,
   status: process.env[name]?.trim() ? "configured" : "missing",
 });
-const required = registry.required.map(describe);
+const required = requiredNames.map(describe);
 const forbidden = registry.forbidden.map(describeForbidden);
 const outcome = required.every((entry) => entry.status === "configured")
   && required.every((entry) => entry.expectationStatus === undefined || entry.expectationStatus === "matched")

@@ -742,6 +742,7 @@ test("Kody mobile assistant shows data guardrails and hands off review-first act
 
   await expect(page).toHaveURL(/\/app\/build$/);
   await expect(draftDialog).toBeHidden();
+  await expect(page.getByRole("dialog", { name: "Leave this quote draft?" })).toHaveCount(0);
   await expect(page.getByLabel("Quote title")).toHaveValue("Existing mobile draft should stay");
   await expect(page.getByText("Kody prepared a review draft without changing your existing work.")).toBeVisible();
   const kodyHandoff = page.getByTestId("kody-draft-handoff");

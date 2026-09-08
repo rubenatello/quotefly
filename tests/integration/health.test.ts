@@ -87,6 +87,23 @@ describe("health and readiness routes", () => {
     expect(queryRaw).toHaveBeenCalledTimes(2);
   });
 
+  test("probes the durable QuickBooks refresh-failure column added by the current migration", async () => {
+    const queryRaw = vi.fn(async () => {
+      if (queryRaw.mock.calls.length === 1) return [{ value: 1 }];
+      return FORCED_RLS_ROWS;
+    });
+    const app = buildHealthServer(queryRaw);
+
+    const response = await app.inject({ method: "GET", url: "/v1/ready" });
+
+    expect(response.statusCode).toBe(200);
+    const readinessSql = String(queryRaw.mock.calls[0]?.[0]);
+    expect(readinessSql).toContain("quickbooks_connection_probe AS");
+    expect(readinessSql).toContain('"tokenRefreshFailureStartedAtUtc"');
+    expect(readinessSql).toContain("FROM \"QuickBooksConnection\"");
+    expect(readinessSql).toContain("LIMIT 0");
+  });
+
   test("returns a stable safe response when the database probe fails", async () => {
     const queryRaw = vi.fn(async () => {
       throw new Error("Database failure for secret-user at private-host.");
@@ -113,6 +130,20 @@ describe("health and readiness routes", () => {
     expect(response.statusCode).toBe(503);
     expect(response.json()).toEqual({ error: "Service is not ready." });
     expect(response.body).not.toContain("legalAcceptedAtUtc");
+    expect(queryRaw).toHaveBeenCalledOnce();
+  });
+
+  test("fails closed without schema detail when the QuickBooks refresh-failure migration is missing", async () => {
+    const queryRaw = vi.fn(async () => {
+      throw new Error('column "tokenRefreshFailureStartedAtUtc" does not exist');
+    });
+    const app = buildHealthServer(queryRaw);
+
+    const response = await app.inject({ method: "GET", url: "/v1/ready" });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "Service is not ready." });
+    expect(response.body).not.toContain("tokenRefreshFailureStartedAtUtc");
     expect(queryRaw).toHaveBeenCalledOnce();
   });
 

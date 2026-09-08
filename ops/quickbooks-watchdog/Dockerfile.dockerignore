@@ -1,0 +1,14 @@
+**
+!package.json
+!package-lock.json
+!tsconfig.json
+!src/
+!src/watchdog/
+!src/watchdog/**
+!src/services/
+!src/services/quickbooks-observability.ts
+!src/services/quickbooks-worker-operational.ts
+!ops/
+!ops/quickbooks-watchdog/
+!ops/quickbooks-watchdog/Dockerfile
+!ops/quickbooks-watchdog/Dockerfile.dockerignore

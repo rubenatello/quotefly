@@ -73,8 +73,14 @@ const EnvSchema = z.object({
   QUICKBOOKS_PROVIDER_READ_RETRIES: z.coerce.number().int().min(0).max(3).default(2),
   QUICKBOOKS_REDIRECT_URI: OptionalUrlFromEnv,
   QUICKBOOKS_WEBHOOK_VERIFIER: z.string().default(""),
+  QUICKBOOKS_MONITOR_BEARER: z.string().max(4_096).default(""),
   QUICKBOOKS_TOKEN_ENCRYPTION_KEY: z.string().default(""),
   QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS: z.string().default(""),
+  QUICKBOOKS_API_SIGNAL_INGEST_URL: OptionalUrlFromEnv,
+  QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN: z.string().max(4_096).default(""),
+  QUICKBOOKS_WORKER_SIGNAL_INGEST_URL: OptionalUrlFromEnv,
+  QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN: z.string().max(4_096).default(""),
+  QUICKBOOKS_SIGNAL_INGEST_TIMEOUT_MS: z.coerce.number().int().min(250).max(3_000).default(1_250),
   ENABLE_TWILIO_SMS: BooleanFromEnv.default(false),
   TWILIO_ACCOUNT_SID: z.string().default(""),
   TWILIO_AUTH_TOKEN: z.string().default(""),
@@ -231,6 +237,30 @@ const EnvSchema = z.object({
   }
   const quickBooksEncryptionKey = value.QUICKBOOKS_TOKEN_ENCRYPTION_KEY.trim();
   const quickBooksPreviousEncryptionKey = value.QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS.trim();
+  const quickBooksMonitorBearer = value.QUICKBOOKS_MONITOR_BEARER.trim();
+  if (quickBooksMonitorBearer && quickBooksMonitorBearer.length < 32) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_MONITOR_BEARER"],
+      message: "QUICKBOOKS_MONITOR_BEARER must be at least 32 characters when configured.",
+    });
+  }
+  if (
+    quickBooksMonitorBearer
+    && [
+      value.JWT_SECRET,
+      value.QUICKBOOKS_CLIENT_SECRET,
+      value.QUICKBOOKS_WEBHOOK_VERIFIER,
+      quickBooksEncryptionKey,
+      quickBooksPreviousEncryptionKey,
+    ].some((secret) => secret.trim() && secret.trim() === quickBooksMonitorBearer)
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["QUICKBOOKS_MONITOR_BEARER"],
+      message: "QUICKBOOKS_MONITOR_BEARER must be independent from application and provider secrets.",
+    });
+  }
   if (value.QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED && quickBooksEncryptionKey.length < 32) {
     ctx.addIssue({
       code: "custom",
@@ -268,6 +298,84 @@ const EnvSchema = z.object({
         code: "custom",
         path: ["QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS"],
         message: "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS must be independent from current encryption and JWT keys.",
+      });
+    }
+  }
+  const quickBooksSignalSinks = [
+    {
+      runtimeRole: "API",
+      urlKey: "QUICKBOOKS_API_SIGNAL_INGEST_URL",
+      tokenKey: "QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN",
+    },
+    {
+      runtimeRole: "worker",
+      urlKey: "QUICKBOOKS_WORKER_SIGNAL_INGEST_URL",
+      tokenKey: "QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN",
+    },
+  ] as const;
+  for (const sink of quickBooksSignalSinks) {
+    const ingestUrl = value[sink.urlKey].trim();
+    const sourceToken = value[sink.tokenKey].trim();
+    if (Boolean(ingestUrl) !== Boolean(sourceToken)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [ingestUrl ? sink.tokenKey : sink.urlKey],
+        message: `QuickBooks ${sink.runtimeRole} signal ingest URL and source token must be configured together.`,
+      });
+      continue;
+    }
+    if (!ingestUrl) continue;
+    const parsedIngestUrl = new URL(ingestUrl);
+    if (
+      parsedIngestUrl.protocol !== "https:"
+      || parsedIngestUrl.username
+      || parsedIngestUrl.password
+      || parsedIngestUrl.search
+      || parsedIngestUrl.hash
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: [sink.urlKey],
+        message: `QuickBooks ${sink.runtimeRole} signal ingest URL must use HTTPS without credentials, a query, or a fragment.`,
+      });
+    }
+  }
+  const quickBooksSignalSourceTokens = [
+    {
+      key: "QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN",
+      value: value.QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN.trim(),
+      peer: value.QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN.trim(),
+    },
+    {
+      key: "QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN",
+      value: value.QUICKBOOKS_WORKER_SIGNAL_SOURCE_TOKEN.trim(),
+      peer: value.QUICKBOOKS_API_SIGNAL_SOURCE_TOKEN.trim(),
+    },
+  ] as const;
+  for (const sourceToken of quickBooksSignalSourceTokens) {
+    if (!sourceToken.value) continue;
+    if (sourceToken.value.length < 16 || /\s/.test(sourceToken.value)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [sourceToken.key],
+        message: `${sourceToken.key} must be at least 16 characters without whitespace when configured.`,
+      });
+    }
+    if (
+      [
+        value.JWT_SECRET,
+        value.QUICKBOOKS_CLIENT_SECRET,
+        value.QUICKBOOKS_WEBHOOK_VERIFIER,
+        quickBooksMonitorBearer,
+        quickBooksEncryptionKey,
+        quickBooksPreviousEncryptionKey,
+        sourceToken.peer,
+      ].some((secret) => secret.trim() && secret.trim() === sourceToken.value)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: [sourceToken.key],
+        message: `${sourceToken.key} must be independent from application, provider, monitor, and peer signal-source secrets.`,
       });
     }
   }

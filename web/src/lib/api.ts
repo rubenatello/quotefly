@@ -489,9 +489,203 @@ export type InternalControlPlaneSummary = {
   };
   workers: {
     quickBooksReconciliation: WorkerHeartbeatPayload | null;
+    quickBooksOperations: {
+      webhookOutstandingCount: number;
+      webhookDeadCount: number;
+      oldestWebhookOutstandingAgeMs: number | null;
+      reconciliationRequiredCount: number;
+      oldestReconciliationRequiredAgeMs: number | null;
+      cdcCursorCount: number;
+      cdcTerminalCount: number;
+      cdcOverdueCount: number;
+      maximumCdcLagMs: number | null;
+      connectionRevocationPendingCount: number;
+      connectionRevocationDeadCount: number;
+      oldestConnectionRevocationPendingAgeMs: number | null;
+      orphanRevocationPendingCount: number;
+      orphanRevocationDeadCount: number;
+      oldestOrphanRevocationPendingAgeMs: number | null;
+      tokenRefreshFailureConnectionCount: number;
+      tokenRefreshReauthRequiredCount: number;
+      oldestTokenRefreshFailureAgeMs: number | null;
+    };
   };
   mutationPolicy: { enabled: false; reason: string };
 };
+
+export type QuickBooksIntegrationHealth = {
+  schema: "quotefly.integration-health/v1";
+  observedAtUtc: string;
+  environment: "sandbox" | "production";
+  mode: "disabled" | "oauth_only" | "accounting";
+  state: "healthy" | "warning" | "critical";
+  automation: {
+    providerActionsEnabled: boolean;
+    hostedPaymentsEnabled: boolean;
+    reconciliationEnabled: boolean;
+    cdcEnabled: boolean;
+    webhookConfigured: boolean;
+  };
+  monitors: {
+    bearerConfigured: boolean;
+    apiSignalSinkConfigured: boolean;
+    workerSignalSinkConfigured: boolean | null;
+    deliveryVerified: false;
+  };
+  worker: {
+    required: boolean;
+    status:
+      | "not_required"
+      | "missing"
+      | "starting"
+      | "running"
+      | "stopping"
+      | "stopped"
+      | "failed"
+      | "stale"
+      | "release_mismatch"
+      | "topology_invalid";
+    ready: boolean;
+    lastObservedAtUtc: string | null;
+    releaseMatches: boolean | null;
+  };
+  operations: InternalControlPlaneSummary["workers"]["quickBooksOperations"];
+};
+
+const QUICKBOOKS_INTEGRATION_HEALTH_WORKER_STATUSES = new Set([
+  "not_required",
+  "missing",
+  "starting",
+  "running",
+  "stopping",
+  "stopped",
+  "failed",
+  "stale",
+  "release_mismatch",
+  "topology_invalid",
+]);
+
+const QUICKBOOKS_OPERATION_COUNT_FIELDS = [
+  "webhookOutstandingCount",
+  "webhookDeadCount",
+  "reconciliationRequiredCount",
+  "cdcCursorCount",
+  "cdcTerminalCount",
+  "cdcOverdueCount",
+  "connectionRevocationPendingCount",
+  "connectionRevocationDeadCount",
+  "orphanRevocationPendingCount",
+  "orphanRevocationDeadCount",
+  "tokenRefreshFailureConnectionCount",
+  "tokenRefreshReauthRequiredCount",
+] as const;
+
+const QUICKBOOKS_OPERATION_AGE_FIELDS = [
+  "oldestWebhookOutstandingAgeMs",
+  "oldestReconciliationRequiredAgeMs",
+  "maximumCdcLagMs",
+  "oldestConnectionRevocationPendingAgeMs",
+  "oldestOrphanRevocationPendingAgeMs",
+  "oldestTokenRefreshFailureAgeMs",
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
+
+function isIsoUtc(value: unknown): value is string {
+  if (typeof value !== "string" || !value.endsWith("Z")) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function parseQuickBooksIntegrationHealth(value: unknown): QuickBooksIntegrationHealth {
+  const invalid = (): never => {
+    throw new ApiError(
+      "QuickBooks integration health returned an invalid response.",
+      502,
+      { code: "QUICKBOOKS_INTEGRATION_HEALTH_INVALID_RESPONSE" },
+    );
+  };
+
+  if (!isRecord(value) || !hasExactKeys(value, [
+    "schema",
+    "observedAtUtc",
+    "environment",
+    "mode",
+    "state",
+    "automation",
+    "monitors",
+    "worker",
+    "operations",
+  ])) return invalid();
+
+  const { automation, monitors, worker, operations } = value;
+  if (
+    value.schema !== "quotefly.integration-health/v1"
+    || !isIsoUtc(value.observedAtUtc)
+    || typeof value.environment !== "string"
+    || !["sandbox", "production"].includes(value.environment)
+    || typeof value.mode !== "string"
+    || !["disabled", "oauth_only", "accounting"].includes(value.mode)
+    || typeof value.state !== "string"
+    || !["healthy", "warning", "critical"].includes(value.state)
+    || !isRecord(automation)
+    || !hasExactKeys(automation, [
+      "providerActionsEnabled",
+      "hostedPaymentsEnabled",
+      "reconciliationEnabled",
+      "cdcEnabled",
+      "webhookConfigured",
+    ])
+    || !Object.values(automation).every((entry) => typeof entry === "boolean")
+    || !isRecord(monitors)
+    || !hasExactKeys(monitors, [
+      "bearerConfigured",
+      "apiSignalSinkConfigured",
+      "workerSignalSinkConfigured",
+      "deliveryVerified",
+    ])
+    || typeof monitors.bearerConfigured !== "boolean"
+    || typeof monitors.apiSignalSinkConfigured !== "boolean"
+    || !(monitors.workerSignalSinkConfigured === null || typeof monitors.workerSignalSinkConfigured === "boolean")
+    || monitors.deliveryVerified !== false
+    || !isRecord(worker)
+    || !hasExactKeys(worker, [
+      "required",
+      "status",
+      "ready",
+      "lastObservedAtUtc",
+      "releaseMatches",
+    ])
+    || typeof worker.required !== "boolean"
+    || typeof worker.status !== "string"
+    || !QUICKBOOKS_INTEGRATION_HEALTH_WORKER_STATUSES.has(worker.status)
+    || typeof worker.ready !== "boolean"
+    || !(worker.lastObservedAtUtc === null || isIsoUtc(worker.lastObservedAtUtc))
+    || !(worker.releaseMatches === null || typeof worker.releaseMatches === "boolean")
+    || !isRecord(operations)
+    || !hasExactKeys(operations, [
+      ...QUICKBOOKS_OPERATION_COUNT_FIELDS,
+      ...QUICKBOOKS_OPERATION_AGE_FIELDS,
+    ])
+    || !QUICKBOOKS_OPERATION_COUNT_FIELDS.every((field) => isNonNegativeInteger(operations[field]))
+    || !QUICKBOOKS_OPERATION_AGE_FIELDS.every((field) => (
+      operations[field] === null || isNonNegativeInteger(operations[field])
+    ))
+  ) return invalid();
+
+  return value as QuickBooksIntegrationHealth;
+}
 
 export type InternalTenantMetadata = {
   id: string;
@@ -2008,6 +2202,7 @@ export type QuickBooksSetupPhase =
   | "UNAVAILABLE"
   | "NOT_CONNECTED"
   | "ACTION_REQUIRED"
+  | "CONNECTION_VERIFIED"
   | "READY_FOR_CONFIRMATION"
   | "CONFIRMED";
 
@@ -2045,13 +2240,36 @@ export type QuickBooksSetupReadiness = {
   };
 };
 
-export type WorkerHeartbeatPayload = {
+export type TenantWorkerHeartbeatPayload = {
   status: "STARTING" | "RUNNING" | "STOPPING" | "STOPPED" | "FAILED";
   fresh: boolean;
   heartbeatAtUtc: string;
+};
+
+export type WorkerHeartbeatPayload = TenantWorkerHeartbeatPayload & {
+  observedAtUtc?: string;
   startedAtUtc: string;
   cycleStartedAtUtc: string;
   lastCycleDurationMs?: number | null;
+  metrics: unknown;
+  fleet: {
+    totalInstanceCount: number;
+    freshLiveInstanceCount: number;
+    capacityInstanceCount: number;
+    stoppingInstanceCount: number;
+    staleInstanceCount: number;
+    terminalInstanceCount: number;
+    missingReleaseShaInstanceCount: number;
+    releaseMismatchInstanceCount: number;
+    overflowedFreshLiveInstanceCount: number;
+    freshLiveInstanceLimit: number;
+    freshLiveOverflowed: boolean;
+  };
+  releaseIdentity: {
+    apiReleaseSha: string | null;
+    workerReleaseSha: string | null;
+    matches: boolean | null;
+  };
 };
 
 export type QuickBooksStatusPayload = {
@@ -2062,7 +2280,8 @@ export type QuickBooksStatusPayload = {
   webhookConfigured: boolean;
   canManage: boolean;
   environment: "sandbox" | "production";
-  reconciliationWorker: WorkerHeartbeatPayload | null;
+  reconciliationWorker: TenantWorkerHeartbeatPayload | null;
+  releaseMatches: boolean | null;
   setup: QuickBooksSetupReadiness;
   connection: null | {
     environment: string;
@@ -2125,42 +2344,6 @@ export type QuickBooksSyncPreview = {
     lastAttemptedAtUtc?: string | null;
     syncedAtUtc?: string | null;
   } | null;
-};
-
-export type QuickBooksInvoiceStatusPayload = {
-  invoiceId: string;
-  docNumber?: string | null;
-  txnDate?: string | null;
-  dueDate?: string | null;
-  totalAmount: number;
-  balance: number;
-  currency?: string | null;
-  emailStatus?: string | null;
-  linkedPayments: Array<{ txnId: string; txnType: string }>;
-  paid: boolean;
-};
-
-export type QuickBooksInvoiceSyncRecord = {
-  id: string;
-  quickBooksInvoiceId?: string | null;
-  quickBooksDocNumber?: string | null;
-  requestId?: string | null;
-  status: "PENDING" | "SYNCED" | "FAILED";
-  lastError?: string | null;
-  lastAttemptedAtUtc?: string | null;
-  syncedAtUtc?: string | null;
-};
-
-export type QuickBooksPushInvoiceResult = {
-  sync: QuickBooksInvoiceSyncRecord;
-  invoice: QuickBooksInvoiceStatusPayload;
-  warnings: string[];
-  customer: {
-    quickBooksCustomerId: string;
-    quickBooksDisplayName: string;
-    created: boolean;
-  };
-  createdItems: number;
 };
 
 export type FeatureRequestInput = {
@@ -2398,6 +2581,11 @@ export const api = {
   internal: {
     controlPlane: {
       summary: () => request<InternalControlPlaneSummary>("/v1/internal/control-plane/summary"),
+      quickBooksHealth: async (options?: { signal?: AbortSignal }) => parseQuickBooksIntegrationHealth(
+        await request<unknown>("/v1/internal/control-plane/quickbooks-health", {
+          signal: options?.signal,
+        }),
+      ),
       tenants: (query?: {
         limit?: number;
         offset?: number;
@@ -2516,21 +2704,6 @@ export const api = {
 
       syncPreview: (quoteId: string) =>
         request<QuickBooksSyncPreview>(`/v1/integrations/quickbooks/quotes/${quoteId}/sync-preview`),
-
-      pushInvoice: (
-        quoteId: string,
-        body?: { createCustomerIfMissing?: boolean; createItemsIfMissing?: boolean; dueInDays?: number },
-      ) =>
-        request<QuickBooksPushInvoiceResult>(`/v1/integrations/quickbooks/quotes/${quoteId}/push-invoice`, {
-          method: "POST",
-          body: JSON.stringify(body ?? {}),
-        }),
-
-      invoiceStatus: (quoteId: string) =>
-        request<{
-          sync: QuickBooksInvoiceSyncRecord;
-          invoice: QuickBooksInvoiceStatusPayload;
-        }>(`/v1/integrations/quickbooks/quotes/${quoteId}/invoice-status`),
 
       invoiceSyncPreview: (invoiceId: string, options?: QuickBooksInvoiceReviewOptions) =>
         request<{

@@ -21,6 +21,7 @@ import { AI_USAGE_UPDATED_EVENT, type AiUsageUpdateDetail } from "./lib/ai-credi
 import { browserTimeZone } from "./lib/display-format";
 import { prepareQuoteBuilderDraftStorage, purgeQuoteBuilderDraftStorage } from "./lib/quote-builder-draft-storage";
 import { useLocale } from "./i18n";
+import { WorkspaceNavigationGuardProvider } from "./hooks/WorkspaceNavigationGuardContext";
 
 const LandingPage = lazy(() => import("./pages/LandingPage").then((module) => ({ default: module.LandingPage })));
 const PricingPage = lazy(() => import("./pages/PricingPage").then((module) => ({ default: module.PricingPage })));
@@ -473,7 +474,9 @@ function AppRoutes() {
 function App() {
   return (
     <BrowserRouter>
-      <AppRoutes />
+      <WorkspaceNavigationGuardProvider>
+        <AppRoutes />
+      </WorkspaceNavigationGuardProvider>
     </BrowserRouter>
   );
 }

@@ -21,6 +21,7 @@ import { resolveTenantWallTime, toTenantDateTimeInput, validTimeZone, type Tenan
 import { cn } from "../lib/utils";
 import { publishNotificationsUpdated } from "../lib/notification-display";
 import { formatDateTime, money, useDashboard } from "../components/dashboard/DashboardContext";
+import { useWorkspaceNavigationGuardCoordinator } from "../hooks/workspace-navigation-guard-context";
 import {
   Alert,
   Badge,
@@ -1346,6 +1347,7 @@ function JobDetail({
 }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const { requestNavigation } = useWorkspaceNavigationGuardCoordinator();
   const formatDate = useJobDateFormatter();
   const assigneeName = job.assignedTenantUser?.user.fullName ?? t("jobs.unassigned");
   const [assignedTenantUserId, setAssignedTenantUserId] = useState(job.assignedTenantUserId ?? "");
@@ -1388,7 +1390,11 @@ function JobDetail({
     <section className="rounded-3xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4 shadow-[var(--qf-shadow-sm)] sm:p-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <Button variant="ghost" className="mb-3 min-h-11 px-0" onClick={() => navigate("/app/jobs")}>
+          <Button
+            variant="ghost"
+            className="mb-3 min-h-11 px-0"
+            onClick={() => requestNavigation(() => navigate("/app/jobs"))}
+          >
             <ArrowLeft size={16} />
             {t("jobs.backToJobs")}
           </Button>
@@ -1402,7 +1408,10 @@ function JobDetail({
           <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{job.title}</p>
         </div>
         <div className="grid gap-2 sm:flex sm:flex-wrap sm:justify-end">
-          <Button className="min-h-11" onClick={() => navigate(`/app/quotes/${job.sourceQuoteId}`)}>
+          <Button
+            className="min-h-11"
+            onClick={() => requestNavigation(() => navigate(`/app/quotes/${job.sourceQuoteId}`))}
+          >
             <ExternalLink size={16} />
             {t("jobs.openQuote")}
           </Button>
@@ -1545,6 +1554,7 @@ function JobDetail({
 export function JobsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { requestNavigation } = useWorkspaceNavigationGuardCoordinator();
   const location = useLocation();
   const { jobId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1846,8 +1856,8 @@ export function JobsPage() {
                 key={job.id}
                 job={job}
                 active={job.id === jobId}
-                onOpen={(item) => navigate(`/app/jobs/${item.id}`)}
-                onOpenQuote={(item) => navigate(`/app/quotes/${item.sourceQuoteId}`)}
+                onOpen={(item) => requestNavigation(() => navigate(`/app/jobs/${item.id}`))}
+                onOpenQuote={(item) => requestNavigation(() => navigate(`/app/quotes/${item.sourceQuoteId}`))}
               />
             ))
           )}
