@@ -1,0 +1,44 @@
+name: QuickBooks attended monitor
+run-name: Registration only - no monitoring on this ref
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Approved staging trial only (no accounting writes)
+        required: true
+        type: choice
+        default: staging
+        options:
+          - staging
+      duration_minutes:
+        description: Attended one-minute samples, integer 1 through 240
+        required: true
+        default: "5"
+        type: string
+      canary:
+        description: Request a deduplicated daily email-notification canary
+        required: true
+        default: true
+        type: boolean
+
+# GitHub requires this path on the default branch to register manual dispatch.
+# This copy is registration ONLY: even a manual run executes no job and proves
+# neither monitoring nor email delivery. Do not add secrets or an environment.
+# The reviewed implementation exists on locked agent/qbo-health-rc-20260906 at
+# 5f1cc78ba7d2840d7b266a0c00ccfde951da6757. A separately authorized staging trial
+# must explicitly select that ref, after checking its SHA/protection, environment
+# admission settings, dedicated credential provisioning, and owner attendance.
+# A later full release must deliberately resolve this wrapper against that
+# candidate's executable workflow; never enable this registration-only copy.
+permissions: {}
+
+jobs:
+  registration_only:
+    name: Registration only - no monitor executed
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Refuse execution if the registration guard is ever removed
+        run: exit 1
