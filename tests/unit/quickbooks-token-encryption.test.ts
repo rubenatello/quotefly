@@ -23,7 +23,7 @@ let fetchQuickBooksRefundReceipt: typeof import("../../src/services/quickbooks.j
 let exchangeQuickBooksAuthorizationCode: typeof import("../../src/services/quickbooks.js").exchangeQuickBooksAuthorizationCode;
 let refreshQuickBooksAccessToken: typeof import("../../src/services/quickbooks.js").refreshQuickBooksAccessToken;
 let QuickBooksProviderError: typeof import("../../src/services/quickbooks.js").QuickBooksProviderError;
-let QUICKBOOKS_INVOICE_LINK_MINOR_VERSION: typeof import("../../src/services/quickbooks.js").QUICKBOOKS_INVOICE_LINK_MINOR_VERSION;
+let QUICKBOOKS_ACCOUNTING_MINOR_VERSION: typeof import("../../src/services/quickbooks.js").QUICKBOOKS_ACCOUNTING_MINOR_VERSION;
 let searchQuickBooksCustomers: typeof import("../../src/services/quickbooks.js").searchQuickBooksCustomers;
 let classifyQuickBooksWorkerFailure: typeof import("../../src/services/quickbooks-worker-failures.js").classifyQuickBooksWorkerFailure;
 let QuickBooksReconciliationError: typeof import("../../src/services/quickbooks-reconciliation.js").QuickBooksReconciliationError;
@@ -48,7 +48,7 @@ before(async () => {
     fetchQuickBooksRefundReceipt,
     exchangeQuickBooksAuthorizationCode,
     refreshQuickBooksAccessToken,
-    QUICKBOOKS_INVOICE_LINK_MINOR_VERSION,
+    QUICKBOOKS_ACCOUNTING_MINOR_VERSION,
     QuickBooksProviderError,
     searchQuickBooksCustomers,
     verifySignedQuickBooksState,
@@ -457,7 +457,9 @@ describe("QuickBooks provider response validation", () => {
       const company = await fetchQuickBooksCompanyInfo(env, "123456", "access-token");
       assert.equal(company.realmId, "123456");
       assert.equal(company.companyName, "QuoteFly Sandbox");
-      assert.match(requestedUrl, /\/v3\/company\/123456\/companyinfo\/123456$/);
+      const parsedRequestedUrl = new URL(requestedUrl);
+      assert.equal(parsedRequestedUrl.pathname.endsWith("/v3/company/123456/companyinfo/123456"), true);
+      assert.equal(parsedRequestedUrl.searchParams.get("minorversion"), QUICKBOOKS_ACCOUNTING_MINOR_VERSION);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -546,7 +548,9 @@ describe("QuickBooks provider response validation", () => {
         assert.equal(cdc.refundReceipts[0]?.Id, "refund-1");
       });
       assert.equal(requestedUrls.some((url) => url.includes("/refundreceipt/refund-1")), true);
-      assert.equal(requestedUrls.some((url) => url.includes("entities=Invoice,Payment,RefundReceipt")), true);
+      assert.equal(requestedUrls.some((url) => (
+        new URL(url).searchParams.get("entities") === "Invoice,Payment,RefundReceipt"
+      )), true);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -568,8 +572,8 @@ describe("QuickBooks provider response validation", () => {
       assert.ok(requestedUrl);
       assert.equal(requestedUrl.pathname.endsWith("/invoice/invoice%2Fwith%20spaces"), true);
       assert.equal(requestedUrl.searchParams.get("include"), "invoiceLink");
-      assert.equal(requestedUrl.searchParams.get("minorversion"), QUICKBOOKS_INVOICE_LINK_MINOR_VERSION);
-      assert.equal(QUICKBOOKS_INVOICE_LINK_MINOR_VERSION, "36");
+      assert.equal(requestedUrl.searchParams.get("minorversion"), QUICKBOOKS_ACCOUNTING_MINOR_VERSION);
+      assert.equal(QUICKBOOKS_ACCOUNTING_MINOR_VERSION, "75");
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -17,7 +17,7 @@ These are the owner-side items that still matter most before launch:
 2. Confirm `quotefly.us`, `www.quotefly.us`, and `api.quotefly.us` are resolving correctly in production
 3. Confirm Stripe production products, prices, and webhook destination are correct
 4. Confirm Railway and Vercel env vars match production values
-5. Keep direct QuickBooks workflows disabled in production; complete only the explicitly authorized OAuth-only sandbox staging sequence until a later accounting-mutation approval
+5. Keep direct QuickBooks workflows disabled in production; qualify the exact staging candidate and complete the readiness gates before advancing through the already-authorized bounded, non-destructive accounting sandbox tests
 6. Review final legal/support copy before public launch
 7. Verify quote board desktop column headers align with row values after latest UI fix
 8. Run `node scripts/tier-unit-economics.mjs` and confirm AI budget caps before launch pricing is finalized
@@ -84,7 +84,7 @@ The `6239f742f04b2815082c0fc7f108727a3e916258` staging owner connect, status ref
 disconnect, and empty Intuit integrations-screen observations passed on September 5;
 these do not establish accounting automation or the full replay/fault-recovery matrix.
 
-QuickBooks is in release-candidate qualification, not production availability. The September 4 staging authorization covered a disposable tenant and sandbox OAuth connect/replay/disconnect/revocation tests. The September 5 checkpoint above proves the normal connection lifecycle on the exact staging SHA; a real consumed-callback replay and live fault/revocation-retry recovery are still not established by those screenshots. This monitoring implementation does not authorize production deployment or accounting enablement.
+QuickBooks is in release-candidate qualification, not production availability. The September 4 staging authorization covered a disposable tenant and sandbox OAuth connect/replay/disconnect/revocation tests. The September 6 authorization expanded this to bounded non-destructive, non-real-money staging/production testing and BCP; it did not approve customer go-live, destructive cleanup, new paid infrastructure, or actual funds movement. The September 5 checkpoint above proves the normal connection lifecycle on the exact staging SHA; a real consumed-callback replay and live fault/revocation-retry recovery are still not established by those screenshots. The monitoring implementation itself does not enable accounting or waive the remaining gates.
 
 1. Keep direct QuickBooks workflows disabled in production. In staging, use the `quickbooks-oauth` profile until the final exact-SHA connection/replay/disconnect/revocation pass is recorded; keep the worker, accounting actions, hosted payments, CDC, and webhook processing off.
 2. Do not subscribe provider webhooks, push invoices, retrieve/share hosted links, record provider payments, or market direct QuickBooks Online sync until the separately authorized later phases pass.
@@ -92,7 +92,7 @@ QuickBooks is in release-candidate qualification, not production availability. T
 4. Use the QuickBooks-friendly CSV export as the currently supported handoff.
 5. Read the acceptance contract: `docs/integrations/quickbooks-hosted-payments-reconciliation.md`.
 6. Use `docs/integrations/quickbooks-owner-setup.md` for containment, credential inventory, monitoring, revocation, and rollback.
-7. Use `docs/integrations/quickbooks-owner-testing-checklist.md` for the authorized OAuth-only subset now; obtain separate explicit authorization before any sandbox accounting mutation.
+7. Use `docs/integrations/quickbooks-owner-testing-checklist.md` for the ordered phases under the recorded bounded sandbox authorization. Complete readiness and monitoring proof before benign accounting tests; obtain separately reviewed scope before void/refund/reversal, destructive cleanup, or actual funds movement.
 8. Treat `docs/integrations/quickbooks-release-candidate-evidence.md` as the current gate record and `docs/integrations/quickbooks-api-progress.md` as implementation context; Online/Desktop architecture remains long-term context only.
 
 Before advancing beyond OAuth-only staging, the owner must provide dated, sanitized evidence for:
@@ -105,7 +105,7 @@ Before advancing beyond OAuth-only staging, the owner must provide dated, saniti
 - a sanitized test plan for reviewed mapping, one non-taxable invoice, hosted link, partial/full payment, refund/reversal, void, duplicate/out-of-order webhook, dropped-webhook CDC repair, and timeout/restart recovery;
 - Sentinel review and independent Opera approval of the complete provider/payment candidate.
 
-The current OAuth-only sandbox authorization does not authorize accounting mutations, production credentials, production migrations, production OAuth, production webhook subscriptions, customer exposure, or marketing. Production additionally requires Intuit app approval, QuickBooks Payments merchant eligibility, fee/settlement ownership, verified backup/restore, support escalation, credential-safe rollback, and a separately authorized limited pilot.
+The deployed checkpoint is still OAuth-only despite the expanded testing authorization. Do not treat authorization as completed provider or operational evidence. Production still requires Intuit app approval, QuickBooks Payments merchant eligibility where applicable, fee/settlement ownership, verified backup/restore, support escalation, credential-safe rollback, and a separately authorized limited customer pilot before go-live or marketing.
 
 ### AI Models Approved for Production
 

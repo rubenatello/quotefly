@@ -1,6 +1,6 @@
 # QuickBooks Online Release-Candidate Evidence
 
-Last updated: 2026-09-06
+Last updated: 2026-09-08
 
 Status: active release-candidate qualification. This record separates engineering readiness from owner-operated staging/production actions and Intuit-controlled approvals. It does not authorize a deployment, provider flag change, webhook subscription, sandbox accounting mutation, production mutation, or marketing claim by itself.
 
@@ -37,6 +37,30 @@ The callback's post-token company check used the requested company realm in the 
 This distinction is consistent with Intuit's published contracts: the maintained [OAuth client documents `realm_id` as the QBO Realm/Company ID](https://github.com/intuit/oauth-pythonclient/blob/master/intuitlib/client.py), while the [CompanyInfo SDK contract defines `CompanyInfo.Id` as the identifier of that Intuit entity object](https://static.developer.intuit.com/sdkdocs/qbv3doc/ippdotnetdevkitv3/html/75d7858e-4449-a7c0-c8a7-32d6ca525b16.htm). Intuit's OAuth sample uses the callback realm to address the company API; it does not establish that every returned entity `Id` must equal the realm.
 
 The remediation keeps the OAuth callback bound to the signed, one-time, browser-session state and requested realm, validates the CompanyInfo response shape and display name, and no longer compares the realm-local entity ID to the OAuth realm. Focused provider-contract coverage uses a requested realm distinct from `CompanyInfo.Id`.
+
+## September 8 Accounting API contract qualification
+
+Independent backend review found that the historical invoice-link request and its
+unit assertion selected version 36 while Intuit actually serves version 75 for
+requests below 75. Other Accounting requests omitted the version and therefore
+used the same current default. This was misleading contract evidence, not a
+demonstrated cause of the earlier OAuth failure or proof of financial corruption.
+The original CompanyInfo/realm diagnosis above remains separate.
+
+The successor uses one Accounting URL builder with `minorversion=75`, preserves
+request identity and query parameters, and excludes OAuth token/revocation URLs.
+It also rejects malformed provider query/CompanyInfo envelopes with stable error
+codes while retaining additive-field tolerance. Local mocked transport and
+response tests are synthetic, not captured Intuit version-75 evidence. Every
+changed input requires fresh local/hosted gates and independent review; historical
+passes do not approve this successor. Exact-candidate sandbox CompanyInfo, search,
+invoice/InvoiceLink, Payment, RefundReceipt, and CDC compatibility remain unproven.
+
+Source: Intuit's [Accounting API version notice](https://medium.com/intuitdev/changes-to-our-accounting-api-that-may-impact-your-application-c330bd1a06f5),
+published January 21, 2025 and read in full on September 8, 2026. It establishes the
+version-75 floor and additive-field policy; it does not establish QuoteFly's live
+provider behavior. No provider settings, accounting records, or deployments change
+merely because this correction is committed.
 
 ## Engineering changes under qualification
 
