@@ -83,7 +83,7 @@
     "prisma": "^6.19.3",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.8"
+    "vitest": "4.1.11"
   },
   "engines": {
     "node": ">=22.0.0"
