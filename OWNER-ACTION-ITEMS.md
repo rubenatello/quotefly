@@ -73,10 +73,13 @@ QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS=
 
 ### QuickBooks app setup
 
-Monitoring follow-up (2026-09-05): the owner selected an in-app Integration Health
-panel plus an independently operated watcher rather than a Better Stack subscription.
-Implementation does not purchase hosting or enable alerts. Choose an independent
-alert mailbox and host, then complete the [owned-monitoring setup and receipt checklist](docs/runbooks/quickbooks-owned-monitoring.md).
+Monitoring follow-up (2026-09-08): the owner selected a private outside-QuoteFly
+email recipient and declined additional paid hosting. The in-app Integration Health
+panel remains part of the candidate; the dedicated paid watcher-host proposal is
+withdrawn. The manual GitHub Actions/native-email alternative requires protected
+environment setup, reviewed code and actual canary/failure/recovery receipt before
+use; it does not enable recurring alerts merely by existing. Complete the
+[owned-monitoring setup and receipt checklist](docs/runbooks/quickbooks-owned-monitoring.md).
 The `6239f742f04b2815082c0fc7f108727a3e916258` staging owner connect, status refresh,
 disconnect, and empty Intuit integrations-screen observations passed on September 5;
 these do not establish accounting automation or the full replay/fault-recovery matrix.

@@ -39,8 +39,11 @@ It is not configured or delivery-verified merely by being proposed:
 - Identify automation incidents by a restricted label and expected bot identity,
   not title alone: ordinary users can open same-title issues in the public repository.
   Test that an untrusted same-title issue cannot suppress or resolve a real incident.
-  Preserve a first-clean marker and require two consecutive completed clean runs
-  before recovery; any unhealthy run resets it. Assign/mention the responder on
+  Authenticate canonical issue state with a domain-separated HMAC under the dedicated
+  monitor bearer; the shared Actions bot identity alone is not workflow provenance.
+  Preserve a first-clean marker and require two consecutive completed clean probe
+  cycles started at least 60 seconds apart within the same workflow run/attempt
+  before recovery; any unhealthy cycle or new run resets it. Assign/mention the responder on
   trusted incident, escalation, recovery, and canary notifications.
 - Verify that GitHub notifications actually reach the owner-selected verified email
   address, including a canary and failure/recovery receipt. An issue, mention, or
@@ -62,11 +65,92 @@ It is not configured or delivery-verified merely by being proposed:
 See [GitHub runner billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions),
 [schedule limitations](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule),
 and [email notification configuration](https://docs.github.com/en/subscriptions-and-notifications/get-started/configuring-notifications).
-No paid host is necessary to qualify this alternative, but actual implementation,
+No paid host is necessary to qualify this alternative, but implementation review,
 secret provisioning, notification receipt, failure/recovery drills and independent
 review remain required. It does not waive Intuit access, accounting/webhook/CDC proof,
 backup/restore, or the final release decision. Until qualified, keep the unused
 standalone watcher and external signal sink pairs unconfigured.
+
+## GitHub attended implementation — not enabled by source changes
+
+`scripts/quickbooks-github-monitor.mjs` and
+`.github/workflows/quickbooks-attended-monitor.yml` implement the attended subset.
+There is no schedule, installation, new hosting service, application mutation,
+Intuit accounting call, or direct email-provider credential in this workflow. Production
+scheduling remains separate, unimplemented work. Local fixtures do not establish
+GitHub permissions, hosted execution, email routing, inbox delivery or QBO readiness.
+
+Before its first authorized live dispatch:
+
+1. Register the workflow on the repository's default branch through a separately
+   reviewed, authorized change; GitHub requires its presence there before manual
+   dispatch from another ref. Do not merge or deploy the entire QBO candidate merely
+   to register a monitor. Review the exact candidate and protect the approved ref with required review and
+   restricted writes. Configure separate `qbo-monitor-staging` and, only when ready,
+   `qbo-monitor-production` GitHub environments restricted to their approved refs.
+   Production only accepts `refs/heads/main`; staging cannot receive production secrets.
+2. Set environment variable `QBO_MONITOR_APPROVED_REF` to its exact protected branch
+   ref. Keep `QBO_MONITOR_ENABLED` absent/false until all setup and risk acceptance
+   below is complete. These variables are nonsecret; they are not evidence of actual
+   branch protection or owner approval by themselves.
+3. Through safe secret editors, provision environment secret `QBO_MONITOR_BEARER`
+   paired only with that API runtime's dedicated `QUICKBOOKS_MONITOR_BEARER`. Never
+   copy application, database, Intuit, or Resend keys. The monitor bearer is exposed
+   only to the attended probe/state-adapter step. The job-scoped GitHub token has
+   contents-read/issues-write permissions; pinned checkout/setup actions share that
+   job trust boundary, and checkout does not persist credentials. The dedicated bearer
+   authenticates state with HMAC-SHA256 and a monitor-specific domain separator;
+   no secret value is included in issue bodies, comments or logs.
+4. A maintainer pre-creates the environment's `qbo-monitor-staging` or
+   `qbo-monitor-production` label. Ordinary public users cannot apply that label.
+   The monitor requires exact Actions bot ID/type, label, environment, canonical
+   bounded schema and valid MAC; another workflow's unsigned bot issue is rejected.
+5. Confirm the named repository owner receives assigned/mentioned issue notifications
+   at the selected private mailbox. Obtain acceptance of sanitized public incident
+   metadata and the shared GitHub scheduler/notification dependency. Set the enabled
+   variable only for the qualified environment and dispatch from its approved ref.
+6. With the owner present, use a five-minute canary run; record its exact SHA, UTC
+   times, notification receipt, and attended warning/critical/recovery fixture proof.
+   Stop accounting testing if the workflow stops or alert persistence fails. Do not
+   inject faults into production. No sandbox or production enablement follows from
+   a canary alone. Daily absence detection still requires a named human responder.
+
+Dispatch accepts only `staging` or `production`, canonical integer duration 1–240,
+and a boolean canary request. It samples immediately and then at least 60 seconds
+apart without overlapping or retrying QBO requests. Four bounded requests check
+liveness, database readiness, and both authenticated QBO tiers. Unexpected responses,
+nonempty QBO bodies, redirects, auth/quota failure or timeout become critical, never
+healthy. The workflow is serialized per environment and bounded to 245 minutes.
+Healthy public probes alone do not prove accounting health.
+
+One authenticated state issue is reused per environment, open for an incident and
+closed only after recovery notification is confirmed. Once observed in a run, its
+issue number is pinned; disappearance, unlabeling or replacement stops the run instead
+of silently starting healthy. Cross-run deletion still requires human reconciliation.
+Warning/critical transitions
+notify the owner; continuing incidents remind at most hourly. Requested canaries are
+deduplicated for 24 hours. Recovery needs adjacent complete clean cycles in the same
+run/attempt, at least 60 and at most 180 seconds apart on a monotonic clock. A new or
+retried workflow cannot reuse an aborted run's first-clean observation. A one-cycle
+run cannot recover an existing incident. Recovered attended runs can exit successfully;
+an unresolved incident or monitor/state/notification failure exits nonzero.
+
+Notification UUID and fixed content are committed in signed pending state before
+posting a comment. An ambiguous response fails the run; the next run first reconciles
+exact bot-authored content and UUID before resending or clearing pending. Recovery
+does not close before that confirmation. Conflicting bot comments, malformed/MAC-invalid
+state, duplicate trusted issues, locked issues, bounded pagination overflow or excessive
+comment churn fail closed. Public comments never supply health state. This is bounded
+GitHub notification reconciliation, not a durable email outbox or inbox receipt proof.
+
+Maintain issue/label permissions and preserve the state issue. After bearer rotation,
+old MACs intentionally fail; stop the monitor and reconcile pending notifications
+before an explicitly approved state reinitialization. Never automatically overwrite
+untrusted state. A GitHub outage, disabled/aborted workflow, deleted state issue or
+lost notification can still require manual response; no guaranteed detection SLA is
+claimed. Rollback is to stop dispatching and disable the selected environment variable,
+preserving its issue and pending notifications. Do not change accounting flags or
+webhook verification as a monitoring workaround.
 
 ## What lives where
 

@@ -157,8 +157,9 @@ The successor's restricted Integration Health dashboard and independently operat
 watchdog are documented in [QuoteFly-owned monitoring](docs/runbooks/quickbooks-owned-monitoring.md).
 The owner declined additional paid hosting on September 8. Follow the selected
 mode's secret isolation, rollout, receipt, recovery, and rollback gates before
-relying on alert delivery. The proposed GitHub Actions/email alternative requires
-its own implementation and live evidence; standalone image/host/volume gates apply
+relying on alert delivery. The manual-only GitHub Actions/email implementation requires
+its own exact-candidate review, safe setup and live evidence; its scheduled production
+mode remains unimplemented. Standalone image/host/volume gates apply
 only to the standalone mode. Do not treat a paid monitor server as a prerequisite
 or either mode's code/configuration as proof that alerts actually reach the owner.
 
