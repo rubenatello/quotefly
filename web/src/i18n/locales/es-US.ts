@@ -2108,6 +2108,9 @@ export const esUS = {
       "open": "Revisar eventos de recuperación"
     },
     quickBooksSetup: {
+      connectionVerified: "Conexión verificada",
+      connectionOnlyTitle: "Validación de conexión en pruebas",
+      connectionOnlyDescription: "Esta fase de pruebas solo verifica la conexión de la empresa. Publicar facturas, pagos, webhooks y recuperación requieren habilitación y pruebas por separado; esperar no los habilitará.",
       sectionDescription: "Conecta la empresa correcta de QuickBooks Online, verifica la recuperación y confirma el espacio antes de iniciar la sincronización contable.",
       eyebrow: "QuickBooks® Online",
       description: "Una lista segura de preparación para clientes, artículos, facturas, pagos y recuperación.",

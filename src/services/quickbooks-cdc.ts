@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import type { env } from "../config/env";
+import type { QuickBooksCredentialRuntimeEnv } from "../config/quickbooks-runtime-types";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
   fetchQuickBooksCdc,
@@ -15,7 +15,7 @@ import {
 import { quickBooksWebhookEventId } from "./quickbooks-webhook-inbox";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
 
-type RuntimeEnv = typeof env;
+type RuntimeEnv = QuickBooksCredentialRuntimeEnv;
 
 const CDC_OVERLAP_MS = 2 * 60 * 1000;
 const CDC_INTERVAL_MS = 5 * 60 * 1000;

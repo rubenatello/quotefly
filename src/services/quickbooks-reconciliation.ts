@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
-import type { env } from "../config/env";
+import type { QuickBooksCredentialRuntimeEnv } from "../config/quickbooks-runtime-types";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
   decryptQuickBooksHostedPaymentLink,
@@ -22,7 +22,7 @@ import {
 } from "./quickbooks-credentials";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
 
-type RuntimeEnv = typeof env;
+type RuntimeEnv = QuickBooksCredentialRuntimeEnv;
 
 const MISSING_PROVIDER_INVOICE_REVIEW_CODES = [
   "QUICKBOOKS_INVOICE_DELETED_MANUAL_REVIEW",

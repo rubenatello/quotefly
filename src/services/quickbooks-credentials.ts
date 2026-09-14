@@ -1,6 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
-import type { env } from "../config/env";
+import type { QuickBooksCredentialRuntimeEnv } from "../config/quickbooks-runtime-types";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
   decryptQuickBooksSecret,
@@ -19,7 +19,7 @@ import {
   type QuickBooksConnectionEventContext,
 } from "./quickbooks-connection-events";
 
-type RuntimeEnv = typeof env;
+type RuntimeEnv = QuickBooksCredentialRuntimeEnv;
 
 export type QuickBooksTokenConnection = Readonly<{
   id: string;

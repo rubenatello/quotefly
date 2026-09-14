@@ -899,8 +899,8 @@ export function AdminPage({ session }: AdminPageProps) {
             id="admin-quickbooks"
             step={t("admin.accounting.step")}
             title={t("admin.accounting.title")}
-            description={t("admin.quickBooksSetup.sectionDescription")}
-            actions={quickBooksStatus ? <Badge tone={quickBooksStatus.setup.confirmed ? "emerald" : quickBooksStatus.setup.phase === "UNAVAILABLE" ? "red" : "amber"}>{t(`admin.quickBooksSetup.phases.${quickBooksStatus.setup.phase === "UNAVAILABLE" ? "unavailable" : quickBooksStatus.setup.phase === "NOT_CONNECTED" ? "notConnected" : quickBooksStatus.setup.phase === "ACTION_REQUIRED" ? "actionRequired" : quickBooksStatus.setup.phase === "READY_FOR_CONFIRMATION" ? "readyToConfirm" : "confirmed"}`)}</Badge> : undefined}
+            description={t(quickBooksStatus?.oauthOnlyMode ? "admin.quickBooksSetup.connectionOnlyDescription" : "admin.quickBooksSetup.sectionDescription")}
+            actions={quickBooksStatus ? <Badge tone={quickBooksStatus.setup.confirmed ? "emerald" : quickBooksStatus.setup.phase === "UNAVAILABLE" ? "red" : "amber"}>{t(quickBooksStatus.oauthOnlyMode && quickBooksStatus.setup.phase === "READY_FOR_CONFIRMATION" ? "admin.quickBooksSetup.connectionVerified" : `admin.quickBooksSetup.phases.${quickBooksStatus.setup.phase === "UNAVAILABLE" ? "unavailable" : quickBooksStatus.setup.phase === "NOT_CONNECTED" ? "notConnected" : quickBooksStatus.setup.phase === "ACTION_REQUIRED" ? "actionRequired" : quickBooksStatus.setup.phase === "READY_FOR_CONFIRMATION" ? "readyToConfirm" : "confirmed"}`)}</Badge> : undefined}
           >
             <QuickBooksSetupPanel
               key={session?.tenantId}

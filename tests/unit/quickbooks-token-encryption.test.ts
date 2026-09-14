@@ -199,6 +199,20 @@ describe("QuickBooks hosted payment-link encryption", () => {
 });
 
 describe("QuickBooks OAuth state", () => {
+  it("rejects noncanonical base64 state even when the decoded authentication tag is unchanged", () => {
+    const env = runtimeEnv();
+    const state = createSignedQuickBooksState(env, { tenantId: "tenant", userId: "user", role: "owner" });
+    const parts = state.split(".");
+    const originalTag = parts[2]!;
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const lastIndex = alphabet.indexOf(originalTag.at(-1)!);
+    assert.equal(lastIndex % 16, 0); // A 16-byte tag leaves four unused bits.
+    parts[2] = originalTag.slice(0, -1) + alphabet[lastIndex + 1];
+    assert.deepEqual(Buffer.from(parts[2], "base64url"), Buffer.from(originalTag, "base64url"));
+    assert.equal(verifySignedQuickBooksState(env, parts.join(".")), null);
+    assert.notEqual(verifySignedQuickBooksState(env, state), null);
+  });
+
   it("encrypts internal actor data and fails closed for tampering", () => {
     const env = runtimeEnv();
     const input = {

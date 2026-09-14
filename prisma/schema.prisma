@@ -1999,3 +1999,39 @@ model WorkPreset {
   @@unique([tenantId, serviceType, catalogKey])
   @@index([tenantId, serviceType, deletedAtUtc])
 }
+
+/// Content-free global operational state; never customer or provider content.
+model QuickBooksOperationalAlertState {
+  alertCode String @id @db.VarChar(40)
+  severity String @db.VarChar(10)
+  active Boolean @default(false)
+  incidentGeneration Int @default(0)
+  firstObservedAtUtc DateTime @db.Timestamptz(3)
+  conditionSinceUtc DateTime? @db.Timestamptz(3)
+  lastObservedAtUtc DateTime @db.Timestamptz(3)
+  failureStreak Int @default(0)
+  healthyStreak Int @default(0)
+  lastReminderAtUtc DateTime? @db.Timestamptz(3)
+}
+
+/// Leased fixed-recipient alerts. Runtime cannot delete delivery history.
+model QuickBooksOperationalAlertDelivery {
+  id String @id @default(cuid())
+  dedupeKeyHash String @unique @db.VarChar(64)
+  alertCode String @db.VarChar(40)
+  incidentGeneration Int
+  transition String @db.VarChar(10)
+  severity String @db.VarChar(10)
+  metrics Json
+  configurationHash String @db.VarChar(64)
+  observedAtUtc DateTime @db.Timestamptz(3)
+  status String @default("PENDING") @db.VarChar(20)
+  attemptCount Int @default(0)
+  claimToken String? @db.VarChar(36)
+  claimExpiresAtUtc DateTime? @db.Timestamptz(3)
+  firstAttemptAtUtc DateTime? @db.Timestamptz(3)
+  nextAttemptAtUtc DateTime @db.Timestamptz(3)
+  sentAtUtc DateTime? @db.Timestamptz(3)
+  lastErrorCode String? @db.VarChar(40)
+  @@index([status, nextAttemptAtUtc, observedAtUtc], map: "QuickBooksOperationalAlertDelivery_due_idx")
+}

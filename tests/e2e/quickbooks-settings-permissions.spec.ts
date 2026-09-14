@@ -118,6 +118,24 @@ test("OAuth callback returns to QuickBooks settings and preserves the connection
   await expect(page).toHaveURL(/\/app\/settings#admin-quickbooks$/);
 });
 
+test("connection-only staging does not offer setup confirmation or imply automation will enable by waiting", async ({ context, page, request }) => {
+  const owner = await signUpViaApi(request, "quickbooks-oauth-only-boundary");
+  await addSessionCookie(context, owner);
+  await page.route(`**${quickBooksStatusPath}`, async (route) => {
+    const status = { ...quickBooksStatus(), oauthOnlyMode: true };
+    status.setup.capabilities.canConfirm = false;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(status) });
+  });
+  await page.goto("/app/settings#admin-quickbooks");
+  await expect(page.getByText("Connection verified", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Connection-only staging validation", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Confirm setup", exact: true })).toHaveCount(0);
+  await expect(page.getByText("Finish these workspace setup items", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/waiting will not enable them/).first()).toBeVisible();
+  await page.getByText("Setup checks & diagnostics", { exact: true }).click();
+  await expect(page.getByText("Workspace setup confirmed", { exact: true })).toHaveCount(0);
+});
+
 test("legacy or malformed QuickBooks status keeps Settings usable with a local retry error", async ({ context, page, request }) => {
   const owner = await signUpViaApi(request, "quickbooks-settings-malformed");
   await addSessionCookie(context, owner);

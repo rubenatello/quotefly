@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
-import type { env } from "../config/env";
+import type { QuickBooksCredentialRuntimeEnv } from "../config/quickbooks-runtime-types";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import { fetchQuickBooksPayment, fetchQuickBooksRefundReceipt, QuickBooksProviderError } from "./quickbooks";
 import { getSerializedQuickBooksAccessToken, runQuickBooksProviderRequestWithRefresh } from "./quickbooks-credentials";
@@ -11,7 +11,7 @@ import { claimQuickBooksWebhookEvent, completeQuickBooksWebhookEvent, failQuickB
 
 type ProcessingContext = {
   prisma: PrismaClient;
-  runtimeEnv: typeof env;
+  runtimeEnv: QuickBooksCredentialRuntimeEnv;
   reconcile?: typeof reconcileQuickBooksInvoice;
 };
 

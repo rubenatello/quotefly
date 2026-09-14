@@ -2045,6 +2045,9 @@ export const enUS = {
       "open": "Review recovery events"
     },
     quickBooksSetup: {
+      connectionVerified: "Connection verified",
+      connectionOnlyTitle: "Connection-only staging validation",
+      connectionOnlyDescription: "This staging phase checks the company connection only. Invoice publishing, payments, webhooks, and recovery require separate enablement and testing; waiting will not enable them.",
       sectionDescription: "Connect the correct QuickBooks Online company, verify recovery checks, and confirm the workspace before accounting sync begins.",
       eyebrow: "QuickBooks® Online",
       description: "A secure readiness checklist for customer mapping, item mapping, invoice sync, payments, and recovery.",
