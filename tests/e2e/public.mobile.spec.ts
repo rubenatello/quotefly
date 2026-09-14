@@ -1,5 +1,25 @@
 import { expect, test } from "@playwright/test";
 import { PUBLIC_ROUTE_SEO } from "../../web/src/lib/public-seo-data";
+import { QUICKBOOKS_PUBLIC_STATUS } from "../../web/src/lib/public-integration-data";
+
+test("QuickBooks status and current-feature links remain clear on mobile", async ({ page }) => {
+  await page.route("**/v1/auth/me", (route) => route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "Unauthorized" }) }));
+  await page.goto("/integrations/quickbooks");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(PUBLIC_ROUTE_SEO["/integrations/quickbooks"].heading);
+  await expect(page.getByText(QUICKBOOKS_PUBLIC_STATUS.label, { exact: true })).toBeVisible();
+  await expect(page.getByText(QUICKBOOKS_PUBLIC_STATUS.summary, { exact: true }).first()).toBeVisible();
+  const currentFeatures = page.getByRole("link", { name: "See current features and pricing" });
+  for (const link of [currentFeatures, page.getByRole("link", { name: "Request integration updates" }).first()]) {
+    expect((await link.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+  await currentFeatures.click();
+  await expect(page).toHaveURL(/\/pricing#basic-plan$/);
+  await page.getByRole("link", { name: "Read the QuickBooks integration status and limits" }).click();
+  await expect(page).toHaveURL(/\/integrations\/quickbooks$/);
+  await page.getByRole("link", { name: "Request integration updates" }).first().click();
+  await expect(page).toHaveURL(/\/support#feature-request$/);
+});
 
 test("public navigation, services, legal pages, and consent work on mobile", async ({ page }) => {
   test.setTimeout(90_000);

@@ -43,6 +43,34 @@ test("new V2 models and fields fail closed until they are explicitly reviewed", 
     issue.code === "UNREVIEWED_MODEL" && issue.model === "V2JobAttachment"));
 });
 
+test("QuickBooks replay audit is reviewed restricted tenant authorization evidence, never AI input", () => {
+  const model = getDataClassificationCatalog().models.find((entry) => entry.model === "QuickBooksWebhookReplay");
+  assert.ok(model);
+  assert.equal(model.tenantScope, "required");
+  assert.equal(model.reviewStatus, "REVIEWED");
+  assert.equal(model.defaultClassification, "C4_RESTRICTED");
+  assert.deepEqual(model.fields.map((field) => field.field).sort(), [
+    "actorTenantUserId", "commandHash", "createdAtUtc", "eventId", "id", "priorAttemptCount", "priorFailureCode", "reason", "tenantId",
+  ].sort());
+  for (const field of model.fields) {
+    assert.equal(field.classification, "C4_RESTRICTED", field.field);
+    assert.equal(field.ragStatus, "EXCLUDED", field.field);
+    assert.equal(field.analyticsStatus, "EXCLUDED", field.field);
+    assert.deepEqual(field.requiredAccess, ["restrictedSystemOnly"], field.field);
+    assert.equal(new Set<string>(AI_RAG_ELIGIBLE_FIELDS).has(`${model.model}.${field.field}`), false, field.field);
+  }
+  // Adding provider facts or freeform audit content requires a new explicit
+  // review, even though the existing audit contains only bounded metadata.
+  const inventory = currentInventory();
+  inventory.QuickBooksWebhookReplay = [...inventory.QuickBooksWebhookReplay, "payload", "realmId"];
+  const validation = validateDataGovernanceInventory(inventory);
+  assert.equal(validation.status, "FAILED");
+  for (const field of ["payload", "realmId"]) {
+    assert.ok(validation.issues.some((issue) => issue.code === "UNREVIEWED_FIELD"
+      && issue.model === "QuickBooksWebhookReplay" && issue.field === field));
+  }
+});
+
 test("restricted fields are excluded from RAG while reviewed content fields are eligible", () => {
   const catalog = getDataClassificationCatalog();
   const fields = new Map(

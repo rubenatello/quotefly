@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
-import type { env } from "../config/env";
+import type { QuickBooksCredentialRuntimeEnv, QuickBooksOAuthRuntimeEnv, QuickBooksProviderHttpEnv } from "../config/quickbooks-runtime-types";
 import { z } from "zod";
 
 const ACCOUNTING_SCOPE = "com.intuit.quickbooks.accounting";
@@ -11,7 +11,7 @@ const QUICKBOOKS_HOSTED_LINK_ENVELOPE_VERSION = "qbl1";
 const QUICKBOOKS_HOSTED_LINK_AAD = Buffer.from("quotefly:quickbooks:hosted-payment-link:v1", "utf8");
 const QUICKBOOKS_OAUTH_STATE_ENVELOPE_VERSION = "qbo2";
 
-type RuntimeEnv = typeof env;
+type RuntimeEnv = QuickBooksCredentialRuntimeEnv;
 
 const QuickBooksRefSchema = z.object({
   value: z.string().min(1),
@@ -56,6 +56,9 @@ const QuickBooksInvoiceSchema = z.object({
   AllowOnlineACHPayment: z.boolean().optional(),
   AllowOnlineCreditCardPayment: z.boolean().optional(),
   CurrencyRef: QuickBooksRefSchema.optional(),
+  TxnTaxDetail: z.object({
+    TotalTax: z.number().finite().optional(),
+  }).passthrough().optional(),
   MetaData: z.object({ CreateTime: z.string().optional(), LastUpdatedTime: z.string().optional() }).passthrough().optional(),
   Line: z.array(z.object({
     Description: z.string().optional(),
@@ -65,6 +68,7 @@ const QuickBooksInvoiceSchema = z.object({
       Qty: z.number().finite().optional(),
       UnitPrice: z.number().finite().optional(),
       ItemRef: QuickBooksRefSchema.optional(),
+      TaxCodeRef: QuickBooksRefSchema.optional(),
     }).passthrough().optional(),
   }).passthrough()).optional(),
   LinkedTxn: z.array(QuickBooksLinkedTxnSchema).optional(),
@@ -197,6 +201,7 @@ export type QuickBooksInvoiceEntity = {
   AllowOnlineCreditCardPayment?: boolean;
   MetaData?: { CreateTime?: string; LastUpdatedTime?: string };
   CurrencyRef?: QuickBooksApiRef;
+  TxnTaxDetail?: { TotalTax?: number };
   Line?: Array<{
     Description?: string;
     Amount?: number;
@@ -205,6 +210,7 @@ export type QuickBooksInvoiceEntity = {
       Qty?: number;
       UnitPrice?: number;
       ItemRef?: QuickBooksApiRef;
+      TaxCodeRef?: QuickBooksApiRef;
     };
   }>;
   LinkedTxn?: Array<{ TxnId?: string; TxnType?: string }>;
@@ -311,11 +317,25 @@ export function validateQuickBooksReconciliationInvoice(
   ) {
     throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_FRESHNESS_INVALID", false);
   }
-  return parseQuickBooksEntity(
+  const parsed = parseQuickBooksEntity(
     QuickBooksReconciliationInvoiceSchema,
     value,
     "QUICKBOOKS_INVOICE_RECONCILIATION_RESPONSE_INVALID",
   ) as QuickBooksReconciliationInvoiceEntity;
+  // QuoteFly's current invoice-publish contract is explicitly non-taxable.
+  // Intuit may omit a line code in a canonical response, but an explicit code
+  // other than NON or a nonzero total tax is evidence the provider applied a
+  // different tax treatment and must never update the QuoteFly ledger.
+  if (parsed.TxnTaxDetail?.TotalTax !== undefined && parsed.TxnTaxDetail.TotalTax !== 0) {
+    throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_TAX_UNSUPPORTED", false);
+  }
+  for (const line of parsed.Line ?? []) {
+    const taxCode = line.SalesItemLineDetail?.TaxCodeRef?.value;
+    if (taxCode !== undefined && taxCode !== "NON") {
+      throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_TAX_UNSUPPORTED", false);
+    }
+  }
+  return parsed;
 }
 
 export function classifyQuickBooksProviderFailure(error: unknown): {
@@ -348,11 +368,11 @@ export function isQuickBooksConfigured(runtimeEnv: RuntimeEnv): boolean {
   return runtimeEnv.QUICKBOOKS_CLIENT_ID.trim().length > 0 && runtimeEnv.QUICKBOOKS_CLIENT_SECRET.trim().length > 0;
 }
 
-export function isQuickBooksWebhookConfigured(runtimeEnv: RuntimeEnv): boolean {
+export function isQuickBooksWebhookConfigured(runtimeEnv: { QUICKBOOKS_WEBHOOK_VERIFIER: string }): boolean {
   return runtimeEnv.QUICKBOOKS_WEBHOOK_VERIFIER.trim().length > 0;
 }
 
-export function getQuickBooksRedirectUri(runtimeEnv: RuntimeEnv): string {
+export function getQuickBooksRedirectUri(runtimeEnv: Pick<QuickBooksOAuthRuntimeEnv, "API_URL" | "QUICKBOOKS_REDIRECT_URI">): string {
   if (runtimeEnv.QUICKBOOKS_REDIRECT_URI.trim()) {
     return runtimeEnv.QUICKBOOKS_REDIRECT_URI.trim();
   }
@@ -360,7 +380,7 @@ export function getQuickBooksRedirectUri(runtimeEnv: RuntimeEnv): string {
   return `${runtimeEnv.API_URL.replace(/\/$/, "")}/v1/integrations/quickbooks/callback`;
 }
 
-export function getQuickBooksApiBaseUrl(runtimeEnv: RuntimeEnv): string {
+export function getQuickBooksApiBaseUrl(runtimeEnv: Pick<QuickBooksProviderHttpEnv, "QUICKBOOKS_ENVIRONMENT">): string {
   return runtimeEnv.QUICKBOOKS_ENVIRONMENT === "sandbox"
     ? "https://sandbox-quickbooks.api.intuit.com"
     : "https://quickbooks.api.intuit.com";
@@ -398,7 +418,7 @@ function waitForQuickBooksRetry(delayMs: number) {
 }
 
 async function quickBooksFetch(
-  runtimeEnv: RuntimeEnv,
+  runtimeEnv: QuickBooksProviderHttpEnv,
   url: string,
   init: RequestInit,
   retryRead: boolean,
@@ -486,6 +506,7 @@ export async function queryQuickBooksEntity<T>(
   accessToken: string,
   query: string,
   entityName: string,
+  strictResponse = false,
 ): Promise<T[]> {
   let response: Response;
   try {
@@ -516,6 +537,13 @@ export async function queryQuickBooksEntity<T>(
     throw new QuickBooksProviderError("QUICKBOOKS_QUERY_RESPONSE_INVALID", false, response.status);
   }
 
+  if (strictResponse && (
+    !payload || typeof payload !== "object" || Array.isArray(payload)
+    || !payload.QueryResponse || typeof payload.QueryResponse !== "object" || Array.isArray(payload.QueryResponse)
+    || (payload.QueryResponse[entityName] !== undefined && !Array.isArray(payload.QueryResponse[entityName]))
+  )) {
+    throw new QuickBooksProviderError("QUICKBOOKS_QUERY_RESPONSE_INVALID", false, response.status);
+  }
   const results = payload.QueryResponse?.[entityName];
   return Array.isArray(results) ? results : [];
 }
@@ -865,27 +893,57 @@ export async function fetchQuickBooksItem(
   return item;
 }
 
+const QuickBooksMappingSearchInputSchema = z.object({
+  queryText: z.string().trim().min(2).max(80),
+  limit: z.number().int().min(1).max(25),
+  startPosition: z.number().int().min(1).max(1_000_000),
+});
+
+export type QuickBooksMappingSearchPage<T> = {
+  candidates: T[];
+  page: { startPosition: number; limit: number; hasMore: boolean; nextStartPosition: number | null };
+};
+
+// These are live provider offsets, not a snapshot; mapping selection still needs
+// canonical review. At the position guard, hasMore remains truthful while a null
+// continuation tells the caller to narrow the search.
+function quickBooksMappingSearchPage<T>(results: T[], limit: number, startPosition: number): QuickBooksMappingSearchPage<T> {
+  const hasMore = results.length > limit;
+  return {
+    candidates: results.slice(0, limit),
+    page: {
+      startPosition,
+      limit,
+      hasMore,
+      nextStartPosition: hasMore && startPosition + limit <= 1_000_000 ? startPosition + limit : null,
+    },
+  };
+}
+
 export async function searchQuickBooksCustomers(
   runtimeEnv: RuntimeEnv,
   realmId: string,
   accessToken: string,
   queryText: string,
   limit: number,
-): Promise<QuickBooksCustomerEntity[]> {
-  const normalized = normalizeQuickBooksName(queryText, 80);
-  const boundedLimit = Math.min(25, Math.max(1, Math.trunc(limit)));
+  startPosition = 1,
+): Promise<QuickBooksMappingSearchPage<QuickBooksCustomerEntity>> {
+  const input = QuickBooksMappingSearchInputSchema.parse({ queryText, limit, startPosition });
+  const normalized = normalizeQuickBooksName(input.queryText, 80);
   const results = await queryQuickBooksEntity<unknown>(
     runtimeEnv,
     realmId,
     accessToken,
-    `SELECT * FROM Customer WHERE DisplayName LIKE '%${escapeQuickBooksQueryValue(normalized)}%' AND Active = true MAXRESULTS ${boundedLimit}`,
+    `SELECT * FROM Customer WHERE DisplayName LIKE '%${escapeQuickBooksQueryValue(normalized)}%' AND Active = true STARTPOSITION ${startPosition} MAXRESULTS ${limit + 1}`,
     "Customer",
+    true,
   );
-  return results.map((result) => parseQuickBooksEntity(
-    QuickBooksCustomerSchema,
-    result,
+  const candidates = parseQuickBooksEntity(
+    z.array(QuickBooksCustomerSchema.extend({ Active: z.literal(true).optional() })).max(limit + 1),
+    results,
     "QUICKBOOKS_CUSTOMER_QUERY_RESPONSE_INVALID",
-  ));
+  );
+  return quickBooksMappingSearchPage(candidates, limit, startPosition);
 }
 
 export async function searchQuickBooksItems(
@@ -894,21 +952,24 @@ export async function searchQuickBooksItems(
   accessToken: string,
   queryText: string,
   limit: number,
-): Promise<QuickBooksItemEntity[]> {
-  const normalized = normalizeQuickBooksName(queryText, 80);
-  const boundedLimit = Math.min(25, Math.max(1, Math.trunc(limit)));
+  startPosition = 1,
+): Promise<QuickBooksMappingSearchPage<QuickBooksItemEntity>> {
+  const input = QuickBooksMappingSearchInputSchema.parse({ queryText, limit, startPosition });
+  const normalized = normalizeQuickBooksName(input.queryText, 80);
   const results = await queryQuickBooksEntity<unknown>(
     runtimeEnv,
     realmId,
     accessToken,
-    `SELECT * FROM Item WHERE Name LIKE '%${escapeQuickBooksQueryValue(normalized)}%' AND Active = true MAXRESULTS ${boundedLimit}`,
+    `SELECT * FROM Item WHERE Name LIKE '%${escapeQuickBooksQueryValue(normalized)}%' AND Active = true ORDERBY Name STARTPOSITION ${startPosition} MAXRESULTS ${limit + 1}`,
     "Item",
+    true,
   );
-  return results.map((result) => parseQuickBooksEntity(
-    QuickBooksItemSchema,
-    result,
+  const candidates = parseQuickBooksEntity(
+    z.array(QuickBooksItemSchema.extend({ Active: z.literal(true).optional() })).max(limit + 1),
+    results,
     "QUICKBOOKS_ITEM_QUERY_RESPONSE_INVALID",
-  ));
+  );
+  return quickBooksMappingSearchPage(candidates, limit, startPosition);
 }
 
 export async function fetchQuickBooksCdc(
@@ -965,7 +1026,7 @@ export function summarizeQuickBooksInvoice(invoice: QuickBooksInvoiceEntity): Qu
   };
 }
 
-export function buildQuickBooksAuthorizationUrl(runtimeEnv: RuntimeEnv, state: string): string {
+export function buildQuickBooksAuthorizationUrl(runtimeEnv: QuickBooksOAuthRuntimeEnv, state: string): string {
   const url = new URL(QUICKBOOKS_AUTHORIZE_URL);
   url.searchParams.set("client_id", runtimeEnv.QUICKBOOKS_CLIENT_ID);
   url.searchParams.set("redirect_uri", getQuickBooksRedirectUri(runtimeEnv));
@@ -1022,6 +1083,10 @@ export function verifySignedQuickBooksState(runtimeEnv: RuntimeEnv, state: strin
     const authTag = Buffer.from(authTagPart, "base64url");
     const encrypted = Buffer.from(encryptedPart, "base64url");
     if (iv.length !== 12 || authTag.length !== 16 || encrypted.length === 0) return null;
+    // Reject alternate encodings with nonzero unused base64 bits. Every state
+    // generated by QuoteFly has one canonical spelling, including its GCM tag.
+    if (iv.toString("base64url") !== ivPart || authTag.toString("base64url") !== authTagPart
+      || encrypted.toString("base64url") !== encryptedPart) return null;
     const key = createHash("sha256")
       .update("quotefly:quickbooks:oauth-state:qbo2\0", "utf8")
       .update(runtimeEnv.JWT_SECRET, "utf8")
@@ -1041,7 +1106,7 @@ export function verifySignedQuickBooksState(runtimeEnv: RuntimeEnv, state: strin
 }
 
 export async function exchangeQuickBooksAuthorizationCode(
-  runtimeEnv: RuntimeEnv,
+  runtimeEnv: QuickBooksOAuthRuntimeEnv,
   code: string,
 ): Promise<QuickBooksTokenResponse> {
   const body = new URLSearchParams({
@@ -1338,12 +1403,12 @@ export function decryptQuickBooksHostedPaymentLink(runtimeEnv: RuntimeEnv, encry
   throw new Error("QuickBooks hosted payment link payload is invalid.");
 }
 
-export function buildQuickBooksAdminRedirect(runtimeEnv: RuntimeEnv, state: string): string {
+export function buildQuickBooksAdminRedirect(runtimeEnv: { APP_URL: string }, state: string): string {
   return `${runtimeEnv.APP_URL.replace(/\/$/, "")}/app/settings?integrations=${encodeURIComponent(state)}#admin-quickbooks`;
 }
 
 export function verifyQuickBooksWebhookSignature(
-  runtimeEnv: RuntimeEnv,
+  runtimeEnv: { QUICKBOOKS_WEBHOOK_VERIFIER: string },
   payload: string,
   signature: string,
 ): boolean {
