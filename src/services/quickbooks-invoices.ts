@@ -9,6 +9,10 @@ import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
 type Transaction = Prisma.TransactionClient;
 
 const CLAIM_TTL_MS = 2 * 60 * 1000;
+// QuoteFly currently publishes only invoices whose own tax amount is zero.
+// Explicitly override a mapped QuickBooks item's default tax treatment so a
+// taxable catalog item cannot cause Intuit to calculate tax for this release.
+const QUICKBOOKS_NON_TAX_CODE = "NON";
 
 export class QuickBooksInvoiceOperationError extends Error {
   constructor(
@@ -575,6 +579,7 @@ async function loadSyncContext(
             SalesItemLineDetail: {
               Qty: providerPricing.quantity,
               UnitPrice: providerPricing.unitPrice,
+              TaxCodeRef: { value: QUICKBOOKS_NON_TAX_CODE },
               ItemRef: {
                 value: line.quickBooksItemId,
                 name: line.quickBooksItemName,

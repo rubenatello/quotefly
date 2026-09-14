@@ -1244,13 +1244,78 @@ describe("invoice ledger API", () => {
     expect(publish.statusCode).toBe(201);
     expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
     const providerPayload = quickBooksProviderMocks.createInvoice.mock.calls[0]?.[3] as {
-      Line: Array<{ Description: string; Amount: number }>;
+      Line: Array<{
+        Description: string;
+        Amount: number;
+        SalesItemLineDetail: { ItemRef: { value: string }; TaxCodeRef: { value: string } };
+      }>;
     };
     expect(providerPayload.Line).toEqual([
-      expect.objectContaining({ Description: "Snapshot labor", Amount: 200 }),
-      expect.objectContaining({ Description: "Snapshot materials", Amount: 100 }),
+      expect.objectContaining({
+        Description: "Snapshot labor",
+        Amount: 200,
+        SalesItemLineDetail: expect.objectContaining({
+          ItemRef: expect.objectContaining({ value: "qb-item-snapshot-1" }),
+          TaxCodeRef: { value: "NON" },
+        }),
+      }),
+      expect.objectContaining({
+        Description: "Snapshot materials",
+        Amount: 100,
+        SalesItemLineDetail: expect.objectContaining({
+          ItemRef: expect.objectContaining({ value: "qb-item-snapshot-2" }),
+          TaxCodeRef: { value: "NON" },
+        }),
+      }),
     ]);
+    expect(providerPayload.Line).toHaveLength(2);
+    expect(providerPayload.Line.every((line) => line.SalesItemLineDetail.TaxCodeRef.value === "NON")).toBe(true);
+    expect(providerPayload.Line.reduce((sum, line) => sum + line.Amount, 0)).toBe(300);
+    const operation = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
+      where: { tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: invoice.id } },
+      select: { payloadHash: true, providerBalance: true },
+    });
+    expect(operation.payloadHash).toBe(quickBooksInvoiceFingerprint({ ...providerPayload, TotalAmt: 300 }));
+    expect(Number(operation.providerBalance)).toBe(300);
     expect(JSON.stringify(providerPayload)).not.toMatch(/Mutated live quote|Late alternate mutation|Optional alternate excluded/);
+  });
+
+  test("rejects a taxable QuoteFly invoice before any QuickBooks create", async () => {
+    const owner = await signUp("invoice-qb-tax-blocked");
+    const fixture = await createQuickBooksReadyInvoice(owner, "tax-blocked");
+    const nextVersion = fixture.invoice.version + 1;
+    await prisma.invoice.update({
+      where: { id: fixture.invoice.id },
+      data: { taxAmount: 12, totalAmount: 162, balanceDue: 162, version: nextVersion },
+    });
+
+    const preview = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/sync-preview`,
+      headers: { cookie: owner.cookie },
+      payload: {},
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toMatchObject({
+      preview: {
+        ready: false,
+        blockers: expect.arrayContaining(["QUICKBOOKS_TAX_SYNC_UNSUPPORTED"]),
+        reviewBinding: null,
+      },
+    });
+
+    const publish = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": `qb-tax-blocked-${Date.now()}`,
+      },
+      payload: { invoiceVersion: nextVersion, reviewBinding: fixture.reviewBinding },
+    });
+    expect(publish.statusCode).toBe(409);
+    expect(publish.json()).toMatchObject({ code: "QUICKBOOKS_REVIEW_STALE" });
+    expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
   });
 
   test("reconciles fractional invoice lines to the accepted subtotal and publishes consistent QuickBooks math", async () => {
@@ -3302,6 +3367,24 @@ describe("invoice ledger API", () => {
       { label: "nonfinite-total", override: { TotalAmt: Number.POSITIVE_INFINITY, Balance: 150 }, code: "QUICKBOOKS_INVOICE_TOTAL_INVALID" },
       { label: "range-balance", override: { Balance: 151 }, code: "QUICKBOOKS_INVOICE_BALANCE_RANGE_INVALID" },
       { label: "missing-freshness", override: { MetaData: undefined }, code: "QUICKBOOKS_INVOICE_FRESHNESS_INVALID" },
+      { label: "nonzero-total-tax", override: { TxnTaxDetail: { TotalTax: 12 } }, code: "QUICKBOOKS_INVOICE_TAX_UNSUPPORTED" },
+      {
+        label: "explicit-taxable-line-code",
+        override: {
+          Line: [{
+            Amount: 150,
+            Description: "Taxable provider item",
+            DetailType: "SalesItemLineDetail",
+            SalesItemLineDetail: {
+              Qty: 1,
+              UnitPrice: 150,
+              ItemRef: { value: "qb-item-taxable" },
+              TaxCodeRef: { value: "TAX" },
+            },
+          }],
+        },
+        code: "QUICKBOOKS_INVOICE_TAX_UNSUPPORTED",
+      },
     ] as const;
     for (const testCase of cases) {
       const fixture = await createQuickBooksReconciliationFixture(

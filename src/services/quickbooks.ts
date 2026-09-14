@@ -56,6 +56,9 @@ const QuickBooksInvoiceSchema = z.object({
   AllowOnlineACHPayment: z.boolean().optional(),
   AllowOnlineCreditCardPayment: z.boolean().optional(),
   CurrencyRef: QuickBooksRefSchema.optional(),
+  TxnTaxDetail: z.object({
+    TotalTax: z.number().finite().optional(),
+  }).passthrough().optional(),
   MetaData: z.object({ CreateTime: z.string().optional(), LastUpdatedTime: z.string().optional() }).passthrough().optional(),
   Line: z.array(z.object({
     Description: z.string().optional(),
@@ -65,6 +68,7 @@ const QuickBooksInvoiceSchema = z.object({
       Qty: z.number().finite().optional(),
       UnitPrice: z.number().finite().optional(),
       ItemRef: QuickBooksRefSchema.optional(),
+      TaxCodeRef: QuickBooksRefSchema.optional(),
     }).passthrough().optional(),
   }).passthrough()).optional(),
   LinkedTxn: z.array(QuickBooksLinkedTxnSchema).optional(),
@@ -197,6 +201,7 @@ export type QuickBooksInvoiceEntity = {
   AllowOnlineCreditCardPayment?: boolean;
   MetaData?: { CreateTime?: string; LastUpdatedTime?: string };
   CurrencyRef?: QuickBooksApiRef;
+  TxnTaxDetail?: { TotalTax?: number };
   Line?: Array<{
     Description?: string;
     Amount?: number;
@@ -205,6 +210,7 @@ export type QuickBooksInvoiceEntity = {
       Qty?: number;
       UnitPrice?: number;
       ItemRef?: QuickBooksApiRef;
+      TaxCodeRef?: QuickBooksApiRef;
     };
   }>;
   LinkedTxn?: Array<{ TxnId?: string; TxnType?: string }>;
@@ -311,11 +317,25 @@ export function validateQuickBooksReconciliationInvoice(
   ) {
     throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_FRESHNESS_INVALID", false);
   }
-  return parseQuickBooksEntity(
+  const parsed = parseQuickBooksEntity(
     QuickBooksReconciliationInvoiceSchema,
     value,
     "QUICKBOOKS_INVOICE_RECONCILIATION_RESPONSE_INVALID",
   ) as QuickBooksReconciliationInvoiceEntity;
+  // QuoteFly's current invoice-publish contract is explicitly non-taxable.
+  // Intuit may omit a line code in a canonical response, but an explicit code
+  // other than NON or a nonzero total tax is evidence the provider applied a
+  // different tax treatment and must never update the QuoteFly ledger.
+  if (parsed.TxnTaxDetail?.TotalTax !== undefined && parsed.TxnTaxDetail.TotalTax !== 0) {
+    throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_TAX_UNSUPPORTED", false);
+  }
+  for (const line of parsed.Line ?? []) {
+    const taxCode = line.SalesItemLineDetail?.TaxCodeRef?.value;
+    if (taxCode !== undefined && taxCode !== "NON") {
+      throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_TAX_UNSUPPORTED", false);
+    }
+  }
+  return parsed;
 }
 
 export function classifyQuickBooksProviderFailure(error: unknown): {
