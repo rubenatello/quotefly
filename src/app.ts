@@ -29,6 +29,7 @@ import { onboardingRoutes } from "./routes/onboarding";
 import { productRoutes } from "./routes/products";
 import { orgUserRoutes } from "./routes/org-users";
 import { quickBooksRoutes } from "./routes/quickbooks";
+import { quickBooksRecoveryRoutes } from "./routes/quickbooks-recovery";
 import { internalAdminRoutes } from "./routes/internal-admin";
 import { internalControlPlaneRoutes } from "./routes/internal-control-plane";
 import { aiAssistantRoutes } from "./routes/ai-assistant";
@@ -396,6 +397,7 @@ export function buildServer() {
   app.register(productRoutes, { prefix: "/v1" });
   app.register(orgUserRoutes, { prefix: "/v1" });
   app.register(quickBooksRoutes, { prefix: "/v1" });
+  app.register(quickBooksRecoveryRoutes, { prefix: "/v1" });
   app.register(aiAssistantRoutes, { prefix: "/v1" });
   app.register(aiBusinessInsightRoutes, { prefix: "/v1" });
   app.register(internalAdminRoutes, { prefix: "/v1" });

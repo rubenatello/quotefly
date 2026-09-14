@@ -40,6 +40,7 @@ export const FORCED_TENANT_RLS_TABLES = [
   "QuickBooksItemMap",
   "QuickBooksInvoiceSync",
   "QuickBooksWebhookEvent",
+  "QuickBooksWebhookReplay",
   "QuickBooksOAuthState",
   "QuickBooksOrphanCredentialRevocation",
   "QuickBooksRealmBinding",

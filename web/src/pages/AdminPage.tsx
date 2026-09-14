@@ -903,6 +903,8 @@ export function AdminPage({ session }: AdminPageProps) {
             actions={quickBooksStatus ? <Badge tone={quickBooksStatus.setup.confirmed ? "emerald" : quickBooksStatus.setup.phase === "UNAVAILABLE" ? "red" : "amber"}>{t(`admin.quickBooksSetup.phases.${quickBooksStatus.setup.phase === "UNAVAILABLE" ? "unavailable" : quickBooksStatus.setup.phase === "NOT_CONNECTED" ? "notConnected" : quickBooksStatus.setup.phase === "ACTION_REQUIRED" ? "actionRequired" : quickBooksStatus.setup.phase === "READY_FOR_CONFIRMATION" ? "readyToConfirm" : "confirmed"}`)}</Badge> : undefined}
           >
             <QuickBooksSetupPanel
+              key={session?.tenantId}
+              tenantId={session?.tenantId ?? ""}
               canManage={canManageQuickBooks && quickBooksStatus?.canManage !== false}
               status={quickBooksStatus}
               loading={quickBooksLoading}

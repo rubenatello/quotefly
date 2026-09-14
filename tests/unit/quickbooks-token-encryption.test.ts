@@ -24,6 +24,7 @@ let refreshQuickBooksAccessToken: typeof import("../../src/services/quickbooks.j
 let QuickBooksProviderError: typeof import("../../src/services/quickbooks.js").QuickBooksProviderError;
 let QUICKBOOKS_INVOICE_LINK_MINOR_VERSION: typeof import("../../src/services/quickbooks.js").QUICKBOOKS_INVOICE_LINK_MINOR_VERSION;
 let searchQuickBooksCustomers: typeof import("../../src/services/quickbooks.js").searchQuickBooksCustomers;
+let searchQuickBooksItems: typeof import("../../src/services/quickbooks.js").searchQuickBooksItems;
 let classifyQuickBooksWorkerFailure: typeof import("../../src/services/quickbooks-worker-failures.js").classifyQuickBooksWorkerFailure;
 let QuickBooksReconciliationError: typeof import("../../src/services/quickbooks-reconciliation.js").QuickBooksReconciliationError;
 let isQuickBooksReauthorizationError: typeof import("../../src/services/quickbooks-credentials.js").isQuickBooksReauthorizationError;
@@ -49,6 +50,7 @@ before(async () => {
     QUICKBOOKS_INVOICE_LINK_MINOR_VERSION,
     QuickBooksProviderError,
     searchQuickBooksCustomers,
+    searchQuickBooksItems,
     verifySignedQuickBooksState,
   } = await import("../../src/services/quickbooks.js"));
   ({ classifyQuickBooksWorkerFailure } = await import("../../src/services/quickbooks-worker-failures.js"));
@@ -402,6 +404,125 @@ describe("QuickBooks provider response validation", () => {
       "QUICKBOOKS_CUSTOMER_QUERY_RESPONSE_INVALID",
       () => searchQuickBooksCustomers(env, "realm", "token", "customer", 10),
     );
+  });
+
+  it("pages customer matches with lookahead without losing the first match of the next page", async () => {
+    const originalFetch = globalThis.fetch;
+    const queries: string[] = [];
+    const responses = [
+      { QueryResponse: { Customer: [
+        { Id: "11", DisplayName: "O'Neil A", Active: true },
+        { Id: "12", DisplayName: "O'Neil B", Active: true },
+        { Id: "13", DisplayName: "O'Neil C", Active: true },
+      ] } },
+      { QueryResponse: { Customer: [{ Id: "13", DisplayName: "O'Neil C", Active: true }] } },
+    ];
+    globalThis.fetch = async (_url, init) => {
+      queries.push(String(init?.body));
+      return Response.json(responses.shift());
+    };
+    try {
+      const first = await searchQuickBooksCustomers(runtimeEnv(), "realm", "token", "O'Neil", 2);
+      assert.deepEqual(first.candidates.map(({ Id }) => Id), ["11", "12"]);
+      assert.deepEqual(first.page, { startPosition: 1, limit: 2, hasMore: true, nextStartPosition: 3 });
+      const second = await searchQuickBooksCustomers(runtimeEnv(), "realm", "token", "O'Neil", 2, first.page.nextStartPosition!);
+      assert.deepEqual(second.candidates.map(({ Id }) => Id), ["13"]);
+      assert.deepEqual(second.page, { startPosition: 3, limit: 2, hasMore: false, nextStartPosition: null });
+      assert.deepEqual(queries, [
+        "SELECT * FROM Customer WHERE DisplayName LIKE '%O\\'Neil%' AND Active = true STARTPOSITION 1 MAXRESULTS 3",
+        "SELECT * FROM Customer WHERE DisplayName LIKE '%O\\'Neil%' AND Active = true STARTPOSITION 3 MAXRESULTS 3",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("sorts item lookup pages by the supported Name field and treats an exact-sized or empty last page as terminal", async () => {
+    const originalFetch = globalThis.fetch;
+    const queries: string[] = [];
+    const responses = [
+      { QueryResponse: { Item: [
+        { Id: "1", Name: "Service A", Active: true },
+        { Id: "2", Name: "Service B", Active: true },
+      ] } },
+      { QueryResponse: {} },
+    ];
+    globalThis.fetch = async (_url, init) => {
+      queries.push(String(init?.body));
+      return Response.json(responses.shift());
+    };
+    try {
+      const exact = await searchQuickBooksItems(runtimeEnv(), "realm", "token", "Service", 2, 11);
+      assert.equal(exact.candidates.length, 2);
+      assert.deepEqual(exact.page, { startPosition: 11, limit: 2, hasMore: false, nextStartPosition: null });
+      const empty = await searchQuickBooksItems(runtimeEnv(), "realm", "token", "Service", 2, 13);
+      assert.deepEqual(empty.candidates, []);
+      assert.deepEqual(empty.page, { startPosition: 13, limit: 2, hasMore: false, nextStartPosition: null });
+      assert.deepEqual(queries, [
+        "SELECT * FROM Item WHERE Name LIKE '%Service%' AND Active = true ORDERBY Name STARTPOSITION 11 MAXRESULTS 3",
+        "SELECT * FROM Item WHERE Name LIKE '%Service%' AND Active = true ORDERBY Name STARTPOSITION 13 MAXRESULTS 3",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("rejects malformed mapping pages including invalid lookahead records instead of reporting no more matches", async () => {
+    const env = runtimeEnv();
+    for (const search of [searchQuickBooksCustomers, searchQuickBooksItems]) {
+      const entity = search === searchQuickBooksCustomers ? "Customer" : "Item";
+      for (const payload of [null, {}, { QueryResponse: null }, { QueryResponse: [] }, { QueryResponse: { [entity]: {} } }]) {
+        await rejectsMalformedPayload(payload, "QUICKBOOKS_QUERY_RESPONSE_INVALID", () => search(env, "realm", "token", "search", 1));
+      }
+      for (const records of [
+        [{ Id: "valid" }, { Id: 123 }],
+        [{ Id: "inactive", Active: false }],
+        [{ Id: "1" }, { Id: "2" }, { Id: "too-many" }],
+      ]) {
+        await rejectsMalformedPayload(
+          { QueryResponse: { [entity]: records } },
+          `QUICKBOOKS_${entity.toUpperCase()}_QUERY_RESPONSE_INVALID`,
+          () => search(env, "realm", "token", "search", 1),
+        );
+      }
+    }
+  });
+
+  it("validates mapping pagination and query bounds before sending any provider request", async () => {
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = async () => { calls += 1; return Response.json({ QueryResponse: {} }); };
+    try {
+      for (const search of [searchQuickBooksCustomers, searchQuickBooksItems]) {
+        for (const start of [0, -1, 1.1, 1_000_001, Infinity, NaN]) {
+          await assert.rejects(() => search(runtimeEnv(), "realm", "token", "search", 10, start));
+        }
+        for (const limit of [0, -1, 1.1, 26, Infinity, NaN]) {
+          await assert.rejects(() => search(runtimeEnv(), "realm", "token", "search", limit));
+        }
+        for (const query of ["a", "  ", "a".repeat(81)]) {
+          await assert.rejects(() => search(runtimeEnv(), "realm", "token", query, 10));
+        }
+      }
+      assert.equal(calls, 0);
+      const upper = await searchQuickBooksCustomers(runtimeEnv(), "realm", "token", "search", 25, 1_000_000);
+      assert.deepEqual(upper.page, { startPosition: 1_000_000, limit: 25, hasMore: false, nextStartPosition: null });
+      assert.equal(calls, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps observed more matches visible at the position guard without returning an invalid continuation", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => Response.json({ QueryResponse: { Customer: [{ Id: "1" }, { Id: "2" }] } });
+    try {
+      const result = await searchQuickBooksCustomers(runtimeEnv(), "realm", "token", "search", 1, 1_000_000);
+      assert.equal(result.candidates.length, 1);
+      assert.deepEqual(result.page, { startPosition: 1_000_000, limit: 1, hasMore: true, nextStartPosition: null });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("reads a canonical RefundReceipt and includes refund transactions in the bounded CDC response", async () => {

@@ -247,6 +247,9 @@ function reviewBindingForContext(
       reconciliationFingerprint: context.payloadHash,
       connectionId: context.connection.id,
       realmId: context.connection.realmId,
+      failedAttempt: context.operation?.status === "FAILED"
+        ? { id: context.operation.id, attempt: context.operation.attemptCount, failure: context.operation.lastFailureCode }
+        : null,
     }), "utf8")
     .digest("base64url");
 }
@@ -684,6 +687,21 @@ export async function getQuickBooksInvoiceSyncPreview(
   );
 }
 
+/** Only explicit provider rejections or a pre-call authorization failure are
+ * eligible. Timeouts, unknown outcomes, and any retained provider identity must
+ * stay in reconciliation, even if an inconsistent row is marked FAILED. */
+export function quickBooksInvoiceRetryAvailable(operation: QuickBooksInvoiceOperationPublic): boolean {
+  return operation.status === "FAILED"
+    && !operation.providerInvoiceId
+    && !operation.providerSyncToken
+    && !operation.providerInvoiceLink
+    && operation.providerBalance === null
+    && !operation.succeededAtUtc
+    && !operation.lastReconciledAtUtc
+    && !operation.claimExpiresAtUtc
+    && ["AUTHORIZATION_CHANGED", "QUICKBOOKS_HTTP_400", "QUICKBOOKS_HTTP_401", "QUICKBOOKS_HTTP_403", "QUICKBOOKS_HTTP_404", "QUICKBOOKS_HTTP_422"].includes(operation.lastFailureCode ?? "");
+}
+
 export async function claimQuickBooksInvoicePublish(
   transaction: Transaction,
   access: AccessContext,
@@ -693,6 +711,7 @@ export async function claimQuickBooksInvoicePublish(
     idempotencyKey: string;
     reviewBinding: string;
     reviewSecret: string;
+    retryFailed?: boolean;
     paymentReview?: QuickBooksHostedPaymentReview;
   },
 ): Promise<QuickBooksInvoicePublishClaim> {
@@ -715,7 +734,14 @@ export async function claimQuickBooksInvoicePublish(
     );
   }
 
-  if (context.operation) {
+  const retryFailed = Boolean(params.retryFailed && context.operation && quickBooksInvoiceRetryAvailable(context.operation));
+  if (params.retryFailed && (!context.operation || (context.operation.status === "FAILED" && !retryFailed))) {
+    throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_RETRY_UNSAFE", "This operation cannot be retried. Reconcile any uncertain provider result first.");
+  }
+  if (retryFailed && reusedCommand) {
+    throw new QuickBooksInvoiceOperationError(409, "IDEMPOTENCY_KEY_REUSED", "Use a new command after reviewing the failed invoice.");
+  }
+  if (context.operation && !retryFailed) {
     if (context.operation.status === "SUCCEEDED") {
       return {
         duplicate: true,
@@ -809,13 +835,12 @@ export async function claimQuickBooksInvoicePublish(
   const claimToken = randomBytes(32).toString("hex");
   const providerRequestId = randomUUID();
   const claimExpiresAtUtc = new Date(now.getTime() + CLAIM_TTL_MS);
-  const operation = await transaction.quickBooksInvoiceOperation.create({
-    data: {
+  const operationData = {
       tenantId: access.tenantId,
       invoiceId: params.invoiceId,
       quickBooksConnectionId: context.connection.id,
       requestedByTenantUserId: access.tenantUserId,
-      status: "PROCESSING",
+      status: "PROCESSING" as const,
       commandKeyHash,
       payloadHash: context.payloadHash,
       providerRealmId: context.connection.realmId,
@@ -824,14 +849,22 @@ export async function claimQuickBooksInvoicePublish(
       providerDocNumber: context.providerDocNumber,
       allowOnlineAchPayment: context.paymentReview.allowOnlineAchPayment,
       allowOnlineCardPayment: context.paymentReview.allowOnlineCardPayment,
-      attemptCount: 1,
+      attemptCount: (context.operation?.attemptCount ?? 0) + 1,
       reconciliationCount: 0,
       processingStartedAtUtc: now,
       claimExpiresAtUtc,
       lastAttemptAtUtc: now,
-    },
-    select: QuickBooksInvoiceOperationPublicSelect,
-  });
+  };
+  const operation = retryFailed && context.operation
+    ? await transaction.quickBooksInvoiceOperation.update({
+        where: { id: context.operation.id },
+        data: { ...operationData, failedAtUtc: null, lastFailureCode: null },
+        select: QuickBooksInvoiceOperationPublicSelect,
+      })
+    : await transaction.quickBooksInvoiceOperation.create({
+        data: operationData,
+        select: QuickBooksInvoiceOperationPublicSelect,
+      });
 
   await transaction.invoiceEvent.create({
     data: {
@@ -1089,6 +1122,9 @@ export async function claimQuickBooksInvoiceReconciliation(
   const context = await loadSyncContext(transaction, access, invoiceId);
   if (!context.operation) {
     throw new QuickBooksInvoiceOperationError(404, "QUICKBOOKS_OPERATION_NOT_FOUND", "No QuickBooks invoice operation exists for this invoice.");
+  }
+  if (["QUICKBOOKS_INVOICE_DELETED_MANUAL_REVIEW", "QUICKBOOKS_INVOICE_NOT_FOUND_MANUAL_REVIEW"].includes(context.operation.lastFailureCode ?? "")) {
+    throw new QuickBooksInvoiceOperationError(409, context.operation.lastFailureCode!, "The QuickBooks invoice was deleted or could not be found. Review it with your accountant before changing this record.");
   }
   if (
     context.operation.status === "SUCCEEDED"

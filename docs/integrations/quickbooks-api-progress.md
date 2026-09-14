@@ -1,8 +1,10 @@
 # QuickBooks API Progress
 
-Last updated: 2026-09-02
+Last updated: 2026-09-13
 
-Status: Hosted-payment and reconciliation engineering candidate in progress. Provider workflows remain default-off, unavailable to customers, and unapproved for sandbox or production enablement.
+Status: Hosted-payment and reconciliation engineering candidate in progress. Owner-confirmed OAuth connection succeeded on isolated staging. Accounting operations remain disabled there; production provider workflows remain default-off and unavailable to customers.
+
+Current implementation and evidence are tracked in the [September 13 release candidate](quickbooks-release-candidate-2026-09-13.md). Connection proof does not establish invoice, payment, webhook, or recovery behavior against Intuit.
 
 The acceptance contract is [QuickBooks Hosted Payments And Reconciliation](quickbooks-hosted-payments-reconciliation.md). That contract defines the authoritative workflow, security boundary, state projection, recovery behavior, and evidence required before enablement.
 
@@ -12,7 +14,7 @@ The acceptance contract is [QuickBooks Hosted Payments And Reconciliation](quick
 - Export accounting data through the QuickBooks-friendly CSV workflow.
 - Allow current owners/admins to inspect local QuickBooks configuration state or disconnect locally stored credentials.
 
-QuoteFly does not currently offer customer-available QuickBooks Online connection, invoice creation, hosted-payment delivery, invoice/payment reconciliation, tax sync, or webhook automation. No Intuit sandbox result, QuickBooks Payments eligibility, production app approval, or production provider operation is claimed.
+QuoteFly does not currently offer customer-available QuickBooks Online connection, invoice creation, hosted-payment delivery, invoice/payment reconciliation, tax sync, or webhook automation. The owner verified the sandbox company connection in staging. QuickBooks Payments eligibility, sandbox accounting operations, production app approval, and production provider operations remain unverified.
 
 ## Engineering candidate
 

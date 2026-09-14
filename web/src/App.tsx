@@ -24,6 +24,7 @@ import { useLocale } from "./i18n";
 
 const LandingPage = lazy(() => import("./pages/LandingPage").then((module) => ({ default: module.LandingPage })));
 const PricingPage = lazy(() => import("./pages/PricingPage").then((module) => ({ default: module.PricingPage })));
+const QuickBooksIntegrationPage = lazy(() => import("./pages/QuickBooksIntegrationPage").then((module) => ({ default: module.QuickBooksIntegrationPage })));
 const ServicesPage = lazy(() => import("./pages/ServicesPage").then((module) => ({ default: module.ServicesPage })));
 const SolutionsPage = lazy(() => import("./pages/SolutionsPage").then((module) => ({ default: module.SolutionsPage })));
 const LandscapingSolutionsPage = lazy(() => import("./pages/LandscapingSolutionsPage").then((module) => ({ default: module.LandscapingSolutionsPage })));
@@ -129,6 +130,7 @@ function MarketingLayout({
           <Routes>
             <Route index element={<LandingPage onOpenAuth={onOpenAuth} />} />
             <Route path="pricing" element={<PricingPage onOpenAuth={onOpenAuth} />} />
+            <Route path="integrations/quickbooks" element={<QuickBooksIntegrationPage />} />
             <Route path="services" element={<ServicesPage onOpenAuth={onOpenAuth} />} />
             <Route path="solutions" element={<SolutionsPage onOpenAuth={onOpenAuth} />} />
             <Route path="solutions/landscaping" element={<LandscapingSolutionsPage onOpenAuth={onOpenAuth} />} />

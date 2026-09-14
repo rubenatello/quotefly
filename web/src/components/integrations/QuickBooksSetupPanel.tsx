@@ -14,10 +14,12 @@ import { useTranslation } from "react-i18next";
 import type { QuickBooksSetupCheckKey, QuickBooksSetupPhase, QuickBooksStatusPayload } from "../../lib/api";
 import { Alert, Badge, Button, Card } from "../ui";
 import { QuickBooksSetupGuide } from "./QuickBooksSetupGuide";
+import { QuickBooksRecoveryPanel } from "./QuickBooksRecoveryPanel";
 
 type QuickBooksAction = "connect" | "confirm" | "disconnect" | null;
 
 type QuickBooksSetupPanelProps = {
+  tenantId: string;
   canManage: boolean;
   status: QuickBooksStatusPayload | null;
   loading: boolean;
@@ -74,6 +76,7 @@ function formatDateTime(value: string | null | undefined, locale: string, fallba
 }
 
 export function QuickBooksSetupPanel({
+  tenantId,
   canManage,
   status,
   loading,
@@ -87,6 +90,8 @@ export function QuickBooksSetupPanel({
   const { t, i18n } = useTranslation();
   const [guideOpen, setGuideOpen] = useState(false);
   const guideTriggerRef = useRef<HTMLButtonElement>(null);
+  const diagnosticsRef = useRef<HTMLDetailsElement>(null);
+  const [recoveryCount, setRecoveryCount] = useState(0);
 
   function closeGuide() {
     setGuideOpen(false);
@@ -225,7 +230,14 @@ export function QuickBooksSetupPanel({
         </div>
       ) : null}
 
-      <details className="mt-5 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4">
+      {recoveryCount > 0 && <div className="mt-5"><Alert tone="warning">
+        <p>{t("admin.quickBooksRecovery.attention", { count: recoveryCount })}</p>
+        <Button variant="outline" className="mt-2 min-h-11 sm:min-h-11" onClick={() => {
+          if (diagnosticsRef.current) diagnosticsRef.current.open = true;
+          document.getElementById("quickbooks-recovery")?.focus();
+        }}>{t("admin.quickBooksRecovery.open")}</Button>
+      </Alert></div>}
+      <details ref={diagnosticsRef} className="mt-5 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4">
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 py-3 text-sm font-semibold text-[var(--qf-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qf-focus)]">
           <span>{t("admin.quickBooksSetup.diagnosticsTitle")}</span>
           <span className="text-xs font-medium text-[var(--qf-text-muted)]">{t("admin.quickBooksSetup.diagnosticsHint")}</span>
@@ -305,6 +317,7 @@ export function QuickBooksSetupPanel({
           </div>
         </aside>
       </div>
+      <QuickBooksRecoveryPanel tenantId={tenantId} canManage={canManage} status={status} onAvailabilityChange={setRecoveryCount} />
       </details>
       </Card>
       <QuickBooksSetupGuide

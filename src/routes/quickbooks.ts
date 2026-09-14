@@ -7,6 +7,7 @@ import { buildAccessContext } from "../lib/access-policy";
 import { getJwtClaims } from "../lib/auth";
 import { buildTenantEntitlements } from "../lib/subscription";
 import { withTenantRlsContext } from "../lib/tenant-rls";
+import { lockQuickBooksConnection, lockQuickBooksLifecycleParents } from "../services/quickbooks-locks";
 import {
   buildQuickBooksAdminRedirect,
   buildQuickBooksAuthorizationUrl,
@@ -53,6 +54,7 @@ import {
   markQuickBooksInitialReconciliationRequired,
   quickBooksInvoiceLinkAvailable,
   quickBooksInvoiceReconciliationAvailable,
+  quickBooksInvoiceRetryAvailable,
   QuickBooksInvoiceOperationError,
   QuickBooksInvoiceOperationPublicSelect,
   retainCreatedQuickBooksInvoiceForReconciliation,
@@ -114,6 +116,7 @@ const QuickBooksBillingEmailReviewSchema = z.preprocess(
 const QuickBooksInvoicePublishBodySchema = z.object({
   invoiceVersion: z.number().int().min(1),
   reviewBinding: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  retryFailed: z.boolean().optional().default(false),
   billingEmail: QuickBooksBillingEmailReviewSchema,
   allowOnlineAchPayment: z.boolean().optional().default(false),
   allowOnlineCardPayment: z.boolean().optional().default(false),
@@ -139,6 +142,7 @@ const QuickBooksItemMappingReviewBodySchema = z.object({
 const QuickBooksMappingSearchBodySchema = z.object({
   query: z.string().trim().min(2).max(80),
   limit: z.number().int().min(1).max(25).optional().default(10),
+  startPosition: z.number().int().min(1).max(1_000_000).optional().default(1),
 }).strict();
 
 const QuickBooksSetupConfirmationBodySchema = z.object({
@@ -391,6 +395,7 @@ function serializeQuickBooksInvoiceOperation(operation: QuickBooksInvoiceOperati
     },
     paymentLinkAvailable: quickBooksInvoiceLinkAvailable(operation),
     reconciliationAvailable: quickBooksInvoiceReconciliationAvailable(operation),
+    retryAvailable: quickBooksInvoiceRetryAvailable(operation),
   };
 }
 
@@ -862,6 +867,9 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       });
       const stateHash = createHash("sha256").update(state, "utf8").digest("hex");
       const credentialLifecycleBlocked = await withTenantRlsContext(app.prisma, claims.tenantId, async (transaction) => {
+        await lockQuickBooksLifecycleParents(transaction, claims.tenantId, access.tenantUserId);
+        await transaction.$queryRaw(Prisma.sql`SELECT "id" FROM "User" WHERE "id" = ${claims.userId} FOR KEY SHARE`);
+        await lockQuickBooksConnection(transaction, claims.tenantId);
         const now = new Date();
         await transaction.$queryRaw(Prisma.sql`
           SELECT 1::int AS "locked"
@@ -1143,34 +1151,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             )
           ) acquired
         `);
-        const currentConnection = await transaction.quickBooksConnection.findUnique({
-          where: { tenantId: verifiedState.tenantId },
-          select: {
-            id: true,
-            realmId: true,
-            status: true,
-            accessTokenEncrypted: true,
-            refreshTokenEncrypted: true,
-            disconnectedAtUtc: true,
-            disconnectRequestedAtUtc: true,
-            tokenRefreshClaimHash: true,
-            setupConfirmedAtUtc: true,
-            setupConfirmedByTenantUserId: true,
-            lastSyncAtUtc: true,
-            lastWebhookAtUtc: true,
-            deletedAtUtc: true,
-            realmBinding: { select: { active: true } },
-            _count: {
-              select: {
-                customerMaps: true,
-                itemMaps: true,
-                invoiceSyncs: true,
-                invoiceOperations: true,
-                webhookEvents: true,
-              },
-            },
-          },
-        });
+        await transaction.$queryRaw(Prisma.sql`SELECT "id" FROM "Tenant" WHERE "id" = ${verifiedState.tenantId} FOR UPDATE`);
          // Lock the exact selected-tenant actor, user, and tenant rows before
          // persisting credentials. A concurrent demotion/deletion must either
          // commit first and be observed here, or wait until this authorization
@@ -1220,6 +1201,35 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
          ) {
            throw new QuickBooksCredentialLifecycleBlockedError();
          }
+        await transaction.$queryRaw(Prisma.sql`SELECT "id" FROM "QuickBooksConnection" WHERE "tenantId" = ${verifiedState.tenantId} FOR UPDATE`);
+        const currentConnection = await transaction.quickBooksConnection.findUnique({
+          where: { tenantId: verifiedState.tenantId },
+          select: {
+            id: true,
+            realmId: true,
+            status: true,
+            accessTokenEncrypted: true,
+            refreshTokenEncrypted: true,
+            disconnectedAtUtc: true,
+            disconnectRequestedAtUtc: true,
+            tokenRefreshClaimHash: true,
+            setupConfirmedAtUtc: true,
+            setupConfirmedByTenantUserId: true,
+            lastSyncAtUtc: true,
+            lastWebhookAtUtc: true,
+            deletedAtUtc: true,
+            realmBinding: { select: { active: true } },
+            _count: {
+              select: {
+                customerMaps: true,
+                itemMaps: true,
+                invoiceSyncs: true,
+                invoiceOperations: true,
+                webhookEvents: true,
+              },
+            },
+          },
+        });
         const switchingRealm = Boolean(
           currentConnection && currentConnection.realmId !== callbackRealmId,
         );
@@ -1496,6 +1506,8 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         app.prisma,
         claims.tenantId,
         async (transaction) => {
+          await lockQuickBooksLifecycleParents(transaction, claims.tenantId, access.tenantUserId);
+          await lockQuickBooksConnection(transaction, claims.tenantId);
           await transaction.$queryRaw(Prisma.sql`
             SELECT 1::int AS "locked"
             FROM (
@@ -1580,15 +1592,16 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       try {
         const candidates = await runQuickBooksProviderRequest(
           connection,
-          (accessToken) => searchQuickBooksCustomers(app.env, connection.realmId, accessToken, query.query, query.limit),
+          (accessToken) => searchQuickBooksCustomers(app.env, connection.realmId, accessToken, query.query, query.limit, query.startPosition),
         );
         reply.header("Cache-Control", "private, no-store");
         return {
-          candidates: candidates.map((customer) => ({
+          candidates: candidates.candidates.map((customer) => ({
             quickBooksCustomerId: customer.Id,
             displayName: customer.DisplayName ?? "QuickBooks customer",
             email: customer.PrimaryEmailAddr?.Address ?? null,
           })),
+          page: candidates.page,
         };
       } catch (error) {
         if (sendQuickBooksReauthRequired(reply, error)) return;
@@ -1611,15 +1624,16 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       try {
         const candidates = await runQuickBooksProviderRequest(
           connection,
-          (accessToken) => searchQuickBooksItems(app.env, connection.realmId, accessToken, query.query, query.limit),
+          (accessToken) => searchQuickBooksItems(app.env, connection.realmId, accessToken, query.query, query.limit, query.startPosition),
         );
         reply.header("Cache-Control", "private, no-store");
         return {
-          candidates: candidates.map((item) => ({
+          candidates: candidates.candidates.map((item) => ({
             quickBooksItemId: item.Id,
             name: item.Name ?? "QuickBooks item",
             type: item.Type ?? null,
           })),
+          page: candidates.page,
         };
       } catch (error) {
         if (sendQuickBooksReauthRequired(reply, error)) return;
@@ -1741,6 +1755,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const access = buildAccessContext(request);
       const claims = getJwtClaims(request);
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       const { invoiceId } = QuickBooksInvoiceParamsSchema.parse(request.params);
       const body = QuickBooksInvoicePublishBodySchema.parse(request.body);
       const key = quickBooksIdempotencyKey(request);
@@ -1770,6 +1785,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             idempotencyKey: key,
             reviewBinding: body.reviewBinding,
             reviewSecret: app.env.JWT_SECRET,
+            retryFailed: body.retryFailed,
             paymentReview: {
               billingEmail: body.billingEmail,
               allowOnlineAchPayment: body.allowOnlineAchPayment,
@@ -2027,6 +2043,8 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const access = buildAccessContext(request);
+      const claims = getJwtClaims(request);
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       const { invoiceId } = QuickBooksInvoiceParamsSchema.parse(request.params);
       if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       if (!isQuickBooksConfigured(app.env)) {

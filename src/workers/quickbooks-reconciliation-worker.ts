@@ -5,38 +5,24 @@ import { env } from "../config/env";
 import { prisma } from "../lib/prisma";
 import { assertAiRetrievalRlsReady, withTenantRlsContext } from "../lib/tenant-rls";
 import {
-  fetchQuickBooksPayment,
-  fetchQuickBooksRefundReceipt,
-  QuickBooksProviderError,
-} from "../services/quickbooks";
-import {
   getSerializedQuickBooksAccessToken,
-  isQuickBooksReauthorizationError,
   retryQuickBooksRevocation,
-  runQuickBooksProviderRequestWithRefresh,
 } from "../services/quickbooks-credentials";
 import {
-  pageQuickBooksProviderEntityIds,
   QUICKBOOKS_RECONCILIATIONS_PER_WORK_ITEM,
   recoverQuickBooksChanges,
 } from "../services/quickbooks-cdc";
-import { reconcileQuickBooksInvoice } from "../services/quickbooks-reconciliation";
 import {
   runQuickBooksRetentionForTenant,
   runQuickBooksUnknownRealmQuarantineRetention,
 } from "../services/quickbooks-retention";
-import { classifyQuickBooksWorkerFailure } from "../services/quickbooks-worker-failures";
-import { visitQuickBooksWorkerTenantPage } from "../services/quickbooks-worker-scheduler";
+import { nextQuickBooksWorkerScanAt, visitQuickBooksWorkerTenantPage } from "../services/quickbooks-worker-scheduler";
 import {
   QUICKBOOKS_RECONCILIATION_WORKER_KEY,
   recordWorkerHeartbeat,
   type WorkerHeartbeatStatus,
 } from "../services/worker-heartbeats";
-import {
-  claimQuickBooksWebhookEvent,
-  completeQuickBooksWebhookEvent,
-  failQuickBooksWebhookEvent,
-} from "../services/quickbooks-webhook-inbox";
+import { processQuickBooksWebhookForTenant } from "../services/quickbooks-webhook-processing";
 
 let stopping = false;
 process.on("SIGTERM", () => { stopping = true; });
@@ -112,306 +98,16 @@ function recordProviderWorkflowDuration(
   metrics.providerWorkflowMaxDurationMs = Math.max(metrics.providerWorkflowMaxDurationMs, durationMs);
 }
 
-const WEBHOOK_PROVIDER_WORKLIST_KEY = "quoteflyPendingProviderInvoiceIds";
-const WEBHOOK_INVOICE_WORKLIST_KEY = "quoteflyPendingInvoiceIds";
-
-function webhookPayloadStringArray(payload: Prisma.JsonValue, key: string): string[] | null {
-  if (!payload || Array.isArray(payload) || typeof payload !== "object") return null;
-  const value = (payload as Prisma.JsonObject)[key];
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) return null;
-  return value as string[];
-}
-
-function webhookPayloadWithContinuation(
-  payload: Prisma.JsonValue,
-  remainingProviderInvoiceIds: readonly string[],
-  remainingInvoiceIds: readonly string[],
-): Prisma.JsonObject {
-  const existing = payload && !Array.isArray(payload) && typeof payload === "object"
-    ? payload as Prisma.JsonObject
-    : {};
-  return {
-    ...existing,
-    [WEBHOOK_PROVIDER_WORKLIST_KEY]: [...remainingProviderInvoiceIds],
-    [WEBHOOK_INVOICE_WORKLIST_KEY]: [...remainingInvoiceIds],
-  } as Prisma.JsonObject;
-}
-
-async function persistQuickBooksWebhookWorklist(
-  claim: NonNullable<Awaited<ReturnType<typeof claimQuickBooksWebhookEvent>>>,
-  payload: Prisma.JsonValue,
-  providerInvoiceIds: readonly string[],
-  invoiceIds: readonly string[],
-): Promise<Prisma.JsonObject> {
-  const stablePayload = webhookPayloadWithContinuation(payload, providerInvoiceIds, invoiceIds);
-  const claimTokenHash = createHash("sha256").update(claim.claimToken, "utf8").digest("hex");
-  const persisted = await withTenantRlsContext(prisma, claim.tenantId, (transaction) =>
-    transaction.quickBooksWebhookEvent.updateMany({
-      where: { id: claim.id, tenantId: claim.tenantId, status: "PROCESSING", claimTokenHash },
-      data: { payload: stablePayload },
-    }),
-  );
-  if (persisted.count !== 1) throw new Error("QUICKBOOKS_WEBHOOK_CLAIM_STALE");
-  return stablePayload;
-}
-
-async function invoiceIdsForClaim(claim: Awaited<ReturnType<typeof claimQuickBooksWebhookEvent>>) {
-  if (!claim) return {
-    invoiceIds: [] as string[],
-    remainingProviderInvoiceIds: [] as string[],
-    remainingInvoiceIds: [] as string[],
-    payload: {} as Prisma.JsonValue,
-    trigger: "WEBHOOK" as const,
-  };
-  const event = await withTenantRlsContext(prisma, claim.tenantId, (transaction) =>
-    transaction.quickBooksWebhookEvent.findFirst({
-      where: { id: claim.id, tenantId: claim.tenantId },
-      select: { payload: true },
-    }),
-  );
-  const payload = event?.payload ?? {};
-  const trigger = payload && !Array.isArray(payload) && typeof payload === "object"
-    && (payload as Prisma.JsonObject).quoteflyTrigger === "CDC"
-    ? "CDC" as const
-    : "WEBHOOK" as const;
-  if (claim.eventType === "Invoice") {
-    const invoiceIds = await withTenantRlsContext(prisma, claim.tenantId, (transaction) =>
-      transaction.quickBooksInvoiceOperation.findMany({
-        where: {
-          tenantId: claim.tenantId,
-          quickBooksConnectionId: claim.quickBooksConnectionId,
-          providerInvoiceId: claim.entityId,
-          archivedAtUtc: null,
-        },
-        select: { invoiceId: true },
-        orderBy: { invoiceId: "asc" },
-        take: 1,
-      }).then((rows) => rows.map((row) => row.invoiceId)),
-    );
-    return {
-      invoiceIds,
-      remainingProviderInvoiceIds: [],
-      remainingInvoiceIds: [],
-      payload,
-      trigger,
-    };
-  }
-
-  const connection = { id: claim.quickBooksConnectionId, tenantId: claim.tenantId, realmId: claim.realmId };
-  const invoiceIdsForProviderWorklist = async (
-    providerInvoiceIds: readonly string[],
-    persistBeforeProcessing = false,
-  ) => {
-    const providerPage = pageQuickBooksProviderEntityIds(providerInvoiceIds);
-    const stableProviderInvoiceIds = [
-      ...providerPage.providerEntityIds,
-      ...providerPage.remainingProviderEntityIds,
-    ];
-    const stablePayload = persistBeforeProcessing
-      ? await persistQuickBooksWebhookWorklist(claim, payload, stableProviderInvoiceIds, [])
-      : payload;
-    const invoiceIds = providerPage.providerEntityIds.length === 0
-      ? []
-      : await withTenantRlsContext(prisma, claim.tenantId, (transaction) =>
-          transaction.quickBooksInvoiceOperation.findMany({
-            where: {
-              tenantId: claim.tenantId,
-              quickBooksConnectionId: claim.quickBooksConnectionId,
-              providerInvoiceId: { in: [...providerPage.providerEntityIds] },
-              archivedAtUtc: null,
-            },
-            select: { invoiceId: true },
-            orderBy: { invoiceId: "asc" },
-          }).then((rows) => rows.map((row) => row.invoiceId)),
-        );
-    return {
-      invoiceIds,
-      remainingProviderInvoiceIds: [...providerPage.remainingProviderEntityIds],
-      remainingInvoiceIds: [] as string[],
-      payload: stablePayload,
-      trigger,
-    };
-  };
-  const storedProviderInvoiceIds = webhookPayloadStringArray(payload, WEBHOOK_PROVIDER_WORKLIST_KEY);
-  if (storedProviderInvoiceIds?.length) return invoiceIdsForProviderWorklist(storedProviderInvoiceIds);
-  const storedInvoiceIds = webhookPayloadStringArray(payload, WEBHOOK_INVOICE_WORKLIST_KEY);
-  if (storedInvoiceIds?.length) {
-    const invoicePage = pageQuickBooksProviderEntityIds(storedInvoiceIds);
-    return {
-      invoiceIds: [...invoicePage.providerEntityIds],
-      remainingProviderInvoiceIds: [] as string[],
-      remainingInvoiceIds: [...invoicePage.remainingProviderEntityIds],
-      payload,
-      trigger,
-    };
-  }
-  if (claim.eventType === "RefundReceipt") {
-    const refundReceipt = await runQuickBooksProviderRequestWithRefresh({
-      prisma,
-      runtimeEnv: env,
-      connection,
-      operation: (accessToken) => fetchQuickBooksRefundReceipt(env, claim.realmId, accessToken, claim.entityId),
-    });
-    const linkedPayments = refundReceipt.LinkedTxn.filter((linked) =>
-      linked.TxnType?.trim().toLowerCase() === "payment" && linked.TxnId?.trim()
-    );
-    const linkedInvoices = refundReceipt.LinkedTxn.filter((linked) =>
-      linked.TxnType?.trim().toLowerCase() === "invoice" && linked.TxnId?.trim()
-    );
-    const hasUnsupportedLink = refundReceipt.LinkedTxn.some((linked) => {
-      const type = linked.TxnType?.trim().toLowerCase();
-      return type !== "payment" && type !== "invoice";
-    });
-    if (hasUnsupportedLink || linkedPayments.length !== 1 || linkedInvoices.length !== 1) {
-      throw new QuickBooksProviderError("QUICKBOOKS_REFUND_APPLICATION_UNSUPPORTED", false);
-    }
-    const providerInvoiceId = linkedInvoices[0]!.TxnId!.trim();
-    const payment = await runQuickBooksProviderRequestWithRefresh({
-      prisma,
-      runtimeEnv: env,
-      connection,
-      operation: (accessToken) => fetchQuickBooksPayment(
-        env,
-        claim.realmId,
-        accessToken,
-        linkedPayments[0]!.TxnId!.trim(),
-      ),
-    });
-    const paymentInvoiceIds = new Set((payment.Line ?? [])
-      .flatMap((line) => line.LinkedTxn ?? [])
-      .filter((linked) => linked.TxnType?.trim().toLowerCase() === "invoice" && linked.TxnId?.trim())
-      .map((linked) => linked.TxnId!.trim()));
-    if (!paymentInvoiceIds.has(providerInvoiceId)) {
-      throw new QuickBooksProviderError("QUICKBOOKS_REFUND_PAYMENT_NOT_LINKED_TO_INVOICE", false);
-    }
-    return invoiceIdsForProviderWorklist([providerInvoiceId], true);
-  }
-  if (claim.eventType !== "Payment") {
-    throw new QuickBooksProviderError("QUICKBOOKS_WEBHOOK_ENTITY_UNSUPPORTED", false);
-  }
-  try {
-    const payment = await runQuickBooksProviderRequestWithRefresh({
-      prisma,
-      runtimeEnv: env,
-      connection,
-      operation: (accessToken) => fetchQuickBooksPayment(env, claim.realmId, accessToken, claim.entityId),
-    });
-    const providerInvoiceIds = (payment.Line ?? [])
-      .flatMap((line) => line.LinkedTxn ?? [])
-      .filter((linked) => linked.TxnType === "Invoice" && linked.TxnId)
-      .map((linked) => linked.TxnId as string);
-    return invoiceIdsForProviderWorklist(providerInvoiceIds, true);
-  } catch (error) {
-    if (!(error instanceof QuickBooksProviderError) || error.statusCode !== 404) throw error;
-    const invoiceIds = await withTenantRlsContext(prisma, claim.tenantId, (transaction) =>
-      transaction.invoicePayment.findMany({
-        where: {
-          tenantId: claim.tenantId,
-          provider: "QUICKBOOKS",
-          providerPaymentId: claim.entityId,
-          deletedAtUtc: null,
-        },
-        select: { invoiceId: true },
-        orderBy: { invoiceId: "asc" },
-        distinct: ["invoiceId"],
-        take: 1_001,
-      }).then((rows) => [...new Set(rows.map((row) => row.invoiceId))]),
-    );
-    const invoicePage = pageQuickBooksProviderEntityIds(invoiceIds);
-    const stableInvoiceIds = [...invoicePage.providerEntityIds, ...invoicePage.remainingProviderEntityIds];
-    const stablePayload = await persistQuickBooksWebhookWorklist(claim, payload, [], stableInvoiceIds);
-    return {
-      invoiceIds: [...invoicePage.providerEntityIds],
-      remainingProviderInvoiceIds: [],
-      remainingInvoiceIds: [...invoicePage.remainingProviderEntityIds],
-      payload: stablePayload,
-      trigger,
-    };
-  }
-}
-
-async function requeueQuickBooksWebhookClaim(
-  claim: NonNullable<Awaited<ReturnType<typeof claimQuickBooksWebhookEvent>>>,
-  payload: Prisma.JsonValue,
-  remainingProviderInvoiceIds: readonly string[],
-  remainingInvoiceIds: readonly string[],
-): Promise<boolean> {
-  const claimTokenHash = createHash("sha256").update(claim.claimToken, "utf8").digest("hex");
-  return withTenantRlsContext(prisma, claim.tenantId, async (transaction) => {
-    const result = await transaction.quickBooksWebhookEvent.updateMany({
-      where: {
-        id: claim.id,
-        tenantId: claim.tenantId,
-        status: "PROCESSING",
-        claimTokenHash,
-      },
-      data: {
-        payload: webhookPayloadWithContinuation(payload, remainingProviderInvoiceIds, remainingInvoiceIds),
-        status: "RECEIVED",
-        // A successfully drained page is continuation, not a failed attempt.
-        // Resetting the retry counter prevents legitimate large payments from
-        // exhausting the dead-letter budget solely because they need pages.
-        attemptCount: 0,
-        claimTokenHash: null,
-        claimExpiresAtUtc: null,
-        nextAttemptAtUtc: null,
-        lastError: null,
-      },
-    });
-    return result.count === 1;
-  });
-}
-
-type QuickBooksTenantProcessOutcome = Readonly<{
-  status: "idle" | "processed" | "failed" | "dead";
-  failureCode?: string;
-}>;
-
-async function processTenant(tenantId: string): Promise<QuickBooksTenantProcessOutcome> {
-  const claim = await claimQuickBooksWebhookEvent(prisma, tenantId);
-  if (!claim) return { status: "idle" };
-  try {
-    const work = await invoiceIdsForClaim(claim);
-    for (const invoiceId of work.invoiceIds) {
-      await reconcileQuickBooksInvoice({
-        prisma,
-        runtimeEnv: env,
-        tenantId,
-        invoiceId,
-        trigger: work.trigger,
-        providerOperation: claim.operation,
-        getAccessToken: (connection) => getSerializedQuickBooksAccessToken({ prisma, runtimeEnv: env, connection }),
-      });
-    }
-    if (work.remainingProviderInvoiceIds.length > 0 || work.remainingInvoiceIds.length > 0) {
-      return (await requeueQuickBooksWebhookClaim(
-        claim,
-        work.payload,
-        work.remainingProviderInvoiceIds,
-        work.remainingInvoiceIds,
-      )) ? { status: "processed" } : { status: "failed", failureCode: "QUICKBOOKS_WEBHOOK_CLAIM_STALE" };
-    }
-    if (!(await completeQuickBooksWebhookEvent(prisma, claim))) {
-      return { status: "failed", failureCode: "QUICKBOOKS_WEBHOOK_CLAIM_STALE" };
-    }
-    return { status: "processed" };
-  } catch (error) {
-    const failure = classifyQuickBooksWorkerFailure(error);
-    const outcome = await failQuickBooksWebhookEvent(prisma, claim, failure.code, {
-      retryable: failure.retryable,
-    });
+async function processTenant(tenantId: string) {
+  const outcome = await processQuickBooksWebhookForTenant({ prisma, runtimeEnv: env, tenantId });
+  if (outcome.failureCode) {
     writeWorkerLog("warn", "quickbooks_reconciliation_work_item_failed", {
       tenantRefHash: tenantRefHash(tenantId),
-      eventType: claim.eventType,
-      failureCode: failure.code,
-      retryable: failure.retryable,
-      outcome,
+      failureCode: outcome.failureCode,
+      outcome: outcome.status,
     });
-    return {
-      status: outcome === "DEAD" ? "dead" : "failed",
-      failureCode: failure.code,
-    };
   }
+  return outcome;
 }
 
 async function inspectDueWebhookBacklog(tenantId: string) {
@@ -533,7 +229,7 @@ async function run() {
       revocationAfterTenantId = revocationPage.nextAfterTenantId;
       revocationTenantCount = revocationPage.tenantCount;
       revocationCycleComplete = revocationPage.cycleComplete;
-      nextRevocationScanAt = Date.now() + QUICKBOOKS_REVOCATION_SCAN_INTERVAL_MS;
+      nextRevocationScanAt = nextQuickBooksWorkerScanAt(revocationPage, QUICKBOOKS_REVOCATION_SCAN_INTERVAL_MS, Date.now());
     }
 
     let cdcTenantCount = 0;
@@ -563,7 +259,7 @@ async function run() {
       cdcAfterTenantId = cdcPage.nextAfterTenantId;
       cdcTenantCount = cdcPage.tenantCount;
       cdcCycleComplete = cdcPage.cycleComplete;
-      nextCdcScanAt = Date.now() + QUICKBOOKS_CDC_SCAN_INTERVAL_MS;
+      nextCdcScanAt = nextQuickBooksWorkerScanAt(cdcPage, QUICKBOOKS_CDC_SCAN_INTERVAL_MS, Date.now());
     }
 
     let retentionTenantCount = 0;
@@ -612,7 +308,7 @@ async function run() {
       retentionAfterTenantId = retentionPage.nextAfterTenantId;
       retentionTenantCount = retentionPage.tenantCount;
       retentionCycleComplete = retentionPage.cycleComplete;
-      nextRetentionScanAt = Date.now() + QUICKBOOKS_RETENTION_SCAN_INTERVAL_MS;
+      nextRetentionScanAt = nextQuickBooksWorkerScanAt(retentionPage, QUICKBOOKS_RETENTION_SCAN_INTERVAL_MS, Date.now());
     }
 
     writeWorkerLog("info", "quickbooks_reconciliation_worker_heartbeat", {

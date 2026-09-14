@@ -58,6 +58,7 @@ const REVIEWED_SCHEMA_FIELD_TEXT = {
   QuickBooksItemMap: "createdAt deletedAtUtc id itemKey quickBooksConnectionId quickBooksItemId quickBooksItemName reviewedAtUtc reviewedByTenantUserId reviewVersion sourceType tenantId updatedAt workPresetId",
   QuickBooksInvoiceSync: "createdAt deletedAtUtc id lastAttemptedAtUtc lastError payloadSnapshot quickBooksConnectionId quickBooksDocNumber quickBooksInvoiceId quoteId requestId status syncedAtUtc tenantId updatedAt",
   QuickBooksWebhookEvent: "attemptCount claimExpiresAtUtc claimTokenHash deadAtUtc entityId eventType id lastError nextAttemptAtUtc operation payload processedAtUtc providerUpdatedAtUtc quickBooksConnectionId realmId receivedAtUtc status tenantId webhookEventId",
+  QuickBooksWebhookReplay: "actorTenantUserId commandHash createdAtUtc eventId id priorAttemptCount priorFailureCode reason tenantId",
   QuickBooksOAuthState: "consumedAtUtc createdAt expiresAtUtc id quickBooksConnectionId stateHash tenantId userId",
   QuickBooksOrphanCredentialRevocation: "attemptCount claimExpiresAtUtc claimTokenHash createdAt deadAtUtc dedupeKeyHash id lastAttemptAtUtc lastErrorCode nextAttemptAtUtc refreshTokenEncrypted revokedAtUtc status tenantId updatedAt",
   QuickBooksRealmBinding: "active createdAt id quickBooksConnectionId realmId tenantId updatedAt",
@@ -127,6 +128,10 @@ const MODEL_POLICIES = {
   QuickBooksItemMap: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "Tenant-to-QuickBooks item mapping" },
   QuickBooksInvoiceSync: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "QuickBooks invoice export and synchronization state" },
   QuickBooksWebhookEvent: { defaultClassification: "C4_RESTRICTED", tenantScope: "optional", purpose: "QuickBooks webhook processing envelope" },
+  // Even content-free replay history links a live authorization actor to a
+  // provider-recovery command. Keep every field out of AI/RAG and analytics;
+  // manager API access is a separately authorized, explicitly selected surface.
+  QuickBooksWebhookReplay: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Restricted tenant-scoped immutable owner/admin authorization and webhook recovery audit; no AI or analytics use" },
   QuickBooksOAuthState: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Single-use hashed QuickBooks OAuth callback state" },
   QuickBooksOrphanCredentialRevocation: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Encrypted orphan QuickBooks OAuth credential revocation retry and incident state" },
   QuickBooksRealmBinding: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Minimal tenant-safe QuickBooks webhook realm routing" },

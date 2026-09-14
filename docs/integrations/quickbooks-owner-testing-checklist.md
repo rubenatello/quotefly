@@ -1,6 +1,6 @@
 # QuickBooks Owner Testing Checklist — Paused
 
-Status: Acceptance checklist for a future, separately authorized sandbox run. It is not a production or current launch procedure. Keep `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=false` until every prerequisite is approved.
+Status: Accounting acceptance checklist for a separately authorized sandbox run. Owner-observed OAuth connection proof is complete on isolated staging as of September 13, 2026; the accounting checklist below is not complete. Production provider workflows remain default-off. The staging OAuth-only exception does not enable accounting operations.
 
 Use this with [QuickBooks Hosted Payments And Reconciliation](quickbooks-hosted-payments-reconciliation.md). Mocked tests, local builds, and schema presence are not Intuit sandbox evidence.
 

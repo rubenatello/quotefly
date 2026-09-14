@@ -27,6 +27,7 @@ The worker receives only the least-privileged runtime `DATABASE_URL`; never give
 - exact webhook verifier;
 - the exact same `QUICKBOOKS_TOKEN_ENCRYPTION_KEY` and intentionally managed `QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS` values as the API for this environment; these keys remain independent from `JWT_SECRET`;
 - `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=true`;
+- `QUICKBOOKS_OAUTH_ONLY_MODE=false` for the separately authorized accounting test; the existing staging connection-only configuration must not be mistaken for accounting enablement;
 - `QUICKBOOKS_RECONCILIATION_WORKER_ENABLED=true`;
 - `QUICKBOOKS_CDC_WORKER_ENABLED=false` for the first connection/reconciliation stage;
 - `QUICKBOOKS_HOSTED_PAYMENTS_ENABLED=false` until InvoiceLink and payment eligibility evidence is approved.
@@ -76,6 +77,8 @@ still mandatory before enabling provider workflows.
 9. Turn the provider features back off after the bounded test unless a separate pilot approval says otherwise.
 
 Use [QuickBooks Online sandbox setup](quickbooks-sandbox-setup.md) and [QuickBooks owner testing checklist](quickbooks-owner-testing-checklist.md) for the complete test record.
+
+The September 13 candidate adds manager recovery controls in Settings. Use the paginated recovery list to reach older dead letters, including manual-review events. Correct the cause before replaying a supported event and record the structured reason. A lost response must reuse its original command identity; a known definitive rejection requires a fresh review. Deletion/manual-review events must not be forced back into the queue through direct SQL.
 
 ## Emergency stop and recovery
 

@@ -469,6 +469,7 @@ model Tenant {
   quickBooksItemMaps                    QuickBooksItemMap[]
   quickBooksInvoiceSyncs                QuickBooksInvoiceSync[]
   quickBooksWebhookEvents               QuickBooksWebhookEvent[]
+  quickBooksWebhookReplays              QuickBooksWebhookReplay[]
 
   @@index([createdAt])
   @@index([primaryTrade])
@@ -570,6 +571,7 @@ model TenantUser {
   confirmedQuickBooksSetups      QuickBooksConnection[]       @relation("QuickBooksSetupConfirmer")
   quickBooksConnectionEvents     QuickBooksConnectionEvent[]  @relation("QuickBooksConnectionEventActor")
   quickBooksOAuthStates          QuickBooksOAuthState[]       @relation("QuickBooksOAuthStateActor")
+  quickBooksWebhookReplays       QuickBooksWebhookReplay[]
   assignedActivityTasks          ActivityTask[]               @relation("ActivityTaskAssignee")
   createdActivityTasks           ActivityTask[]               @relation("ActivityTaskCreator")
   completedActivityTasks         ActivityTask[]               @relation("ActivityTaskCompleter")
@@ -1832,6 +1834,24 @@ model QuickBooksWebhookEvent {
   @@index([tenantId, status, nextAttemptAtUtc, claimExpiresAtUtc, receivedAtUtc, id], map: "QuickBooksWebhookEvent_worker_idx")
   @@index([tenantId, status, processedAtUtc, id], map: "QuickBooksWebhookEvent_processed_retention_idx")
   @@index([tenantId, status, deadAtUtc, id], map: "QuickBooksWebhookEvent_dead_retention_idx")
+}
+
+model QuickBooksWebhookReplay {
+  id                 String     @id @default(cuid())
+  tenantId           String
+  actorTenantUserId  String
+  // Immutable original inbox reference; retained after inbox payload expiry.
+  eventId            String     @db.VarChar(191)
+  reason             String     @db.VarChar(32)
+  priorFailureCode   String     @db.VarChar(64)
+  priorAttemptCount  Int
+  commandHash        String     @db.VarChar(64)
+  createdAtUtc       DateTime   @default(now()) @db.Timestamptz(3)
+  tenant             Tenant     @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  actorTenantUser    TenantUser @relation(fields: [actorTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([tenantId, commandHash])
+  @@index([tenantId, eventId, createdAtUtc])
 }
 
 model QuickBooksOAuthState {

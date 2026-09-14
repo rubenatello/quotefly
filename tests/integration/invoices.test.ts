@@ -1455,6 +1455,70 @@ describe("invoice ledger API", () => {
     })).toBe(0);
   });
 
+  test("a safely rejected publish needs explicit fresh review and a new command before retry", async () => {
+    const owner = await signUp("invoice-qb-retry");
+    const fixture = await createQuickBooksReadyInvoice(owner, "retry");
+    const publish = (key: string, reviewBinding: string, retryFailed = false) => app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+      headers: { cookie: owner.cookie, "idempotency-key": key },
+      payload: { invoiceVersion: fixture.invoice.version, reviewBinding, retryFailed },
+    });
+    quickBooksProviderMocks.createInvoice.mockRejectedValueOnce(new QuickBooksProviderError("QUICKBOOKS_HTTP_400", false, 400));
+    const failed = await publish("retry-original-command", fixture.reviewBinding);
+    expect(failed.statusCode).toBe(502);
+    expect(failed.json().operation).toMatchObject({ status: "FAILED", retryAvailable: true });
+    const original = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: fixture.invoice.id } } });
+    const freshReview = await getQuickBooksReviewBinding(owner, fixture.invoice.id);
+    expect(freshReview).not.toBe(fixture.reviewBinding);
+    expect((await publish("retry-without-consent", freshReview)).statusCode).toBe(409);
+    expect((await publish("retry-original-command", freshReview, true)).json().code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect((await publish("retry-stale-review", fixture.reviewBinding, true)).json().code).toBe("QUICKBOOKS_REVIEW_STALE");
+    expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
+    quickBooksProviderMocks.createInvoice.mockResolvedValue({ Id: "qb-invoice-retried", TotalAmt: 150, Balance: 150 });
+    const retried = await publish("retry-confirmed-command", freshReview, true);
+    expect(retried.statusCode).toBe(201);
+    const current = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: original.id } });
+    expect(current.status).toBe("SUCCEEDED");
+    expect(current.attemptCount).toBe(2);
+    expect(current.providerRequestId).not.toBe(original.providerRequestId);
+    expect(await prisma.invoiceEvent.count({ where: { tenantId: owner.tenant.id, invoiceId: fixture.invoice.id, type: "PROVIDER_SYNC_STARTED" } })).toBe(2);
+    expect((await publish("retry-confirmed-command", freshReview, true)).json().duplicate).toBe(true);
+    expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(2);
+  });
+
+  test("an uncertain publish cannot use the failed-publish retry escape hatch", async () => {
+    const owner = await signUp("invoice-qb-uncertain-retry");
+    const fixture = await createQuickBooksReadyInvoice(owner, "uncertain-retry");
+    quickBooksProviderMocks.createInvoice.mockRejectedValue(new QuickBooksProviderError("QUICKBOOKS_HTTP_503", true, 503));
+    const publish = (key: string, retryFailed: boolean) => app.inject({
+      method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+      headers: { cookie: owner.cookie, "idempotency-key": key },
+      payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding, retryFailed },
+    });
+    expect((await publish("uncertain-initial", false)).statusCode).toBe(202);
+    expect((await publish("uncertain-retry-command", true)).statusCode).toBe(409);
+    expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
+  });
+
+  test("demoted managers cannot claim publish or reconciliation with an existing cookie", async () => {
+    const owner = await signUp("invoice-qb-demoted");
+    const fixture = await createQuickBooksReadyInvoice(owner, "demoted");
+    const admin = await addMember(owner, "Demoted QBO Admin", "admin");
+    await prisma.tenantUser.update({ where: { id: admin.membershipId }, data: { role: "member" } });
+    for (const action of ["publish", "reconcile"]) {
+      const response = await app.inject({
+        method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/${action}`,
+        headers: { cookie: admin.cookie, "idempotency-key": `demoted-${action}` },
+        ...(action === "publish" ? { payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding } } : {}),
+      });
+      expect(response.statusCode).toBe(403);
+    }
+    expect(await prisma.quickBooksInvoiceOperation.count({ where: { tenantId: owner.tenant.id } })).toBe(0);
+    expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
+    expect(quickBooksProviderMocks.fetchInvoice).not.toHaveBeenCalled();
+  });
+
   test("publishes once from a durable claim and replays success without a second provider write", async () => {
     const owner = await signUp("invoice-qb-publish");
     const { invoice, connection, reviewBinding } = await createQuickBooksReadyInvoice(owner, "publish");

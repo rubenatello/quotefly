@@ -48,7 +48,7 @@ import { workspacePageFromPath, type WorkspacePage } from "../crm/workspace-navi
 import { KodySparkIcon } from "./KodySparkIcon";
 import { visibleKodyResultEntries } from "./kody-result-display";
 import {
-  KODY_OPEN_EVENT,
+  subscribeKodyOpen,
   KODY_OUTCOME_EVENT,
   type KodyBookingReviewDetail,
   type KodyDispatchReviewDetail,
@@ -1233,10 +1233,8 @@ export function KodyAssistant({
   }, []);
 
   useEffect(() => {
-    const handleOpenKody = (event: Event) => {
-      const detail = (event as CustomEvent<KodyOpenDetail>).detail;
-      if (!detail || typeof detail.prompt !== "string") return;
-      originFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return subscribeKodyOpen(({ detail, origin }) => {
+      originFocusRef.current = origin;
       setOpen(true);
       setError(null);
       setPrompt(detail.prompt);
@@ -1249,10 +1247,7 @@ export function KodyAssistant({
         tool: detail.tool ?? "AUTO",
         currentPage: detail.context?.currentPage ?? currentContextPage,
       });
-    };
-
-    window.addEventListener(KODY_OPEN_EVENT, handleOpenKody);
-    return () => window.removeEventListener(KODY_OPEN_EVENT, handleOpenKody);
+    });
   }, [currentContextPage, track]);
 
   useEffect(() => {

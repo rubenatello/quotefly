@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { WorkspaceRouteLoading } from "./AppLoadingScreen";
@@ -16,6 +16,7 @@ import { DashboardProvider, type DashboardSession } from "./dashboard/DashboardC
 import type { AppSession } from "../lib/app-session";
 import { resolveAiUsagePresentation } from "../lib/ai-credits";
 import { notificationJobPath } from "../lib/notification-display";
+import { clearPendingKodyOpen } from "./ai/kody-events";
 
 const KodyAssistant = lazy(() => import("./ai/KodyAssistant").then((module) => ({ default: module.KodyAssistant })));
 const AiUsageMilestoneNotifier = lazy(() => import("./ai/AiUsageMilestoneNotifier").then((module) => ({ default: module.AiUsageMilestoneNotifier })));
@@ -73,6 +74,12 @@ export function CrmAppLayout({
     session.entitlements?.billingRequired === true &&
     session.entitlements.hasWorkspaceAccess === false &&
     !session.isSuperuser;
+  // Clear before a new workspace's passive subscription can consume an old intent.
+  useLayoutEffect(() => () => clearPendingKodyOpen(), [session.userId, session.tenantId, workspaceLocked]);
+  const handleLogout = () => {
+    clearPendingKodyOpen();
+    onLogout();
+  };
   const billingReturnState = new URLSearchParams(location.search).get("billing");
   const billingSubscriptionConfirmed =
     Boolean(session.subscriptionPlanCode) &&
@@ -129,7 +136,7 @@ export function CrmAppLayout({
     return (
       <BillingRequiredScreen
         session={session}
-        onLogout={onLogout}
+        onLogout={handleLogout}
         onRefreshSession={onRefreshSession}
       />
     );
@@ -156,7 +163,7 @@ export function CrmAppLayout({
       currentPage={currentPage}
       onNavigate={handleNavigate}
       onQuickAction={handleQuickAction}
-      onLogout={onLogout}
+      onLogout={handleLogout}
       fullName={session.fullName}
       email={session.email}
       planName={session.effectivePlanName}
@@ -238,6 +245,7 @@ export function CrmAppLayout({
         <BottomTabBar />
         <Suspense fallback={null}>
           <KodyAssistant
+            key={`${session.tenantId}:${session.userId}`}
             currentPage={currentPage}
             canViewInternalCosts={session.role.trim().toLowerCase() !== "member"}
             aiPaidActionsUnavailable={aiUsage.paidActionsUnavailable}

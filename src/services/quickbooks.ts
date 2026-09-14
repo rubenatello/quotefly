@@ -486,6 +486,7 @@ export async function queryQuickBooksEntity<T>(
   accessToken: string,
   query: string,
   entityName: string,
+  strictResponse = false,
 ): Promise<T[]> {
   let response: Response;
   try {
@@ -516,6 +517,13 @@ export async function queryQuickBooksEntity<T>(
     throw new QuickBooksProviderError("QUICKBOOKS_QUERY_RESPONSE_INVALID", false, response.status);
   }
 
+  if (strictResponse && (
+    !payload || typeof payload !== "object" || Array.isArray(payload)
+    || !payload.QueryResponse || typeof payload.QueryResponse !== "object" || Array.isArray(payload.QueryResponse)
+    || (payload.QueryResponse[entityName] !== undefined && !Array.isArray(payload.QueryResponse[entityName]))
+  )) {
+    throw new QuickBooksProviderError("QUICKBOOKS_QUERY_RESPONSE_INVALID", false, response.status);
+  }
   const results = payload.QueryResponse?.[entityName];
   return Array.isArray(results) ? results : [];
 }
@@ -865,27 +873,57 @@ export async function fetchQuickBooksItem(
   return item;
 }
 
+const QuickBooksMappingSearchInputSchema = z.object({
+  queryText: z.string().trim().min(2).max(80),
+  limit: z.number().int().min(1).max(25),
+  startPosition: z.number().int().min(1).max(1_000_000),
+});
+
+export type QuickBooksMappingSearchPage<T> = {
+  candidates: T[];
+  page: { startPosition: number; limit: number; hasMore: boolean; nextStartPosition: number | null };
+};
+
+// These are live provider offsets, not a snapshot; mapping selection still needs
+// canonical review. At the position guard, hasMore remains truthful while a null
+// continuation tells the caller to narrow the search.
+function quickBooksMappingSearchPage<T>(results: T[], limit: number, startPosition: number): QuickBooksMappingSearchPage<T> {
+  const hasMore = results.length > limit;
+  return {
+    candidates: results.slice(0, limit),
+    page: {
+      startPosition,
+      limit,
+      hasMore,
+      nextStartPosition: hasMore && startPosition + limit <= 1_000_000 ? startPosition + limit : null,
+    },
+  };
+}
+
 export async function searchQuickBooksCustomers(
   runtimeEnv: RuntimeEnv,
   realmId: string,
   accessToken: string,
   queryText: string,
   limit: number,
-): Promise<QuickBooksCustomerEntity[]> {
-  const normalized = normalizeQuickBooksName(queryText, 80);
-  const boundedLimit = Math.min(25, Math.max(1, Math.trunc(limit)));
+  startPosition = 1,
+): Promise<QuickBooksMappingSearchPage<QuickBooksCustomerEntity>> {
+  const input = QuickBooksMappingSearchInputSchema.parse({ queryText, limit, startPosition });
+  const normalized = normalizeQuickBooksName(input.queryText, 80);
   const results = await queryQuickBooksEntity<unknown>(
     runtimeEnv,
     realmId,
     accessToken,
-    `SELECT * FROM Customer WHERE DisplayName LIKE '%${escapeQuickBooksQueryValue(normalized)}%' AND Active = true MAXRESULTS ${boundedLimit}`,
+    `SELECT * FROM Customer WHERE DisplayName LIKE '%${escapeQuickBooksQueryValue(normalized)}%' AND Active = true STARTPOSITION ${startPosition} MAXRESULTS ${limit + 1}`,
     "Customer",
+    true,
   );
-  return results.map((result) => parseQuickBooksEntity(
-    QuickBooksCustomerSchema,
-    result,
+  const candidates = parseQuickBooksEntity(
+    z.array(QuickBooksCustomerSchema.extend({ Active: z.literal(true).optional() })).max(limit + 1),
+    results,
     "QUICKBOOKS_CUSTOMER_QUERY_RESPONSE_INVALID",
-  ));
+  );
+  return quickBooksMappingSearchPage(candidates, limit, startPosition);
 }
 
 export async function searchQuickBooksItems(
@@ -894,21 +932,24 @@ export async function searchQuickBooksItems(
   accessToken: string,
   queryText: string,
   limit: number,
-): Promise<QuickBooksItemEntity[]> {
-  const normalized = normalizeQuickBooksName(queryText, 80);
-  const boundedLimit = Math.min(25, Math.max(1, Math.trunc(limit)));
+  startPosition = 1,
+): Promise<QuickBooksMappingSearchPage<QuickBooksItemEntity>> {
+  const input = QuickBooksMappingSearchInputSchema.parse({ queryText, limit, startPosition });
+  const normalized = normalizeQuickBooksName(input.queryText, 80);
   const results = await queryQuickBooksEntity<unknown>(
     runtimeEnv,
     realmId,
     accessToken,
-    `SELECT * FROM Item WHERE Name LIKE '%${escapeQuickBooksQueryValue(normalized)}%' AND Active = true MAXRESULTS ${boundedLimit}`,
+    `SELECT * FROM Item WHERE Name LIKE '%${escapeQuickBooksQueryValue(normalized)}%' AND Active = true ORDERBY Name STARTPOSITION ${startPosition} MAXRESULTS ${limit + 1}`,
     "Item",
+    true,
   );
-  return results.map((result) => parseQuickBooksEntity(
-    QuickBooksItemSchema,
-    result,
+  const candidates = parseQuickBooksEntity(
+    z.array(QuickBooksItemSchema.extend({ Active: z.literal(true).optional() })).max(limit + 1),
+    results,
     "QUICKBOOKS_ITEM_QUERY_RESPONSE_INVALID",
-  ));
+  );
+  return quickBooksMappingSearchPage(candidates, limit, startPosition);
 }
 
 export async function fetchQuickBooksCdc(

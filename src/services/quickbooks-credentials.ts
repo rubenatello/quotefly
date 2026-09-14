@@ -11,6 +11,7 @@ import {
 } from "./quickbooks";
 import { retryQuickBooksOrphanCredentialRevocation } from "./quickbooks-orphan-revocations";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
+import { lockQuickBooksConnection, lockQuickBooksLifecycleParents, lockQuickBooksTenantParent } from "./quickbooks-locks";
 import {
   currentQuickBooksConnectionGeneration,
   latestQuickBooksDisconnectEventContext,
@@ -376,6 +377,8 @@ export async function getSerializedQuickBooksAccessToken(params: {
     throw new QuickBooksProviderError("QUICKBOOKS_TOKEN_REFRESH_STALE", false);
   } catch (error) {
     await withTenantRlsContext(prisma, connection.tenantId, async (transaction) => {
+      await lockQuickBooksTenantParent(transaction, connection.tenantId);
+      await lockQuickBooksConnection(transaction, connection.tenantId);
       const retainedForRevocation = await transaction.quickBooksConnection.updateMany({
         where: {
           id: liveConnection.id,
@@ -470,6 +473,8 @@ export async function disconnectQuickBooksConnection(params: {
   const now = new Date();
   const claimTokenHash = newCredentialClaimHash();
   const claimedConnection = await withTenantRlsContext(params.prisma, params.tenantId, async (transaction) => {
+    await lockQuickBooksLifecycleParents(transaction, params.tenantId, params.actorTenantUserId);
+    await lockQuickBooksConnection(transaction, params.tenantId);
     const connection = await transaction.quickBooksConnection.findFirst({
       where: { tenantId: params.tenantId, deletedAtUtc: null },
       select: {
@@ -610,6 +615,8 @@ export async function disconnectQuickBooksConnection(params: {
       decryptQuickBooksSecret(params.runtimeEnv, claimedConnection.refreshTokenEncrypted),
     );
     const finalized = await withTenantRlsContext(params.prisma, params.tenantId, async (transaction) => {
+      await lockQuickBooksLifecycleParents(transaction, params.tenantId, claimedConnection.lifecycleContext.actorTenantUserId);
+      await lockQuickBooksConnection(transaction, params.tenantId);
       const updated = await transaction.quickBooksConnection.updateMany({
         where: {
           id: claimedConnection.id,
@@ -648,6 +655,8 @@ export async function disconnectQuickBooksConnection(params: {
     return finalized === 1 ? "disconnected" : "pending";
   } catch {
     await withTenantRlsContext(params.prisma, params.tenantId, async (transaction) => {
+      await lockQuickBooksLifecycleParents(transaction, params.tenantId, claimedConnection.lifecycleContext.actorTenantUserId);
+      await lockQuickBooksConnection(transaction, params.tenantId);
       if (claimedConnection.revocationAttemptCount >= QUICKBOOKS_CONNECTION_REVOCATION_MAX_ATTEMPTS) {
         const terminal = await transaction.quickBooksConnection.updateMany({
           where: {
@@ -715,6 +724,8 @@ export async function retryQuickBooksRevocation(params: {
         : "idle" as const;
   const claimTokenHash = newCredentialClaimHash();
   const connection = await withTenantRlsContext(params.prisma, params.tenantId, async (transaction) => {
+    await lockQuickBooksLifecycleParents(transaction, params.tenantId);
+    await lockQuickBooksConnection(transaction, params.tenantId);
     const now = new Date();
 
     // Recover a disconnect request left behind by a worker that died while a
@@ -847,6 +858,8 @@ export async function retryQuickBooksRevocation(params: {
       decryptQuickBooksSecret(params.runtimeEnv, connection.refreshTokenEncrypted),
     );
     const finalized = await withTenantRlsContext(params.prisma, params.tenantId, async (transaction) => {
+      await lockQuickBooksLifecycleParents(transaction, params.tenantId, connection.lifecycleContext.actorTenantUserId);
+      await lockQuickBooksConnection(transaction, params.tenantId);
       const updated = await transaction.quickBooksConnection.updateMany({
         where: {
           id: connection.id,
@@ -885,6 +898,8 @@ export async function retryQuickBooksRevocation(params: {
     return finalized === 1 ? "revoked" : "retry";
   } catch {
     const directResult = await withTenantRlsContext(params.prisma, params.tenantId, async (transaction) => {
+      await lockQuickBooksLifecycleParents(transaction, params.tenantId, connection.lifecycleContext.actorTenantUserId);
+      await lockQuickBooksConnection(transaction, params.tenantId);
       if (connection.revocationAttemptCount >= QUICKBOOKS_CONNECTION_REVOCATION_MAX_ATTEMPTS) {
         const terminal = await transaction.quickBooksConnection.updateMany({
           where: {
