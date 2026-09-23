@@ -1,0 +1,17 @@
+# QuickBooks tax review contract
+
+The internal tax review contract is a prerequisite for taxable invoice support. It is not connected to a route, provider request, feature flag, or database write. The existing invoice publisher still blocks positive QuoteFly tax and explicitly publishes non-taxable lines.
+
+`src/services/quickbooks-tax-review-contract.ts` validates a deliberately supplied snapshot of the invoice, customer, mappings, provider facts, and distinct origin/destination addresses. The initial address scope is the 50 US states and DC, with USD amounts. Territories, military addresses, exemptions, and unknown customer tax status need separate provider evidence before support is expanded.
+
+The contract binds tenant, quote, invoice/version, customer, connection/realm/generation/environment, transaction date, mapping review versions/timestamps, customer and item provider versions, item tax-classification fingerprints, preference/company fingerprints, addresses, ordered lines, explicit TAXABLE/NON_TAXABLE intent, and exact invoice totals. A caller must obtain these facts under live tenant and manager authorization. Caller-provided fingerprints do not prove trusted origin or freshness.
+
+Money enters as bounded decimal strings matching the existing Decimal(10,2) fields. Validation uses integer cents, including non-negative half-up rounding of quantity times unit price to the line amount. Inconsistent lines are rejected instead of silently changing their quantity or price. This local rounding rule still requires real QuickBooks parity evidence. The provider payload uses bounded JSON numbers only after validation.
+
+The preparatory Estimate payload contains explicit customer/item references, USD, transaction date, ShipFromAddr, ShipAddr, and TAX/NON line codes. It omits manually supplied tax totals, rates, agencies, and internal costs. QuickBooks must calculate the actual tax. Intuit documents transaction address behavior and automatic tax requirements in its [Invoice API reference](https://developer.intuit.com/app/developer/qbo/docs/api/accounting/most-commonly-used/invoice).
+
+Canonical source/payload hashes and an HMAC bind the complete review. Returned data is deeply frozen. Source JSON, payloads, hashes, and bindings are internal business data and must not be logged as content-free operational evidence. Only the separate assessment and fixed failure codes are suitable for that purpose. Every assessment retains `taxCalculationProven: false`, `estimateInvoiceParityProven: false`, and `publishingAuthorized: false`.
+
+There is intentionally no linked Invoice builder yet. The next implementation needs a durable tenant-scoped operation ledger, trusted provider observations, current authorization/review revalidation, separate stable Estimate and Invoice request identities, immediate persistence of returned provider IDs, and reconciliation of ambiguous writes. Before publishing, canonical Estimate and full linked Invoice reads must establish exact customer, address, line, subtotal, tax, total, and link parity. A positive-tax sandbox fixture must produce positive provider-calculated tax; an exempt or zero-tax response cannot substitute for it.
+
+Focused checks run with `tsx --test tests/unit/quickbooks-tax-review-contract.test.ts` and are included in `npm run test:unit`. Passing these local checks does not establish provider compatibility, customer-facing tax support, or production release readiness.
