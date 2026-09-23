@@ -3,6 +3,8 @@ import {
   fetchQuickBooksCompanyTaxInfo,
   fetchQuickBooksTaxPreferences,
   QuickBooksProviderError,
+  type QuickBooksCompanyTaxInfo,
+  type QuickBooksTaxPreferences,
 } from "./quickbooks";
 
 export type QuickBooksTaxCapabilityReason =
@@ -61,36 +63,7 @@ export async function inspectQuickBooksTaxCapabilities(
     // Preserve binding validation before using this company's preferences.
     const company = await fetchQuickBooksCompanyTaxInfo(runtimeEnv, realmId, accessToken);
     const preferences = await fetchQuickBooksTaxPreferences(runtimeEnv, realmId, accessToken);
-    const usCompany = company.Country?.trim().toUpperCase() === "US";
-    const address = company.CompanyAddr;
-    const companyAddressComplete = usCompany
-      && Boolean(address?.Line1?.trim())
-      && Boolean(address?.City?.trim())
-      && /^[A-Z]{2}$/.test(address?.CountrySubDivisionCode?.trim().toUpperCase() ?? "")
-      && /^\d{5}(?:-\d{4})?$/.test(address?.PostalCode?.trim() ?? "")
-      // Intuit may omit the country in a domestic address. Never accept a
-      // conflicting explicit country; the CompanyInfo country is mandatory.
-      && (address?.Country === undefined || address.Country.trim().toUpperCase() === "US");
-    const salesTaxEnabled = preferences.TaxPrefs?.UsingSalesTax === true;
-    const estimatesEnabled = preferences.SalesFormsPrefs?.AllowEstimates === true;
-    const usdHomeCurrency = preferences.CurrencyPrefs?.HomeCurrency?.value === "USD";
-    const reasons: QuickBooksTaxCapabilityReason[] = [];
-    if (!usCompany) reasons.push("US_COMPANY_REQUIRED");
-    if (!companyAddressComplete) reasons.push("COMPANY_ADDRESS_INCOMPLETE");
-    if (!salesTaxEnabled) reasons.push("SALES_TAX_NOT_ENABLED");
-    if (!estimatesEnabled) reasons.push("ESTIMATES_NOT_ENABLED");
-    if (!usdHomeCurrency) reasons.push("USD_HOME_CURRENCY_REQUIRED");
-    return {
-      companyPrerequisitesReady: reasons.length === 0,
-      automatedTaxCalculationProven: false,
-      usCompany,
-      companyAddressComplete,
-      salesTaxEnabled,
-      estimatesEnabled,
-      usdHomeCurrency,
-      progressInvoicingEnabled: preferences.SalesFormsPrefs?.UsingProgressInvoicing ?? null,
-      reasons,
-    };
+    return evaluateQuickBooksTaxCapabilities(company, preferences);
   } catch (error) {
     if (error instanceof QuickBooksProviderError) {
       if (error.code === "QUICKBOOKS_TAX_COMPANY_REALM_MISMATCH") return failedReport("COMPANY_BINDING_MISMATCH");
@@ -103,4 +76,38 @@ export async function inspectQuickBooksTaxCapabilities(
     }
     return failedReport("CAPABILITY_READ_FAILED");
   }
+}
+
+/** Pure evaluation of the strict tax-only provider projections. */
+export function evaluateQuickBooksTaxCapabilities(company: QuickBooksCompanyTaxInfo, preferences: QuickBooksTaxPreferences): QuickBooksTaxCapabilityReport {
+  const usCompany = company.Country?.trim().toUpperCase() === "US";
+  const address = company.CompanyAddr;
+  const companyAddressComplete = usCompany
+    && Boolean(address?.Line1?.trim())
+    && Boolean(address?.City?.trim())
+    && /^[A-Z]{2}$/.test(address?.CountrySubDivisionCode?.trim().toUpperCase() ?? "")
+    && /^\d{5}(?:-\d{4})?$/.test(address?.PostalCode?.trim() ?? "")
+    // Intuit may omit the country in a domestic address. Never accept a
+    // conflicting explicit country; the CompanyInfo country is mandatory.
+    && (address?.Country === undefined || address.Country.trim().toUpperCase() === "US");
+  const salesTaxEnabled = preferences.TaxPrefs?.UsingSalesTax === true;
+  const estimatesEnabled = preferences.SalesFormsPrefs?.AllowEstimates === true;
+  const usdHomeCurrency = preferences.CurrencyPrefs?.HomeCurrency?.value === "USD";
+  const reasons: QuickBooksTaxCapabilityReason[] = [];
+  if (!usCompany) reasons.push("US_COMPANY_REQUIRED");
+  if (!companyAddressComplete) reasons.push("COMPANY_ADDRESS_INCOMPLETE");
+  if (!salesTaxEnabled) reasons.push("SALES_TAX_NOT_ENABLED");
+  if (!estimatesEnabled) reasons.push("ESTIMATES_NOT_ENABLED");
+  if (!usdHomeCurrency) reasons.push("USD_HOME_CURRENCY_REQUIRED");
+  return {
+    companyPrerequisitesReady: reasons.length === 0,
+    automatedTaxCalculationProven: false,
+    usCompany,
+    companyAddressComplete,
+    salesTaxEnabled,
+    estimatesEnabled,
+    usdHomeCurrency,
+    progressInvoicingEnabled: preferences.SalesFormsPrefs?.UsingProgressInvoicing ?? null,
+    reasons,
+  };
 }

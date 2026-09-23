@@ -1322,9 +1322,10 @@ export async function fetchQuickBooksCompanyTaxInfo(
   runtimeEnv: RuntimeEnv,
   realmId: string,
   accessToken: string,
+  deadlineAtMs?: number,
 ): Promise<QuickBooksCompanyTaxInfo> {
   assertQuickBooksCapabilityReadInput(realmId, accessToken);
-  const payload = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, `/companyinfo/${realmId}`);
+  const payload = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, `/companyinfo/${realmId}`, {}, deadlineAtMs);
   const parsed = parseQuickBooksEntity(
     z.object({ CompanyInfo: QuickBooksCompanyTaxInfoSchema }),
     payload,
@@ -1340,9 +1341,10 @@ export async function fetchQuickBooksTaxPreferences(
   runtimeEnv: RuntimeEnv,
   realmId: string,
   accessToken: string,
+  deadlineAtMs?: number,
 ): Promise<QuickBooksTaxPreferences> {
   assertQuickBooksCapabilityReadInput(realmId, accessToken);
-  const payload = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, "/preferences");
+  const payload = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, "/preferences", {}, deadlineAtMs);
   return parseQuickBooksEntity(
     z.object({ Preferences: QuickBooksTaxPreferencesSchema }),
     payload,
@@ -1635,3 +1637,44 @@ export function verifyQuickBooksWebhookSignature(
 }
 
 export const QUICKBOOKS_ACCOUNTING_SCOPE = ACCOUNTING_SCOPE;
+
+// Tax-only projections: never reuse the broad mapping readers for tax decisions.
+export const quickBooksTaxOpaqueIdSchema = z.string().min(1).max(191)
+  .refine((value) => value !== "." && value !== ".." && !/[\s\p{Cc}\p{Cf}]/u.test(value));
+const taxSyncToken = z.string().regex(/^\d{1,64}$/);
+const QuickBooksTaxCustomerSchema = z.object({
+  Id: quickBooksTaxOpaqueIdSchema, SyncToken: taxSyncToken, Active: z.boolean(),
+  Taxable: z.boolean().optional(), TaxExemptionReasonId: quickBooksTaxOpaqueIdSchema.nullable().optional(),
+});
+const QuickBooksTaxItemSchema = z.object({
+  Id: quickBooksTaxOpaqueIdSchema, SyncToken: taxSyncToken, Active: z.boolean(),
+  // Intuit ItemTypeEnum includes desktop variants; only Service is supported here.
+  Type: z.enum(["Assembly", "Category", "Discount", "Fixed Asset", "Group", "Inventory", "NonInventory", "Other Charge", "Payment", "Service", "Subtotal", "Tax", "Tax Group"]),
+  Taxable: z.boolean().optional(),
+  TaxClassificationRef: z.object({ value: quickBooksTaxOpaqueIdSchema }).optional(),
+});
+export type QuickBooksTaxCustomer = z.infer<typeof QuickBooksTaxCustomerSchema>;
+export type QuickBooksTaxItem = z.infer<typeof QuickBooksTaxItemSchema>;
+
+export async function fetchQuickBooksTaxCustomer(runtimeEnv: RuntimeEnv, realmId: string, accessToken: string,
+  customerId: string, deadlineAtMs?: number): Promise<QuickBooksTaxCustomer> {
+  assertQuickBooksCapabilityReadInput(realmId, accessToken);
+  if (!quickBooksTaxOpaqueIdSchema.safeParse(customerId).success) throw new QuickBooksProviderError("QUICKBOOKS_TAX_FACTS_INPUT_INVALID", false);
+  const payload = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, `/customer/${encodeURIComponent(customerId)}`, {}, deadlineAtMs);
+  const { Customer: customer } = parseQuickBooksEntity(z.object({ Customer: QuickBooksTaxCustomerSchema }), payload, "QUICKBOOKS_TAX_CUSTOMER_RESPONSE_INVALID");
+  if (customer.Id !== customerId) throw new QuickBooksProviderError("QUICKBOOKS_TAX_CUSTOMER_ID_MISMATCH", false);
+  if (!customer.Active) throw new QuickBooksProviderError("QUICKBOOKS_TAX_CUSTOMER_INACTIVE", false);
+  return customer;
+}
+
+export async function fetchQuickBooksTaxItem(runtimeEnv: RuntimeEnv, realmId: string, accessToken: string,
+  itemId: string, deadlineAtMs?: number): Promise<QuickBooksTaxItem> {
+  assertQuickBooksCapabilityReadInput(realmId, accessToken);
+  if (!quickBooksTaxOpaqueIdSchema.safeParse(itemId).success) throw new QuickBooksProviderError("QUICKBOOKS_TAX_FACTS_INPUT_INVALID", false);
+  const payload = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, `/item/${encodeURIComponent(itemId)}`, {}, deadlineAtMs);
+  const { Item: item } = parseQuickBooksEntity(z.object({ Item: QuickBooksTaxItemSchema }), payload, "QUICKBOOKS_TAX_ITEM_RESPONSE_INVALID");
+  if (item.Id !== itemId) throw new QuickBooksProviderError("QUICKBOOKS_TAX_ITEM_ID_MISMATCH", false);
+  if (!item.Active) throw new QuickBooksProviderError("QUICKBOOKS_TAX_ITEM_INACTIVE", false);
+  if (item.Type !== "Service") throw new QuickBooksProviderError("QUICKBOOKS_TAX_ITEM_TYPE_UNSUPPORTED", false);
+  return item;
+}

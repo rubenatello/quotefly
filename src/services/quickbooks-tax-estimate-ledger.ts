@@ -265,6 +265,7 @@ function sameAttempt(stored: string | null, token: string) {
  */
 export async function retainTaxEstimateIdentity(prisma: PrismaClient, attempt: AttemptIdentity, providerEstimateId: string) {
   if (!/^[A-Za-z0-9_-]{1,191}$/.test(providerEstimateId)) reject("QUICKBOOKS_TAX_PROVIDER_ID_INVALID");
+  let attemptedConnectionId: string | undefined;
   return withTenantRlsContext(prisma, attempt.tenantId, async (tx) => {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "QuickBooksTaxEstimateOperation"
       WHERE "id" = ${attempt.operationId} AND "tenantId" = ${attempt.tenantId} FOR UPDATE`);
@@ -276,6 +277,7 @@ export async function retainTaxEstimateIdentity(prisma: PrismaClient, attempt: A
       if (operation.providerEstimateId !== providerEstimateId) reject("QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT");
       return { retained: true };
     }
+    attemptedConnectionId = operation.quickBooksConnectionId;
     const now = new Date();
     const updated = await tx.quickBooksTaxEstimateOperation.updateMany({ where: {
       id: operation.id, tenantId: attempt.tenantId, providerEstimateId: null, attemptTokenHash: operation.attemptTokenHash,
@@ -287,6 +289,26 @@ export async function retainTaxEstimateIdentity(prisma: PrismaClient, attempt: A
       if (latest?.providerEstimateId !== providerEstimateId) reject("QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT");
     }
     return { retained: true };
+  }).catch(async (error: unknown) => {
+    if (attemptedConnectionId && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const target = error.meta?.target;
+      const providerIdentityConflict = target === "QbTaxEstimate_connection_provider_estimate_key"
+        || (Array.isArray(target) && target.length === 2
+          && target.includes("quickBooksConnectionId") && target.includes("providerEstimateId"));
+      if (providerIdentityConflict) reject("QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT");
+      // PostgreSQL can omit P2002's target for a column-granted runtime role.
+      // After rollback, confirm only the exact durable conflicting identity;
+      // never classify an unspecified uniqueness failure by its code alone.
+      if (target == null && error.meta?.modelName === "QuickBooksTaxEstimateOperation") {
+        const conflicting = await withTenantRlsContext(prisma, attempt.tenantId, (tx) =>
+          tx.quickBooksTaxEstimateOperation.findFirst({ where: {
+            tenantId: attempt.tenantId, quickBooksConnectionId: attemptedConnectionId,
+            providerEstimateId, id: { not: attempt.operationId },
+          }, select: { id: true } }));
+        if (conflicting) reject("QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT");
+      }
+    }
+    throw error;
   });
 }
 

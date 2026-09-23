@@ -385,11 +385,16 @@ describe("QuickBooks tax Estimate ledger services", () => {
 
   test("an expired lease quarantines durably and never grants another claim", async () => {
     const f = await fixture(); const { row, attempt } = await claimed(f);
-    await prisma.quickBooksTaxEstimateOperation.update({ where: { id: row.id }, data: { lastAttemptAtUtc: new Date(Date.now() - 180_000), claimExpiresAtUtc: new Date(Date.now() - 60_000) } });
-    expect(await claimReviewedTaxEstimate(runtimePrisma, f.actor, row.id)).toEqual({ outcome: "RECONCILIATION_REQUIRED", publishingAuthorized: false });
-    expect(await claimReviewedTaxEstimate(runtimePrisma, f.actor, row.id)).toEqual({ outcome: "NOT_CLAIMED", publishingAuthorized: false });
-    expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: "ESTIMATE_RECONCILIATION_REQUIRED", attemptCount: 1, claimTokenHash: null, claimExpiresAtUtc: null, attemptTokenHash: sha256(attempt.claimToken), lastFailureCode: "QUICKBOOKS_ESTIMATE_RECONCILIATION_REQUIRED" });
-    await retainTaxEstimateIdentity(runtimePrisma, attempt, "late-after-expiry");
+    const original = await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } });
+    // Advance only the service's clock; dispatch evidence must remain immutable.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date(original.claimExpiresAtUtc!.getTime() + 1));
+      expect(await claimReviewedTaxEstimate(runtimePrisma, f.actor, row.id)).toEqual({ outcome: "RECONCILIATION_REQUIRED", publishingAuthorized: false });
+      expect(await claimReviewedTaxEstimate(runtimePrisma, f.actor, row.id)).toEqual({ outcome: "NOT_CLAIMED", publishingAuthorized: false });
+      expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: "ESTIMATE_RECONCILIATION_REQUIRED", attemptCount: 1, claimTokenHash: null, claimExpiresAtUtc: null, attemptTokenHash: sha256(attempt.claimToken), lastAttemptAtUtc: original.lastAttemptAtUtc, lastFailureCode: "QUICKBOOKS_ESTIMATE_RECONCILIATION_REQUIRED" });
+      await retainTaxEstimateIdentity(runtimePrisma, attempt, "late-after-expiry");
+    } finally { vi.useRealTimers(); }
   });
 
   test("late identity survives explicit uncertainty, manager demotion and disconnect without resuming publishing", async () => {
@@ -438,6 +443,62 @@ describe("QuickBooks tax Estimate ledger services", () => {
     }
     await expect(retainTaxEstimateIdentity(runtimePrisma, attempt, "unsafe provider prose\n")).rejects.toMatchObject({ code: "QUICKBOOKS_TAX_PROVIDER_ID_INVALID" });
     expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: "ESTIMATE_PROCESSING", providerEstimateId: null });
+  });
+
+  test.each(["existing", "concurrent"] as const)("a provider Estimate cannot bind to two operations on the same connection (%s identity)", async (mode) => {
+    const f = await fixture();
+    const quote = await prisma.quote.create({ data: { tenantId: f.tenant.id, customerId: f.customer.id, status: "ACCEPTED", serviceType: "PLUMBING", title: "Second synthetic quote", scopeText: "Synthetic", internalCostSubtotal: 10, customerPriceSubtotal: 100, taxAmount: 8, totalAmount: 108 } });
+    const job = await prisma.job.create({ data: { tenantId: f.tenant.id, customerId: f.customer.id, sourceQuoteId: quote.id, jobNumber: 2, title: "Second synthetic job", scopeSnapshot: "Synthetic", serviceType: "PLUMBING", acceptedAtUtc: new Date() } });
+    const invoice = await prisma.invoice.create({ data: { tenantId: f.tenant.id, customerId: f.customer.id, sourceQuoteId: quote.id, jobId: job.id, invoiceNumber: 2, titleSnapshot: "Second synthetic invoice", subtotalAmount: 100, taxAmount: 8, totalAmount: 108, balanceDue: 108 } });
+    const line = await prisma.invoiceLineItem.create({ data: { tenantId: f.tenant.id, invoiceId: invoice.id, description: "Synthetic materials", quantity: 2, unitPrice: 50, lineTotal: 100, position: 0 } });
+    const source = structuredClone(f.source);
+    source.invoiceId = invoice.id; source.invoiceVersion = invoice.version; source.sourceQuoteId = quote.id;
+    source.lines[0].invoiceLineItemId = line.id;
+    const g = { ...f, quote, job, invoice, line, source };
+    let first = await claimed(f); let second = await claimed(g);
+    const providerId = "one-provider-estimate-two-local-operations";
+    if (mode === "concurrent") {
+      const results = await Promise.allSettled([
+        retainTaxEstimateIdentity(runtimePrisma, first.attempt, providerId),
+        retainTaxEstimateIdentity(runtimePrisma, second.attempt, providerId),
+      ]);
+      expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+      const failure = results.find(result => result.status === "rejected");
+      expect(failure?.status === "rejected" && failure.reason).toMatchObject({ code: "QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT" });
+      if (results[0].status === "rejected") [first, second] = [second, first];
+    } else await retainTaxEstimateIdentity(runtimePrisma, first.attempt, providerId);
+    const original = await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: first.row.id } });
+    const secondBefore = await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: second.row.id } });
+    const conflict = await retainTaxEstimateIdentity(runtimePrisma, second.attempt, providerId).then(() => null, (error: unknown) => error);
+    expect(conflict).toMatchObject({ name: "QuickBooksTaxLedgerError", code: "QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT", message: "QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT" });
+    expect(JSON.stringify(conflict)).not.toContain(providerId);
+    expect(JSON.stringify(conflict)).not.toContain(f.connection.id);
+    expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: first.row.id } })).toEqual(original);
+    expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: second.row.id } })).toEqual(secondBefore);
+    expect(await claimReviewedTaxEstimate(runtimePrisma, f.actor, first.row.id)).toEqual({ outcome: "NOT_CLAIMED", publishingAuthorized: false });
+    expect(await claimReviewedTaxEstimate(runtimePrisma, g.actor, second.row.id)).toEqual({ outcome: "NOT_CLAIMED", publishingAuthorized: false });
+    expect(await prisma.quickBooksTaxEstimateOperation.count({ where: { tenantId: f.tenant.id } })).toBe(2);
+    expect(await prisma.quickBooksInvoiceOperation.count({ where: { tenantId: f.tenant.id } })).toBe(0);
+  });
+
+  test("identity retention preserves unrelated Prisma failures instead of translating them", async () => {
+    const f = await fixture(); const { row, attempt } = await claimed(f);
+    const original = await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } });
+    for (const error of [
+      new Prisma.PrismaClientKnownRequestError("Synthetic unrelated uniqueness failure", { code: "P2002", clientVersion: Prisma.prismaVersion.client, meta: { target: ["tenantId", "estimateRequestId"] } }),
+      new Prisma.PrismaClientKnownRequestError("Synthetic unspecified uniqueness failure", { code: "P2002", clientVersion: Prisma.prismaVersion.client, meta: { modelName: "QuickBooksTaxEstimateOperation", target: null } }),
+      new Prisma.PrismaClientKnownRequestError("Synthetic unrelated database failure", { code: "P2025", clientVersion: Prisma.prismaVersion.client, meta: { target: ["quickBooksConnectionId", "providerEstimateId"] } }),
+    ]) {
+      const failingClient = new Proxy(runtimePrisma, { get(target, property) {
+        if (property !== "$transaction") return Reflect.get(target, property);
+        return (action: (tx: Prisma.TransactionClient) => Promise<unknown>) => runtimePrisma.$transaction(async (tx) => {
+          const failure = vi.spyOn(tx.quickBooksTaxEstimateOperation, "updateMany").mockRejectedValueOnce(error);
+          try { return await action(tx); } finally { failure.mockRestore(); }
+        });
+      } });
+      await expect(retainTaxEstimateIdentity(failingClient, attempt, "unrelated-error-id")).rejects.toBe(error);
+    }
+    expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } })).toEqual(original);
   });
 
   test("rotation accepts the configured previous key, preserves prior evidence, and signs new revisions with the current key", async () => {

@@ -160,6 +160,27 @@ describe("QuickBooks tax Estimate restricted ledger schema", () => {
     await runtime(f.tenant.id, (tx) => tx.quickBooksTaxEstimateOperation.update({ where: { id: row.id }, data: { status: "FAILED", failedAtUtc: new Date(), lastFailureCode: "QUICKBOOKS_ESTIMATE_REJECTED" } }));
   });
 
+  test.each(["owner", "runtime"])("%s can set the original dispatch timestamp once but cannot change or clear it", async (role) => {
+    const f = await fixture();
+    const run = <T>(action: (tx: Prisma.TransactionClient) => Promise<T>) => role === "runtime"
+      ? runtime(f.tenant.id, action) : action(prisma);
+    const row = await run((tx) => tx.quickBooksTaxEstimateOperation.create({ data: reviewed(f) }));
+    expect(row.lastAttemptAtUtc).toBeNull();
+    const claimed = await run((tx) => tx.quickBooksTaxEstimateOperation.update({ where: { id: row.id }, data: processing() }));
+    const original = claimed.lastAttemptAtUtc!;
+    for (const lastAttemptAtUtc of [null, new Date(original.getTime() - 1), new Date(original.getTime() + 1)]) {
+      await expect(run((tx) => tx.quickBooksTaxEstimateOperation.update({ where: { id: row.id }, data: { lastAttemptAtUtc } })))
+        .rejects.toThrow(/original dispatch timestamp is write-once/);
+    }
+    await run((tx) => tx.quickBooksTaxEstimateOperation.update({ where: { id: row.id }, data: {
+      lastAttemptAtUtc: original, status: "ESTIMATE_RECONCILIATION_REQUIRED", claimTokenHash: null,
+      claimExpiresAtUtc: null, uncertainAtUtc: new Date(), lastFailureCode: uncertaintyCode,
+    } }));
+    await run((tx) => tx.quickBooksTaxEstimateOperation.update({ where: { id: row.id }, data: { providerEstimateId: "timestamp-preserved-late-id" } }));
+    const saved = await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } });
+    expect(saved).toMatchObject({ lastAttemptAtUtc: original, attemptTokenHash: hash, attemptCount: 1, providerEstimateId: "timestamp-preserved-late-id" });
+  });
+
   test.each(["owner", "runtime"])("%s cannot create or update inconsistent original-attempt evidence", async (role) => {
     const f = await fixture();
     const run = <T>(action: (tx: Prisma.TransactionClient) => Promise<T>) => role === "runtime"
