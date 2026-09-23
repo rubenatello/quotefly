@@ -161,6 +161,9 @@ export async function loadQuickBooksOperationalRow(
             AND revocation."status" IN ('PENDING', 'PROCESSING')
         ) AS "oldestOrphanRevocationPendingAtUtc"
     `),
+    // Concurrent tenant scans can wait for a pooled connection without needing
+    // a longer-running transaction. Keep execution bounded at five seconds.
+    { maxWait: 10_000, timeout: 5_000 },
   );
   const row = rows[0];
   if (!row) throw new Error("QuickBooks operational metrics query returned no row.");

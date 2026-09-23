@@ -51,3 +51,19 @@ Four source files add an unexposed, read-only company/preferences capability hel
 Independent backend and Opera reviews approved this bounded checkpoint for BCP to the staging branch. Full local `npm run verify` passed, including 289 unit tests, build, lint, schema, security checks, evaluations, and dependency audits. An earlier attempt failed because Docker/Redis was stopped; after starting the dedicated test services the complete gate passed. The old Redis port was unavailable, so a separate isolated Redis container uses local port 16379.
 
 Actual sandbox company-country/address and preference representation still need a sanitized read-only fixture before any caller uses the helper. Exact-commit remote CI remains required after push. Hosted services remain on 98c7575; this review is not production or tax-calculation approval.
+
+Checkpoint committed and pushed as `0daffc672966e76d55afd0a826a944e40c795d92`; all four reviewed source files match after CRLF normalization only. Exact-commit CI run 116 (`35898538849`) started. Draft PR #9 was updated and remains unmerged.
+
+## Continued diagnosis and sandbox access
+
+A second original-budget scan failed with fixed classification `TRANSACTION_ACQUIRE_TIMEOUT` (P2028), not transaction execution expiry. An isolated read-only proxy with `maxWait: 10000` and the original `timeout: 5000` completed all 11 tenants/eight observations in 10.074 seconds. The code remediation will change only the health reader's acquisition budget and add fixed diagnostic phase/error codes; SQL, concurrency and tenant isolation stay intact. Hosted monitoring acceptance remains pending.
+
+The user signed into staging. Read-only checks matched the displayed Kelly workspace uniquely to the existing sandbox connection and synthetic acceptance quote. Its local trial had expired, and it has neither Stripe customer nor Stripe subscription. Under the existing isolated sandbox testing authorization, a guarded tenant-scoped fixture update extended only that trial from `2026-09-22T21:31:56.259Z` to `2026-10-07T17:56:13.818Z`. The update required the exact staging environment/origin, sandbox mode, unique fixture match, unchanged prior expiry, trialing status, and absent Stripe bindings. No checkout, payment, production data or subscription was changed. The prior expiry is retained here for restoration.
+
+## Monitor acquisition remediation verification
+
+The bounded fix adds a ten-second acquisition allowance to the operational health row read while explicitly preserving its five-second execution limit. Tenant context binding, SQL and scan concurrency remain unchanged. Monitor failures now emit only allowlisted phases/codes and bounded elapsed time. Sentinel approved this scope with no blocking finding.
+
+Full local `npm run verify:ci` completed with exit 0: 293 main unit tests, 407 database tests across 34 files, builds/lint/schema/security/route inventory, all evaluations, and root/web dependency audits passed. A real PostgreSQL regression holds the sole runtime connection for 2.5 seconds and verifies the tenant-scoped health read completes after waiting beyond the old two-second acquisition limit. Frozen six-source manifest: `.codex_tmp/qbo-monitor-remediation-manifest.json`. Opera independently approved that manifest and the evidence documentation for BCP and isolated staging monitor/API deployment. Hosted deployment/ten-cycle evidence remain pending; provider writes, alert-readiness acceptance, and production are not approved.
+
+Operational limitations still to close before alert-readiness acceptance: persistent monitor cycle failures are recorded while the process stays alive, so Railway crash notifications alone do not detect that condition; additionally 16 serial eight-second delivery timeouts can extend a cycle. These are separate from the proven acquisition issue and are not claimed resolved by this fix.

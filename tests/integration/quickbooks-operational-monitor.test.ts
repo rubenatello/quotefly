@@ -24,6 +24,34 @@ beforeEach(async () => {
 afterAll(async () => { await runtime.$disconnect(); await prisma.$disconnect(); });
 
 describe("durable operational alert transitions", () => {
+  test("tenant health scan tolerates bounded connection acquisition pressure", async () => {
+    const constrainedUrl = new URL(runtimeUrl);
+    constrainedUrl.searchParams.set("connection_limit", "1");
+    const constrainedRuntime = new PrismaClient({ datasources: { db: { url: constrainedUrl.toString() } } });
+    const tenant = await prisma.tenant.create({ data: { name: "Synthetic acquisition fixture", slug: `monitor-acquisition-${Date.now()}` } });
+    let acquired!: () => void;
+    const transactionAcquired = new Promise<void>((resolve) => { acquired = resolve; });
+    try {
+      const holding = constrainedRuntime.$transaction(async (tx) => {
+        acquired();
+        await tx.$queryRaw`SELECT pg_sleep(2.5)::text`;
+      });
+      // Propagate connection failures instead of leaving the rendezvous pending.
+      await Promise.race([transactionAcquired, holding]);
+      const began = performance.now();
+      const [row] = await Promise.all([
+        loadQuickBooksOperationalRow(constrainedRuntime, tenant.id, base),
+        holding,
+      ]);
+      expect(performance.now() - began).toBeGreaterThanOrEqual(2_000);
+      expect(row.webhookOutstandingCount).toBe(0);
+      expect(row.tokenFailureCount).toBe(0);
+    } finally {
+      await constrainedRuntime.$disconnect();
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+    }
+  });
+
   test("concurrent evaluators queue one OPEN; identical/older samples do not advance warnings", async () => {
     expect(await evaluateQuickBooksAlerts(runtime, observations("WARNING"), base, configurationHash)).toBe(0);
     await Promise.all([evaluateQuickBooksAlerts(runtime, observations("WARNING"), base, configurationHash), evaluateQuickBooksAlerts(runtime, observations("WARNING"), at(-60), configurationHash)]);
