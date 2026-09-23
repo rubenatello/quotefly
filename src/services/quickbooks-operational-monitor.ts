@@ -21,10 +21,15 @@ export async function evaluateQuickBooksAlerts(prisma: PrismaClient, observation
   }
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(7412, 619)::text`;
+    // The advisory lock serializes evaluators. Read the eight fixed states once
+    // to avoid eight network round trips inside the five-second transaction.
+    const priorByCode = new Map((await tx.quickBooksOperationalAlertState.findMany({
+      where: { alertCode: { in: [...ALERT_CODES] } },
+    })).map((state) => [state.alertCode, state]));
     let queued = 0;
     for (const sample of observations) {
       let observation = sample;
-      const prior = await tx.quickBooksOperationalAlertState.findUnique({ where: { alertCode: observation.alertCode } });
+      const prior = priorByCode.get(observation.alertCode);
       if (prior && sampledAtUtc.getTime() - prior.lastObservedAtUtc.getTime() < 30_000) continue;
       // Refresh attempts update the connection's updatedAt. Preserve first observed failure
       // independently so a provider retry cannot postpone this operational alert forever.
