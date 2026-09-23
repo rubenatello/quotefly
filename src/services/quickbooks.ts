@@ -1141,6 +1141,72 @@ export async function exchangeQuickBooksAuthorizationCode(
   );
 }
 
+// These capability reads deliberately strip unrelated provider fields. The
+// existing OAuth CompanyInfo contract below remains unchanged.
+const QuickBooksCompanyTaxInfoSchema = z.object({
+  Id: z.string().min(1).max(30),
+  Country: z.string().max(100).optional(),
+  CompanyAddr: z.object({
+    Line1: z.string().max(500).optional(),
+    City: z.string().max(255).optional(),
+    Country: z.string().max(100).optional(),
+    CountrySubDivisionCode: z.string().max(255).optional(),
+    PostalCode: z.string().max(30).optional(),
+  }).optional(),
+});
+
+const QuickBooksTaxPreferencesSchema = z.object({
+  TaxPrefs: z.object({ UsingSalesTax: z.boolean().optional() }).optional(),
+  SalesFormsPrefs: z.object({
+    AllowEstimates: z.boolean().optional(),
+    UsingProgressInvoicing: z.boolean().optional(),
+  }).optional(),
+  CurrencyPrefs: z.object({
+    HomeCurrency: z.object({ value: z.string().max(20) }).optional(),
+  }).optional(),
+});
+
+export type QuickBooksCompanyTaxInfo = z.infer<typeof QuickBooksCompanyTaxInfoSchema>;
+export type QuickBooksTaxPreferences = z.infer<typeof QuickBooksTaxPreferencesSchema>;
+
+function assertQuickBooksCapabilityReadInput(realmId: string, accessToken: string): void {
+  if (!/^[0-9]{1,30}$/.test(realmId) || !accessToken.trim()) {
+    throw new QuickBooksProviderError("QUICKBOOKS_TAX_CAPABILITY_INPUT_INVALID", false);
+  }
+}
+
+export async function fetchQuickBooksCompanyTaxInfo(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+): Promise<QuickBooksCompanyTaxInfo> {
+  assertQuickBooksCapabilityReadInput(realmId, accessToken);
+  const payload = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, `/companyinfo/${realmId}`);
+  const parsed = parseQuickBooksEntity(
+    z.object({ CompanyInfo: QuickBooksCompanyTaxInfoSchema }),
+    payload,
+    "QUICKBOOKS_TAX_COMPANY_RESPONSE_INVALID",
+  );
+  if (parsed.CompanyInfo.Id !== realmId) {
+    throw new QuickBooksProviderError("QUICKBOOKS_TAX_COMPANY_REALM_MISMATCH", false);
+  }
+  return parsed.CompanyInfo;
+}
+
+export async function fetchQuickBooksTaxPreferences(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+): Promise<QuickBooksTaxPreferences> {
+  assertQuickBooksCapabilityReadInput(realmId, accessToken);
+  const payload = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, "/preferences");
+  return parseQuickBooksEntity(
+    z.object({ Preferences: QuickBooksTaxPreferencesSchema }),
+    payload,
+    "QUICKBOOKS_TAX_PREFERENCES_RESPONSE_INVALID",
+  ).Preferences;
+}
+
 export async function fetchQuickBooksCompanyInfo(
   runtimeEnv: RuntimeEnv,
   realmId: string,
