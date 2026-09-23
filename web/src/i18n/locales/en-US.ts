@@ -1007,6 +1007,7 @@ export const enUS = {
         QUICKBOOKS_BILLING_EMAIL_INVALID: "Correct the billing email before enabling online payments.",
         QUICKBOOKS_ONLINE_PAYMENTS_UNAVAILABLE: "Online payments are not available for this QuickBooks connection.",
         LEGACY_QUICKBOOKS_INVOICE_EXISTS: "A legacy QuickBooks invoice already exists for this quote.",
+        QUICKBOOKS_TAX_CONTEXT_REQUIRES_TAX_WORKFLOW: "This invoice includes confirmed taxable work. Review it through the tax workflow before publishing.",
         QUICKBOOKS_TAX_ESTIMATE_OPERATION_EXISTS: "Resolve this invoice’s QuickBooks tax review before publishing.",
         INVOICE_LINE_TOTAL_MISMATCH: "The source lines no longer match the invoice subtotal.",
       },

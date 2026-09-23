@@ -8,6 +8,9 @@ import {
 } from "./data-classification";
 
 const REVIEWED_SCHEMA_FIELD_TEXT = {
+  InvoiceTaxContext: "confirmedAtUtc confirmedByTenantUserId connectionConnectedAtUtc connectionGeneration currency customerId customerMapId customerMapReviewVersion customerMapReviewedAtUtc destination environment id idempotencyKeyHash inputHash invoiceId invoiceVersion jobId lineCount origin providerCustomerId providerRealmId quickBooksConnectionId quotedTaxAmount revision sourceQuoteId subtotalAmount supersededAtUtc tenantId totalAmount transactionDate",
+  InvoiceTaxContextLine: "amount description id invoiceLineItemIdSnapshot invoiceTaxContextId itemKey itemMapId itemMapReviewVersion itemMapReviewedAtUtc position providerItemId quantity taxIntent tenantId unitPrice",
+
   TenantBranding: "addressLine1 addressLine2 businessEmail businessPhone city componentColors createdAt deletedAtUtc hideQuoteFlyAttribution id logoPosition logoUrl postalCode primaryColor quoteMessageTemplate state templateId tenantId updatedAt",
   TenantBrandAsset: "byteLength createdAt data id mimeType sha256 tenantId",
   Tenant: "billingStateEventCreatedAtUtc billingStateEventId createdAt defaultCustomerLocale deletedAtUtc id name onboardingCompletedAtUtc primaryTrade slug stripeCheckoutAttemptExpiresAtUtc stripeCheckoutAttemptId stripeCheckoutSessionExpiresAtUtc stripeCheckoutSessionId stripeCustomerId stripeSubscriptionId subscriptionCurrentPeriodEndUtc subscriptionCurrentPeriodStartUtc subscriptionPlanCode subscriptionStatus timezone trialEndsAtUtc trialStartsAtUtc updatedAt",
@@ -121,6 +124,8 @@ const MODEL_POLICIES = {
   InvoiceLineItem: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "Immutable tenant invoice scope and amount snapshots" },
   InvoicePayment: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "Provider-safe tenant payment status ledger for invoices" },
   InvoiceEvent: { defaultClassification: "C1_BUSINESS_INTERNAL", tenantScope: "required", purpose: "Content-free immutable invoice/payment transition and idempotency audit" },
+  InvoiceTaxContext: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Immutable manager-confirmed invoice tax context and financial source evidence; no AI or analytics use" },
+  InvoiceTaxContextLine: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Immutable manager-confirmed invoice tax context and financial source evidence; no AI or analytics use" },
   QuickBooksTaxEstimateOperation: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Immutable reviewed QuickBooks tax Estimate snapshots and provider request identity; restricted financial proof, no AI or analytics use" },
   QuickBooksInvoiceOperation: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "Durable content-free QuickBooks invoice publish claim and reconciliation state" },
   SmsMessage: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Tenant SMS communications" },

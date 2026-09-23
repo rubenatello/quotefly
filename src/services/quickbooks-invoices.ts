@@ -10,7 +10,7 @@ import { lockQuickBooksInvoicePublication } from "./quickbooks-locks";
 type Transaction = Prisma.TransactionClient;
 
 const CLAIM_TTL_MS = 2 * 60 * 1000;
-// QuoteFly currently publishes only invoices whose own tax amount is zero.
+// The direct path publishes only zero-tax invoices without active TAXABLE intent.
 // Explicitly override a mapped QuickBooks item's default tax treatment so a
 // taxable catalog item cannot cause Intuit to calculate tax for this release.
 const QUICKBOOKS_NON_TAX_CODE = "NON";
@@ -373,6 +373,17 @@ export function quickBooksInvoiceReconciliationAvailable(
     && Boolean(operation.claimExpiresAtUtc && operation.claimExpiresAtUtc.getTime() <= nowMs);
 }
 
+// An unsuperseded explicit tax intent remains authoritative even when its source
+// is stale. Only a new manager-confirmed NON_TAXABLE revision can release this
+// interlock; staleness must never silently turn TAXABLE into provider code NON.
+async function hasActiveTaxableContext(transaction: Transaction, tenantId: string, invoiceId: string) {
+  return Boolean(await transaction.invoiceTaxContext.findFirst({
+    where: { tenantId, invoiceId, supersededAtUtc: null,
+      lines: { some: { tenantId, taxIntent: "TAXABLE" } } },
+    select: { id: true },
+  }));
+}
+
 async function loadSyncContext(
   transaction: Transaction,
   access: AccessContext,
@@ -428,7 +439,7 @@ async function loadSyncContext(
     throw new QuickBooksInvoiceOperationError(404, "INVOICE_NOT_FOUND", "Invoice not found for tenant.");
   }
 
-  const [connection, operation, taxEstimateOperation] = await Promise.all([
+  const [connection, operation, taxEstimateOperation, taxableContext] = await Promise.all([
     transaction.quickBooksConnection.findFirst({
       where: {
         tenantId: access.tenantId,
@@ -464,6 +475,7 @@ async function loadSyncContext(
       },
       select: { id: true },
     }),
+    hasActiveTaxableContext(transaction, access.tenantId, invoiceId),
   ]);
 
   const docNumber = providerDocNumber(invoice.invoiceNumber);
@@ -529,6 +541,7 @@ async function loadSyncContext(
   });
 
   const blockers: string[] = [];
+  if (taxableContext) blockers.push("QUICKBOOKS_TAX_CONTEXT_REQUIRES_TAX_WORKFLOW");
   if (taxEstimateOperation) blockers.push("QUICKBOOKS_TAX_ESTIMATE_OPERATION_EXISTS");
   if (!connection) blockers.push("QUICKBOOKS_NOT_CONNECTED");
   if (invoice.sourceQuote.status !== "ACCEPTED") blockers.push("INVOICE_SOURCE_NOT_ACCEPTED");
@@ -691,6 +704,7 @@ export async function getQuickBooksInvoiceSyncPreview(
 ): Promise<QuickBooksInvoiceSyncPreview> {
   requireManager(access);
   await setTenantRlsContext(transaction, access.tenantId);
+  await lockInvoiceOperation(transaction, access, invoiceId);
   return previewFromContext(
     await loadSyncContext(transaction, access, invoiceId, paymentReview),
     access.tenantId,
@@ -932,8 +946,10 @@ export async function assertQuickBooksInvoiceCreateFence(
     },
     select: { id: true },
   });
-  if (!current) throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_OPERATION_STALE",
+  if (!current || await hasActiveTaxableContext(transaction, access.tenantId, claim.operation.invoiceId)) {
+    throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_OPERATION_STALE",
     "The QuickBooks operation or connection changed. Refresh its status before continuing.");
+  }
 }
 
 /** Retain irreversible CREATE evidence before any subsequent provider request.

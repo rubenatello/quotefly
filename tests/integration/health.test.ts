@@ -27,6 +27,8 @@ const FORCED_RLS_ROWS = [
   { tableName: "InvoicePayment", enabled: true, forced: true },
   { tableName: "QuickBooksInvoiceOperation", enabled: true, forced: true },
   { tableName: "QuickBooksTaxEstimateOperation", enabled: true, forced: true },
+  { tableName: "InvoiceTaxContext", enabled: true, forced: true },
+  { tableName: "InvoiceTaxContextLine", enabled: true, forced: true },
   { tableName: "QuickBooksConnection", enabled: true, forced: true },
   { tableName: "QuickBooksConnectionEvent", enabled: true, forced: true },
   { tableName: "QuickBooksCustomerMap", enabled: true, forced: true },
@@ -206,17 +208,17 @@ describe("health and readiness routes", () => {
     }
   });
 
-  test("requires present, enabled and forced tenant isolation on tax Estimate evidence", async () => {
+  test.each(["QuickBooksTaxEstimateOperation", "InvoiceTaxContext", "InvoiceTaxContextLine"])("requires present, enabled and forced tenant isolation on %s", async (tableName) => {
     for (const rows of [
-      FORCED_RLS_ROWS.filter((row) => row.tableName !== "QuickBooksTaxEstimateOperation"),
-      FORCED_RLS_ROWS.map((row) => row.tableName === "QuickBooksTaxEstimateOperation" ? { ...row, enabled: false } : row),
-      FORCED_RLS_ROWS.map((row) => row.tableName === "QuickBooksTaxEstimateOperation" ? { ...row, forced: false } : row),
+      FORCED_RLS_ROWS.filter((row) => row.tableName !== tableName),
+      FORCED_RLS_ROWS.map((row) => row.tableName === tableName ? { ...row, enabled: false } : row),
+      FORCED_RLS_ROWS.map((row) => row.tableName === tableName ? { ...row, forced: false } : row),
     ]) {
       const queryRaw = vi.fn(async () => queryRaw.mock.calls.length === 1 ? [{ value: 1 }] : rows);
       const response = await buildHealthServer(queryRaw).inject({ method: "GET", url: "/v1/ready" });
       expect(response.statusCode).toBe(503);
       expect(response.json()).toEqual({ error: "Service is not ready." });
-      expect(response.body).not.toContain("QuickBooksTaxEstimateOperation");
+      expect(response.body).not.toContain(tableName);
       expect(queryRaw).toHaveBeenCalledTimes(2);
     }
   });

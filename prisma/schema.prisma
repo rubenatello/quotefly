@@ -486,6 +486,8 @@ model Tenant {
   @@index([deletedAtUtc])
   @@index([stripeCheckoutAttemptExpiresAtUtc], map: "Tenant_checkout_attempt_expiry_idx")
   @@index([stripeCheckoutSessionExpiresAtUtc], map: "Tenant_checkout_session_expiry_idx")
+  invoiceTaxContexts InvoiceTaxContext[]
+  invoiceTaxContextLines InvoiceTaxContextLine[]
 }
 
 model TenantSequence {
@@ -597,6 +599,7 @@ model TenantUser {
   @@index([userId])
   @@index([tenantId, deletedAtUtc])
   @@index([tenantId, userId, deletedAtUtc])
+  confirmedInvoiceTaxContexts InvoiceTaxContext[]
 }
 
 model TenantPhoneNumber {
@@ -1023,6 +1026,7 @@ model Invoice {
   @@index([tenantId, customerId, deletedAtUtc, archivedAtUtc], map: "Invoice_customer_lifecycle_idx")
   @@index([tenantId, status, paymentStatus, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)], map: "Invoice_status_updated_idx")
   @@index([tenantId, dueAtUtc, status, deletedAtUtc, id], map: "Invoice_due_status_idx")
+  taxContexts InvoiceTaxContext[]
 }
 
 model InvoiceLineItem {
@@ -1787,6 +1791,7 @@ model QuickBooksConnection {
   @@index([tenantId, status])
   @@index([tenantId, setupConfirmedAtUtc])
   @@index([realmId, deletedAtUtc])
+  invoiceTaxContexts InvoiceTaxContext[]
 }
 
 model QuickBooksConnectionEvent {
@@ -1831,6 +1836,8 @@ model QuickBooksCustomerMap {
   @@unique([quickBooksConnectionId, quickBooksCustomerId])
   @@index([tenantId, deletedAtUtc])
   @@index([tenantId, reviewedByTenantUserId, reviewedAtUtc])
+  invoiceTaxContexts InvoiceTaxContext[]
+  @@unique([id, tenantId])
 }
 
 model QuickBooksItemMap {
@@ -1857,6 +1864,8 @@ model QuickBooksItemMap {
   @@unique([quickBooksConnectionId, quickBooksItemId])
   @@index([tenantId, deletedAtUtc])
   @@index([tenantId, reviewedByTenantUserId, reviewedAtUtc])
+  invoiceTaxContextLines InvoiceTaxContextLine[]
+  @@unique([id, tenantId])
 }
 
 model QuickBooksInvoiceSync {
@@ -2112,4 +2121,71 @@ model QuickBooksOperationalAlertDelivery {
   lastErrorCode String? @db.VarChar(40)
 
   @@index([status, nextAttemptAtUtc, observedAtUtc], map: "QuickBooksOperationalAlertDelivery_due_idx")
+}
+
+// Explicit manager-confirmed source context. Historical evidence is never inferred or backfilled.
+model InvoiceTaxContext {
+  id String @id @default(cuid())
+  tenantId String
+  invoiceId String
+  revision Int
+  lineCount Int
+  invoiceVersion Int
+  customerId String
+  sourceQuoteId String
+  jobId String
+  quickBooksConnectionId String
+  providerRealmId String @db.VarChar(191)
+  environment String @db.VarChar(16)
+  connectionConnectedAtUtc DateTime @db.Timestamptz(3)
+  connectionGeneration Int
+  customerMapId String
+  customerMapReviewVersion Int
+  customerMapReviewedAtUtc DateTime @db.Timestamptz(3)
+  providerCustomerId String @db.VarChar(191)
+  transactionDate DateTime @db.Date
+  origin Json
+  destination Json
+  currency String @db.VarChar(3)
+  subtotalAmount Decimal @db.Decimal(10, 2)
+  quotedTaxAmount Decimal @db.Decimal(10, 2)
+  totalAmount Decimal @db.Decimal(10, 2)
+  confirmedByTenantUserId String
+  confirmedAtUtc DateTime @db.Timestamptz(3)
+  inputHash String @db.VarChar(64)
+  idempotencyKeyHash String @db.VarChar(64)
+  supersededAtUtc DateTime? @db.Timestamptz(3)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  invoice Invoice @relation(fields: [invoiceId, sourceQuoteId, customerId, tenantId], references: [id, sourceQuoteId, customerId, tenantId], onDelete: Restrict, map: "InvoiceTaxContext_invoice_source_tenant_fkey")
+  connection QuickBooksConnection @relation(fields: [quickBooksConnectionId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  customerMap QuickBooksCustomerMap @relation(fields: [customerMapId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  confirmer TenantUser @relation(fields: [confirmedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  lines InvoiceTaxContextLine[]
+  @@unique([id, tenantId])
+  @@unique([tenantId, invoiceId, revision])
+  @@unique([tenantId, invoiceId, idempotencyKeyHash], map: "InvoiceTaxContext_idempotency_key")
+  @@index([tenantId, invoiceId, supersededAtUtc])
+}
+model InvoiceTaxContextLine {
+  id String @id @default(cuid())
+  tenantId String
+  invoiceTaxContextId String
+  invoiceLineItemIdSnapshot String @db.VarChar(191)
+  position Int
+  description String
+  quantity Decimal @db.Decimal(10, 2)
+  unitPrice Decimal @db.Decimal(10, 2)
+  amount Decimal @db.Decimal(10, 2)
+  taxIntent String @db.VarChar(16)
+  itemMapId String
+  itemMapReviewVersion Int
+  itemMapReviewedAtUtc DateTime @db.Timestamptz(3)
+  providerItemId String @db.VarChar(191)
+  itemKey String @db.VarChar(120)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  context InvoiceTaxContext @relation(fields: [invoiceTaxContextId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  itemMap QuickBooksItemMap @relation(fields: [itemMapId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  @@unique([invoiceTaxContextId, invoiceLineItemIdSnapshot], map: "InvoiceTaxContextLine_source_line_key")
+  @@unique([invoiceTaxContextId, position])
+  @@index([tenantId, invoiceTaxContextId])
 }

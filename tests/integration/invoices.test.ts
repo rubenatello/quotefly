@@ -1,4 +1,4 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
@@ -14,6 +14,7 @@ import {
 } from "../../src/services/quickbooks";
 import { reconcileQuickBooksInvoice } from "../../src/services/quickbooks-reconciliation";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
+import { confirmInvoiceTaxContext } from "../../src/services/quickbooks-tax-context";
 
 const quickBooksProviderMocks = vi.hoisted(() => ({
   createInvoice: vi.fn(),
@@ -1278,6 +1279,48 @@ describe("invoice ledger API", () => {
     expect(operation.payloadHash).toBe(quickBooksInvoiceFingerprint({ ...providerPayload, TotalAmt: 300 }));
     expect(Number(operation.providerBalance)).toBe(300);
     expect(JSON.stringify(providerPayload)).not.toMatch(/Mutated live quote|Late alternate mutation|Optional alternate excluded/);
+  });
+
+  test("confirmed taxable context blocks zero-tax HTTP publish without provider calls or context data disclosure", async () => {
+    const owner = await signUp("tax-context-http");
+    const f = await createQuickBooksReadyInvoice(owner, "tax-context-http");
+    const realmId = `${Date.now()}${Math.floor(Math.random() * 1000000)}`;
+    const connection = await prisma.quickBooksConnection.update({ where: { id: f.connection.id }, data: { realmId, scopes: ["com.intuit.quickbooks.accounting"] } });
+    await prisma.quickBooksRealmBinding.update({ where: { quickBooksConnectionId: connection.id }, data: { realmId } });
+    const baseline = await getQuickBooksReviewBinding(owner, f.invoice.id);
+    const [invoice, customerMap, itemMap, user] = await Promise.all([
+      prisma.invoice.findFirstOrThrow({ where: { tenantId: owner.tenant.id, id: f.invoice.id }, include: { lineItems: { orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }] } } }),
+      prisma.quickBooksCustomerMap.findFirstOrThrow({ where: { tenantId: owner.tenant.id, customerId: f.customer.id } }),
+      prisma.quickBooksItemMap.findFirstOrThrow({ where: { tenantId: owner.tenant.id, quickBooksConnectionId: connection.id } }),
+      prisma.user.findUniqueOrThrow({ where: { id: owner.user.id }, select: { authVersion: true } }),
+    ]);
+    const privateAddress = { Line1: "741 Never-disclose tax-context address", City: "San Francisco", CountrySubDivisionCode: "CA", PostalCode: "94105", Country: "US" };
+    try {
+      await confirmInvoiceTaxContext(prisma, { tenantId: owner.tenant.id, userId: owner.user.id, authVersion: user.authVersion }, "sandbox", {
+        invoiceId: invoice.id, invoiceVersion: invoice.version, expectedRevision: 0, idempotencyKey: randomUUID(), transactionDate: "2026-09-23",
+        origin: privateAddress, destination: privateAddress,
+        connection: { id: connection.id, realmId, environment: "sandbox", connectedAtUtc: connection.connectedAtUtc.toISOString(), generation: 1 },
+        customerMapping: { id: customerMap.id, providerId: customerMap.quickBooksCustomerId, reviewVersion: customerMap.reviewVersion, reviewedAtUtc: customerMap.reviewedAtUtc!.toISOString() },
+        lines: invoice.lineItems.filter(line => line.sectionType === "INCLUDED").map(line => ({ invoiceLineItemId: line.id, taxIntent: "TAXABLE",
+          itemMapping: { id: itemMap.id, providerId: itemMap.quickBooksItemId, reviewVersion: itemMap.reviewVersion, reviewedAtUtc: itemMap.reviewedAtUtc!.toISOString() } })),
+      });
+      const preview = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${invoice.id}/sync-preview`, headers: { cookie: owner.cookie }, payload: {} });
+      expect(preview.statusCode).toBe(200);
+      expect(preview.json()).toMatchObject({ preview: { ready: false, reviewBinding: null, blockers: ["QUICKBOOKS_TAX_CONTEXT_REQUIRES_TAX_WORKFLOW"] } });
+      const publish = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": randomUUID() }, payload: { invoiceVersion: invoice.version, reviewBinding: baseline } });
+      expect(publish.statusCode).toBe(409); expect(publish.json()).toMatchObject({ code: "QUICKBOOKS_REVIEW_STALE" });
+      for (const response of [preview, publish]) {
+        expect(response.body).not.toContain(privateAddress.Line1);
+        for (const field of ["inputHash", "idempotencyKeyHash", "confirmedByTenantUserId", "connectionGeneration", "accessTokenEncrypted", "refreshTokenEncrypted"]) expect(response.body).not.toContain(field);
+        expect(response.body).not.toContain(realmId);
+      }
+      for (const mock of Object.values(quickBooksProviderMocks)) expect(mock).not.toHaveBeenCalled();
+      expect(await prisma.quickBooksInvoiceOperation.count({ where: { tenantId: owner.tenant.id } })).toBe(0);
+    } finally {
+      await prisma.invoiceTaxContextLine.deleteMany({ where: { tenantId: owner.tenant.id } });
+      await prisma.invoiceTaxContext.deleteMany({ where: { tenantId: owner.tenant.id } });
+    }
   });
 
   test("an active tax Estimate review blocks ordinary preview and publish before any provider request", async () => {

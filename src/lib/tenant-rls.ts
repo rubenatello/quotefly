@@ -35,6 +35,8 @@ export const FORCED_TENANT_RLS_TABLES = [
   "InvoiceEvent",
   "QuickBooksInvoiceOperation",
   "QuickBooksTaxEstimateOperation",
+  "InvoiceTaxContext",
+  "InvoiceTaxContextLine",
   "QuickBooksConnection",
   "QuickBooksConnectionEvent",
   "QuickBooksCustomerMap",
