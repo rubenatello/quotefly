@@ -567,8 +567,9 @@ describe("superuser data-governance control plane", () => {
     };
     expect(body.run).toMatchObject({
       status: "PASSED",
-      modelCount: 60,
-      fieldCount: 916,
+      // Reviewed baseline includes the restricted 42-field tax Estimate ledger.
+      modelCount: 61,
+      fieldCount: 958,
       issueCount: 0,
     });
     expect(body.run.schemaHash).toBe(body.run.baselineHash);

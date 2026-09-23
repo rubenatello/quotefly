@@ -1007,6 +1007,7 @@ export const esUS = {
         QUICKBOOKS_BILLING_EMAIL_INVALID: "Corrige el correo de facturación antes de habilitar pagos en línea.",
         QUICKBOOKS_ONLINE_PAYMENTS_UNAVAILABLE: "Los pagos en línea no están disponibles para esta conexión de QuickBooks.",
         LEGACY_QUICKBOOKS_INVOICE_EXISTS: "Ya existe una factura heredada de QuickBooks para esta cotización.",
+        QUICKBOOKS_TAX_ESTIMATE_OPERATION_EXISTS: "Resuelve la revisión de impuestos de esta factura en QuickBooks antes de publicarla.",
         INVOICE_LINE_TOTAL_MISMATCH: "Las partidas originales ya no coinciden con el subtotal de la factura.",
       },
     },

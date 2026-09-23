@@ -1280,6 +1280,40 @@ describe("invoice ledger API", () => {
     expect(JSON.stringify(providerPayload)).not.toMatch(/Mutated live quote|Late alternate mutation|Optional alternate excluded/);
   });
 
+  test("an active tax Estimate review blocks ordinary preview and publish before any provider request", async () => {
+    const owner = await signUp("invoice-qb-tax-interlock");
+    const fixture = await createQuickBooksReadyInvoice(owner, "tax-interlock");
+    const invoice = await prisma.invoice.findUniqueOrThrow({ where: { id: fixture.invoice.id } });
+    const member = await prisma.tenantUser.findFirstOrThrow({ where: { tenantId: owner.tenant.id, userId: owner.user.id } });
+    const taxReview = await prisma.quickBooksTaxEstimateOperation.create({ data: {
+      tenantId: owner.tenant.id, invoiceId: invoice.id, customerId: invoice.customerId, sourceQuoteId: invoice.sourceQuoteId,
+      quickBooksConnectionId: fixture.connection.id, requestedByTenantUserId: member.id, reviewedByTenantUserId: member.id,
+      providerRealmId: fixture.connection.realmId, reviewRevision: 1, contractVersion: 1, invoiceVersion: invoice.version,
+      connectionGenerationAtUtc: fixture.connection.connectedAtUtc, sourceSnapshot: { invoiceId: invoice.id }, estimateAstSnapshot: {},
+      sourceHash: "a".repeat(64), estimateAstHash: "b".repeat(64), reviewBindingDigest: "c".repeat(64), bindingKeyId: "synthetic-route-test",
+      estimateRequestId: `estimate-${invoice.id}`, invoiceRequestId: `invoice-${invoice.id}`, reviewedAtUtc: new Date(),
+    } });
+    try {
+      const preview = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${invoice.id}/sync-preview`,
+        headers: { cookie: owner.cookie }, payload: {} });
+      expect(preview.statusCode).toBe(200);
+      expect(preview.json().preview).toMatchObject({ ready: false, reviewBinding: null,
+        blockers: expect.arrayContaining(["QUICKBOOKS_TAX_ESTIMATE_OPERATION_EXISTS"]) });
+      const published = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": `tax-interlock-${invoice.id}` },
+        payload: { invoiceVersion: invoice.version, reviewBinding: fixture.reviewBinding } });
+      expect(published.statusCode).toBe(409);
+      expect(published.json()).toMatchObject({ code: "QUICKBOOKS_REVIEW_STALE" });
+      for (const provider of [quickBooksProviderMocks.createInvoice, quickBooksProviderMocks.fetchInvoice,
+        quickBooksProviderMocks.fetchCustomer, quickBooksProviderMocks.fetchItem, quickBooksProviderMocks.findInvoiceByDocNumber]) {
+        expect(provider).not.toHaveBeenCalled();
+      }
+      expect(await prisma.quickBooksInvoiceOperation.count({ where: { tenantId: owner.tenant.id, invoiceId: invoice.id } })).toBe(0);
+    } finally {
+      await prisma.quickBooksTaxEstimateOperation.delete({ where: { id: taxReview.id } });
+    }
+  });
+
   test("rejects a taxable QuoteFly invoice before any QuickBooks create", async () => {
     const owner = await signUp("invoice-qb-tax-blocked");
     const fixture = await createQuickBooksReadyInvoice(owner, "tax-blocked");

@@ -5,6 +5,7 @@ import { hasCapability } from "../lib/access-policy";
 import { setTenantRlsContext } from "../lib/tenant-rls";
 import { quickBooksInvoiceFingerprint, QUICKBOOKS_INVOICE_PRECREATE_FAILURE_CODES } from "./quickbooks";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
+import { lockQuickBooksInvoicePublication } from "./quickbooks-locks";
 
 type Transaction = Prisma.TransactionClient;
 
@@ -300,14 +301,7 @@ function requireManager(access: AccessContext) {
 }
 
 async function lockInvoiceOperation(transaction: Transaction, access: AccessContext, invoiceId: string) {
-  await transaction.$queryRaw(Prisma.sql`
-    SELECT 1::int AS "locked"
-    FROM (
-      SELECT pg_advisory_xact_lock(
-        hashtextextended(${`quickbooks-invoice:${access.tenantId}:${invoiceId}`}, 0)
-      )
-    ) acquired
-  `);
+  await lockQuickBooksInvoicePublication(transaction, access.tenantId, invoiceId);
 }
 
 async function lockCommandKey(transaction: Transaction, access: AccessContext, commandKeyHash: string) {
@@ -434,7 +428,7 @@ async function loadSyncContext(
     throw new QuickBooksInvoiceOperationError(404, "INVOICE_NOT_FOUND", "Invoice not found for tenant.");
   }
 
-  const [connection, operation] = await Promise.all([
+  const [connection, operation, taxEstimateOperation] = await Promise.all([
     transaction.quickBooksConnection.findFirst({
       where: {
         tenantId: access.tenantId,
@@ -462,6 +456,13 @@ async function loadSyncContext(
     transaction.quickBooksInvoiceOperation.findFirst({
       where: { tenantId: access.tenantId, invoiceId, archivedAtUtc: null },
       select: QuickBooksInvoiceOperationPublicSelect,
+    }),
+    transaction.quickBooksTaxEstimateOperation.findFirst({
+      where: {
+        tenantId: access.tenantId, invoiceId,
+        OR: [{ supersededAtUtc: null }, { attemptCount: { gt: 0 } }, { providerEstimateId: { not: null } }],
+      },
+      select: { id: true },
     }),
   ]);
 
@@ -528,6 +529,7 @@ async function loadSyncContext(
   });
 
   const blockers: string[] = [];
+  if (taxEstimateOperation) blockers.push("QUICKBOOKS_TAX_ESTIMATE_OPERATION_EXISTS");
   if (!connection) blockers.push("QUICKBOOKS_NOT_CONNECTED");
   if (invoice.sourceQuote.status !== "ACCEPTED") blockers.push("INVOICE_SOURCE_NOT_ACCEPTED");
   if (invoice.status === "VOID" || invoice.status === "UNCOLLECTIBLE") blockers.push("INVOICE_STATUS_UNSUPPORTED");

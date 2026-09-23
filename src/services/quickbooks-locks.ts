@@ -9,6 +9,21 @@ export async function lockQuickBooksTenantParent(transaction: Prisma.Transaction
   `);
 }
 
+// Both the direct Invoice and reviewed tax Estimate paths must decide under
+// this same lock. Stabilize their shared FK parent first, before either path
+// can hold the advisory lock while waiting for the other's parent-row lock.
+export async function lockQuickBooksInvoicePublication(
+  transaction: Prisma.TransactionClient, tenantId: string, invoiceId: string,
+) {
+  await lockQuickBooksTenantParent(transaction, tenantId);
+  await transaction.$queryRaw(Prisma.sql`
+    SELECT 1::int AS "locked"
+    FROM (
+      SELECT pg_advisory_xact_lock(hashtextextended(${`quickbooks-invoice:${tenantId}:${invoiceId}`}, 0))
+    ) acquired
+  `);
+}
+
 export async function lockQuickBooksConnection(transaction: Prisma.TransactionClient, tenantId: string) {
   await transaction.$queryRaw(Prisma.sql`
     SELECT "id" FROM "QuickBooksConnection" WHERE "tenantId" = ${tenantId} FOR UPDATE

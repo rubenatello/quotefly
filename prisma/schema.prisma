@@ -341,6 +341,15 @@ enum InvoiceEventType {
   PROVIDER_RECONCILED
 }
 
+enum QuickBooksTaxEstimateOperationStatus {
+  REVIEWED
+  ESTIMATE_PROCESSING
+  ESTIMATE_RECONCILIATION_REQUIRED
+  ESTIMATE_CANONICAL
+  FAILED
+  SUPERSEDED
+}
+
 enum QuickBooksInvoiceOperationStatus {
   PROCESSING
   RECONCILING
@@ -470,6 +479,7 @@ model Tenant {
   quickBooksInvoiceSyncs                QuickBooksInvoiceSync[]
   quickBooksWebhookEvents               QuickBooksWebhookEvent[]
   quickBooksWebhookReplays              QuickBooksWebhookReplay[]
+  quickBooksTaxEstimateOperations       QuickBooksTaxEstimateOperation[]
 
   @@index([createdAt])
   @@index([primaryTrade])
@@ -579,6 +589,8 @@ model TenantUser {
   markedLostCustomers            Customer[]                   @relation("CustomerLostActor")
   quoteDrafts                    QuoteDraftRecovery[]
   aiUsageReservations            AiUsageReservation[]
+  requestedQuickBooksTaxEstimates QuickBooksTaxEstimateOperation[] @relation("QuickBooksTaxEstimateRequester")
+  reviewedQuickBooksTaxEstimates  QuickBooksTaxEstimateOperation[] @relation("QuickBooksTaxEstimateReviewer")
 
   @@unique([tenantId, userId])
   @@unique([id, tenantId])
@@ -637,6 +649,7 @@ model Customer {
   quoteOutboundEvents        QuoteOutboundEvent[]
   aiUsageEvents              AiUsageEvent[]
   quickBooksCustomerMaps     QuickBooksCustomerMap[]
+  quickBooksTaxEstimateOperations QuickBooksTaxEstimateOperation[]
 
   @@unique([tenantId, phone])
   @@unique([id, tenantId])
@@ -786,6 +799,7 @@ model Quote {
   activityTasks                   ActivityTask[]
   job                             Job?                    @relation("QuoteJobSource")
   invoices                        Invoice[]
+  quickBooksTaxEstimateOperations QuickBooksTaxEstimateOperation[]
 
   @@unique([id, tenantId])
   @@unique([id, customerId, tenantId])
@@ -999,11 +1013,13 @@ model Invoice {
   lineItems            InvoiceLineItem[]
   events               InvoiceEvent[]
   quickBooksOperations QuickBooksInvoiceOperation[]
+  quickBooksTaxEstimateOperations QuickBooksTaxEstimateOperation[]
 
   @@unique([id, tenantId])
   @@unique([tenantId, jobId])
   @@unique([tenantId, sourceQuoteId])
   @@unique([tenantId, invoiceNumber])
+  @@unique([id, sourceQuoteId, customerId, tenantId], map: "Invoice_id_sourceQuoteId_customerId_tenantId_key")
   @@index([tenantId, customerId, deletedAtUtc, archivedAtUtc], map: "Invoice_customer_lifecycle_idx")
   @@index([tenantId, status, paymentStatus, deletedAtUtc, updatedAt(sort: Desc), id(sort: Desc)], map: "Invoice_status_updated_idx")
   @@index([tenantId, dueAtUtc, status, deletedAtUtc, id], map: "Invoice_due_status_idx")
@@ -1084,6 +1100,66 @@ model InvoiceEvent {
   @@unique([tenantId, providerEventId])
   @@index([tenantId, invoiceId, createdAt, id], map: "InvoiceEvent_invoice_created_idx")
   @@index([tenantId, actorTenantUserId, createdAt], map: "InvoiceEvent_actor_created_idx")
+}
+
+model QuickBooksTaxEstimateOperation {
+  id                           String                               @id @default(cuid())
+  tenantId                     String
+  invoiceId                    String
+  customerId                   String
+  sourceQuoteId                String
+  quickBooksConnectionId       String
+  requestedByTenantUserId      String
+  reviewedByTenantUserId       String
+  providerRealmId              String                               @db.VarChar(191)
+  status                       QuickBooksTaxEstimateOperationStatus @default(REVIEWED)
+  reviewRevision               Int
+  contractVersion              Int
+  invoiceVersion               Int
+  connectionGenerationAtUtc    DateTime                             @db.Timestamptz(3)
+  sourceSnapshot               Json
+  estimateAstSnapshot          Json
+  sourceHash                   String                               @db.VarChar(64)
+  estimateAstHash              String                               @db.VarChar(64)
+  reviewBindingDigest          String                               @db.VarChar(64)
+  bindingKeyId                 String                               @db.VarChar(32)
+  estimateRequestId            String                               @db.VarChar(191)
+  invoiceRequestId             String                               @db.VarChar(191)
+  attemptTokenHash             String?                              @db.VarChar(64)
+  claimTokenHash               String?                              @db.VarChar(64)
+  claimExpiresAtUtc            DateTime?                            @db.Timestamptz(3)
+  attemptCount                 Int                                  @default(0)
+  lastAttemptAtUtc             DateTime?                            @db.Timestamptz(3)
+  providerEstimateId           String?                              @db.VarChar(191)
+  providerEstimateSyncToken    String?                              @db.VarChar(191)
+  providerEstimateUpdatedAtUtc DateTime?                            @db.Timestamptz(3)
+  canonicalEstimateHash        String?                              @db.VarChar(64)
+  providerSubtotal             Decimal?                             @db.Decimal(10, 2)
+  providerTax                  Decimal?                             @db.Decimal(10, 2)
+  providerTotal                Decimal?                             @db.Decimal(10, 2)
+  reviewedAtUtc                DateTime                             @db.Timestamptz(3)
+  uncertainAtUtc               DateTime?                            @db.Timestamptz(3)
+  canonicalAtUtc               DateTime?                            @db.Timestamptz(3)
+  failedAtUtc                  DateTime?                            @db.Timestamptz(3)
+  supersededAtUtc              DateTime?                            @db.Timestamptz(3)
+  lastFailureCode              String?                              @db.VarChar(64)
+  createdAt                    DateTime                             @default(now()) @db.Timestamptz(3)
+  updatedAt                    DateTime                             @default(now()) @updatedAt @db.Timestamptz(3)
+  tenant                       Tenant                               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice                      Invoice                              @relation(fields: [invoiceId, sourceQuoteId, customerId, tenantId], references: [id, sourceQuoteId, customerId, tenantId], onDelete: Restrict, map: "QbTaxEstimate_invoice_source_customer_tenant_fkey")
+  customer                     Customer                             @relation(fields: [customerId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  sourceQuote                  Quote                                @relation(fields: [sourceQuoteId, customerId, tenantId], references: [id, customerId, tenantId], onDelete: Restrict, map: "QbTaxEstimate_quote_customer_tenant_fkey")
+  connection                   QuickBooksConnection                 @relation(fields: [quickBooksConnectionId, tenantId], references: [id, tenantId], onDelete: Restrict, map: "QbTaxEstimate_connection_tenant_fkey")
+  requestedByTenantUser        TenantUser                           @relation("QuickBooksTaxEstimateRequester", fields: [requestedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict, map: "QbTaxEstimate_requester_tenant_fkey")
+  reviewedByTenantUser         TenantUser                           @relation("QuickBooksTaxEstimateReviewer", fields: [reviewedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict, map: "QbTaxEstimate_reviewer_tenant_fkey")
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, invoiceId, reviewRevision], map: "QbTaxEstimate_tenant_invoice_revision_key")
+  @@unique([tenantId, estimateRequestId], map: "QbTaxEstimate_tenant_estimate_request_key")
+  @@unique([tenantId, invoiceRequestId], map: "QbTaxEstimate_tenant_invoice_request_key")
+  @@unique([quickBooksConnectionId, providerEstimateId], map: "QbTaxEstimate_connection_provider_estimate_key")
+  @@index([tenantId, status, claimExpiresAtUtc], map: "QbTaxEstimate_tenant_status_claim_idx")
+  @@index([tenantId, invoiceId, createdAt(sort: Desc)], map: "QbTaxEstimate_tenant_invoice_created_idx")
 }
 
 model QuickBooksInvoiceOperation {
@@ -1705,6 +1781,7 @@ model QuickBooksConnection {
   cdcCursor                     QuickBooksCdcCursor?
   webhookEvents                 QuickBooksWebhookEvent[]
   lifecycleEvents               QuickBooksConnectionEvent[]
+  taxEstimateOperations         QuickBooksTaxEstimateOperation[]
 
   @@unique([id, tenantId])
   @@index([tenantId, status])
@@ -2033,5 +2110,6 @@ model QuickBooksOperationalAlertDelivery {
   nextAttemptAtUtc DateTime @db.Timestamptz(3)
   sentAtUtc DateTime? @db.Timestamptz(3)
   lastErrorCode String? @db.VarChar(40)
+
   @@index([status, nextAttemptAtUtc, observedAtUtc], map: "QuickBooksOperationalAlertDelivery_due_idx")
 }
