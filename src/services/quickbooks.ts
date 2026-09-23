@@ -40,7 +40,7 @@ const QuickBooksLinkedTxnSchema = z.object({
 }).passthrough();
 
 const QuickBooksInvoiceSchema = z.object({
-  Id: z.string().min(1),
+  Id: z.string().min(1).max(191),
   SyncToken: z.string().optional(),
   DocNumber: z.string().optional(),
   TxnDate: z.string().optional(),
@@ -422,18 +422,25 @@ async function quickBooksFetch(
   url: string,
   init: RequestInit,
   retryRead: boolean,
+  deadlineAtMs?: number,
 ): Promise<Response> {
+  const remaining = () => deadlineAtMs === undefined ? runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS : deadlineAtMs - Date.now();
+  const wait = async (delay: number) => {
+    if (deadlineAtMs !== undefined && remaining() <= delay) throw new QuickBooksProviderError("QUICKBOOKS_READ_DEADLINE", false);
+    await waitForQuickBooksRetry(delay);
+  };
   const maxAttempts = retryRead ? runtimeEnv.QUICKBOOKS_PROVIDER_READ_RETRIES + 1 : 1;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (remaining() <= 0) throw new QuickBooksProviderError("QUICKBOOKS_READ_DEADLINE", false);
     let response: Response;
     try {
       response = await fetch(url, {
         ...init,
-        signal: AbortSignal.timeout(runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS),
+        signal: AbortSignal.timeout(Math.max(1, Math.floor(Math.min(runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS, remaining())))),
       });
     } catch {
       if (retryRead && attempt + 1 < maxAttempts) {
-        await waitForQuickBooksRetry(Math.min(2_000, 200 * (2 ** attempt)));
+        await wait(Math.min(2_000, 200 * (2 ** attempt)));
         continue;
       }
       throw new QuickBooksProviderError(
@@ -449,7 +456,7 @@ async function quickBooksFetch(
       const retryDelayMs = quickBooksRetryDelayMs(response, attempt);
       if (retryDelayMs === null) return response;
       await response.body?.cancel().catch(() => undefined);
-      await waitForQuickBooksRetry(retryDelayMs);
+      await wait(retryDelayMs);
       continue;
     }
     return response;
@@ -463,6 +470,7 @@ async function quickBooksApiRequest<T>(
   accessToken: string,
   path: string,
   init: RequestInit = {},
+  deadlineAtMs?: number,
 ): Promise<T> {
   const mutation = (init.method ?? "GET").toUpperCase() !== "GET";
   let response: Response;
@@ -475,7 +483,7 @@ async function quickBooksApiRequest<T>(
         ...(init.headers ?? {}),
         Authorization: `Bearer ${accessToken}`,
       },
-    }, !mutation);
+    }, !mutation, deadlineAtMs);
   } catch {
     throw new QuickBooksProviderError(
       mutation ? "QUICKBOOKS_MUTATION_RESULT_UNKNOWN" : "QUICKBOOKS_NETWORK_ERROR",
@@ -483,7 +491,13 @@ async function quickBooksApiRequest<T>(
     );
   }
 
-  const responseBody = await response.text();
+  let responseBody: string;
+  try {
+    responseBody = await response.text();
+    if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) throw new Error("deadline");
+  } catch {
+    throw new QuickBooksProviderError(mutation ? "QUICKBOOKS_MUTATION_RESULT_UNKNOWN" : "QUICKBOOKS_READ_DEADLINE", mutation);
+  }
   if (!response.ok) {
     const ambiguous = mutation && (response.status === 408 || response.status === 429 || response.status >= 500);
     throw new QuickBooksProviderError(`QUICKBOOKS_HTTP_${response.status}`, ambiguous, response.status);
@@ -689,16 +703,69 @@ export async function createQuickBooksServiceItem(
   return payload.Item;
 }
 
+export const QUICKBOOKS_INVOICE_IDENTITY_BIND_BUDGET_MS = 20_000;
+export const QUICKBOOKS_INVOICE_NUMBERING_BUDGET_MS = 20_000;
+
+/** One attempt context survives the credential-refresh callback replay. */
+export function createQuickBooksInvoiceWriteControl(params: {
+  payload: Record<string, unknown>;
+  providerRequestId: string;
+  realmId: string;
+  claimDeadlineAtMs: number;
+  beforeCreate: () => Promise<void>;
+}) {
+  return {
+    requestBody: JSON.stringify(params.payload),
+    providerRequestId: params.providerRequestId,
+    realmId: params.realmId,
+    claimDeadlineAtMs: params.claimDeadlineAtMs,
+    numberingDeadlineAtMs: Math.min(params.claimDeadlineAtMs, Date.now() + QUICKBOOKS_INVOICE_NUMBERING_BUDGET_MS),
+    beforeCreate: params.beforeCreate,
+    postAttempted: false,
+    phase: "preflight" as "preflight" | "fence" | "create",
+  };
+}
+export type QuickBooksInvoiceWriteControl = ReturnType<typeof createQuickBooksInvoiceWriteControl>;
+
+export function classifyQuickBooksInvoiceWriteFailure(error: unknown, control: QuickBooksInvoiceWriteControl) {
+  const failure = classifyQuickBooksProviderFailure(error);
+  // An explicit final CREATE rejection remains distinguishable from a later
+  // preflight, fence, refresh, transport or persistence failure.
+  const explicitRejection = control.phase === "create" && error instanceof QuickBooksProviderError
+    && error.statusCode !== undefined && error.statusCode >= 400 && error.statusCode < 500
+    && ![401, 408, 429].includes(error.statusCode) && /^QUICKBOOKS_HTTP_\d{3}$/.test(error.code);
+  return control.postAttempted && !explicitRejection
+    ? { code: "QUICKBOOKS_MUTATION_RESULT_UNKNOWN", ambiguous: true }
+    : failure;
+}
+
 export async function createQuickBooksInvoice(
   runtimeEnv: RuntimeEnv,
   realmId: string,
   accessToken: string,
   payload: Record<string, unknown>,
-  providerRequestId?: string,
+  providerRequestId: string | undefined,
+  control: QuickBooksInvoiceWriteControl,
 ): Promise<QuickBooksInvoiceEntity> {
+  // Snapshot once: the numbering checks must describe the exact body sent even
+  // while the read-only provider preflight awaits network responses.
+  control.phase = "preflight";
+  if (realmId !== control.realmId || providerRequestId !== control.providerRequestId
+      || JSON.stringify(payload) !== control.requestBody) {
+    throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID", false);
+  }
+  const requestBody = control.requestBody;
+  await assertQuickBooksInvoiceNumberingSafe(runtimeEnv, realmId, accessToken, JSON.parse(requestBody), control.numberingDeadlineAtMs);
+  control.phase = "fence";
+  await control.beforeCreate();
+  if (Date.now() + runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS + QUICKBOOKS_INVOICE_IDENTITY_BIND_BUDGET_MS >= control.claimDeadlineAtMs) {
+    throw new QuickBooksProviderError("QUICKBOOKS_PUBLISH_DEADLINE", false);
+  }
   const requestQuery = providerRequestId
     ? `?requestid=${encodeURIComponent(providerRequestId)}`
     : "";
+  control.phase = "create";
+  control.postAttempted = true;
   const response = await quickBooksApiRequest<{ Invoice: QuickBooksInvoiceEntity }>(
     runtimeEnv,
     realmId,
@@ -706,11 +773,87 @@ export async function createQuickBooksInvoice(
     `/invoice${requestQuery}`,
     {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: requestBody,
     },
   );
 
   return parseQuickBooksEntity(QuickBooksInvoiceSchema, response.Invoice, "QUICKBOOKS_INVOICE_RESPONSE_INVALID");
+}
+
+export const QUICKBOOKS_INVOICE_PRECREATE_FAILURE_CODES = [
+  "QUICKBOOKS_CUSTOM_NUMBERING_REQUIRED",
+  "QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID",
+  "QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE",
+  "QUICKBOOKS_DOC_NUMBER_COLLISION",
+] as const;
+
+/** All returned text is fixed and safe for a contractor-facing response. */
+export function quickBooksInvoicePrecreateFailureMessage(code: string): string | null {
+  switch (code) {
+    case "QUICKBOOKS_CUSTOM_NUMBERING_REQUIRED":
+      return "Enable custom transaction numbers in QuickBooks sales settings, then review this invoice again. No invoice was created.";
+    case "QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID":
+    case "QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE":
+      return "QuoteFly could not verify QuickBooks invoice numbering. Try again after reviewing the invoice. No invoice was created.";
+    case "QUICKBOOKS_DOC_NUMBER_COLLISION":
+      return "QuickBooks already has an invoice with this number. Review the existing invoice before continuing. No invoice was created.";
+    default:
+      return null;
+  }
+}
+
+async function assertQuickBooksInvoiceNumberingSafe(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  payload: unknown,
+  deadlineAtMs: number,
+): Promise<void> {
+  const parsedPayload = z.object({ DocNumber: z.string().min(1).max(21).refine((value) => value === value.trim()) }).safeParse(payload);
+  if (!parsedPayload.success) throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID", false);
+  let preferences: unknown;
+  try {
+    preferences = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, "/preferences", {}, deadlineAtMs);
+  } catch (error) {
+    // Preserve the existing credential-refresh flow; no CREATE has happened.
+    if (error instanceof QuickBooksProviderError && error.statusCode === 401) throw error;
+    throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE", false);
+  }
+  const parsedPreferences = z.object({
+    Preferences: z.object({
+      SalesFormsPrefs: z.object({ CustomTxnNumbers: z.boolean().optional() }).optional(),
+    }),
+  }).safeParse(preferences);
+  if (!parsedPreferences.success) throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID", false);
+  if (parsedPreferences.data.Preferences.SalesFormsPrefs?.CustomTxnNumbers !== true) {
+    throw new QuickBooksProviderError("QUICKBOOKS_CUSTOM_NUMBERING_REQUIRED", false);
+  }
+
+  const query = `SELECT * FROM Invoice WHERE DocNumber = '${escapeQuickBooksQueryValue(parsedPayload.data.DocNumber)}' MAXRESULTS 1`;
+  let result: unknown;
+  try {
+    result = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, `/query?query=${encodeURIComponent(query)}`, {}, deadlineAtMs);
+  } catch (error) {
+    if (error instanceof QuickBooksProviderError && error.statusCode === 401) throw error;
+    throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE", false);
+  }
+  const parsedQuery = z.object({
+    QueryResponse: z.object({
+      Invoice: z.array(z.object({ Id: z.string().min(1) })).optional(),
+      totalCount: z.number().int().nonnegative().optional(),
+      maxResults: z.number().int().nonnegative().optional(),
+      startPosition: z.number().int().nonnegative().optional(),
+    }).strict(),
+    time: z.string().optional(),
+  }).strict().safeParse(result);
+  if (!parsedQuery.success) throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID", false);
+  const response = parsedQuery.data.QueryResponse;
+  if ((response.Invoice?.length ?? 0) > 0 || (response.totalCount ?? 0) > 0) {
+    throw new QuickBooksProviderError("QUICKBOOKS_DOC_NUMBER_COLLISION", false);
+  }
+  if ((response.maxResults ?? 0) > 0) {
+    throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID", false);
+  }
 }
 
 export async function findQuickBooksInvoicesByDocNumber(

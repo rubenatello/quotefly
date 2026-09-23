@@ -12,6 +12,9 @@ import {
   buildQuickBooksAdminRedirect,
   buildQuickBooksAuthorizationUrl,
   createQuickBooksInvoice,
+  createQuickBooksInvoiceWriteControl,
+  classifyQuickBooksInvoiceWriteFailure,
+  QUICKBOOKS_INVOICE_IDENTITY_BIND_BUDGET_MS,
   createSignedQuickBooksState,
   decryptQuickBooksHostedPaymentLink,
   encryptQuickBooksSecret,
@@ -26,6 +29,7 @@ import {
   normalizeQuickBooksName,
   classifyQuickBooksProviderFailure,
   quickBooksInvoiceFingerprint,
+  quickBooksInvoicePrecreateFailureMessage,
   QuickBooksProviderError,
   searchQuickBooksCustomers,
   searchQuickBooksItems,
@@ -46,6 +50,8 @@ import {
 } from "../services/quickbooks-orphan-revocations";
 import {
   bindQuickBooksInvoiceReconciliationIdentity,
+  bindCreatedQuickBooksInvoiceIdentity,
+  assertQuickBooksInvoiceCreateFence,
   claimQuickBooksInvoicePublish,
   claimQuickBooksInvoiceReconciliation,
   completeQuickBooksInvoicePublish,
@@ -1845,6 +1851,26 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         ...claim.connection,
         realmId: claim.operation.providerRealmId,
       };
+      const activeClaim = claim;
+      const reloadOperation = () => withTenantRlsContext(app.prisma, access.tenantId,
+        (transaction) => transaction.quickBooksInvoiceOperation.findFirstOrThrow({
+          where: { tenantId: access.tenantId, invoiceId, archivedAtUtc: null },
+          select: QuickBooksInvoiceOperationPublicSelect,
+        }));
+      const writeControl = createQuickBooksInvoiceWriteControl({
+        payload: claim.providerPayload, providerRequestId: claim.providerRequestId,
+        realmId: claim.operation.providerRealmId,
+        claimDeadlineAtMs: claim.operation.claimExpiresAtUtc!.getTime(),
+        beforeCreate: async () => {
+          if (!(await hasLiveQuickBooksManagerAccess(claims.tenantId, claims.userId))) {
+            throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_OPERATION_STALE",
+              "QuickBooks access changed. Refresh its status before continuing.");
+          }
+          await withTenantRlsContext(app.prisma, access.tenantId,
+            (transaction) => assertQuickBooksInvoiceCreateFence(transaction, access, activeClaim,
+              app.env.QUICKBOOKS_PROVIDER_TIMEOUT_MS + QUICKBOOKS_INVOICE_IDENTITY_BIND_BUDGET_MS));
+        },
+      });
       let createdInvoice: Awaited<ReturnType<typeof createQuickBooksInvoice>>;
       try {
         createdInvoice = await runQuickBooksProviderRequest(
@@ -1855,10 +1881,18 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             accessToken,
             claim.providerPayload,
             claim.providerRequestId,
+            writeControl,
           ),
         );
       } catch (error) {
-        const failure = classifyQuickBooksProviderFailure(error);
+        const fenceDenied = error instanceof QuickBooksInvoiceOperationError
+          || (error instanceof QuickBooksProviderError && error.code === "QUICKBOOKS_PUBLISH_DEADLINE");
+        const failure = fenceDenied && !writeControl.postAttempted
+          ? { code: "QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE", ambiguous: false }
+          : classifyQuickBooksInvoiceWriteFailure(error, writeControl);
+        let stale = false;
+        // A stale worker must never overwrite a reconciliation claim or a
+        // completed operation. Return the authoritative state instead.
         const operation = await withTenantRlsContext(
           app.prisma,
           access.tenantId,
@@ -1868,20 +1902,55 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             failureCode: failure.code,
             ambiguous: failure.ambiguous,
           }),
-        );
+        ).catch(async (finalizeError: unknown) => {
+          if (finalizeError instanceof QuickBooksInvoiceOperationError && finalizeError.code === "QUICKBOOKS_OPERATION_STALE") {
+            stale = true;
+            return reloadOperation();
+          }
+          throw finalizeError;
+        });
         request.log.error(
           { code: failure.code, ambiguous: failure.ambiguous, invoiceId },
           "QuickBooks invoice publish failed",
         );
-        if (sendQuickBooksReauthRequired(reply, error)) return;
-        return reply.code(failure.ambiguous ? 202 : 502).send({
-          error: failure.ambiguous
+        if (stale) return reply.code(writeControl.postAttempted ? 202 : 409).send({
+          error: "The QuickBooks operation or connection changed. Refresh its status and reconcile before continuing.",
+          code: writeControl.postAttempted ? "QUICKBOOKS_RESULT_UNCERTAIN" : "QUICKBOOKS_OPERATION_STALE",
+          duplicate: false, reconciliationRequired: operation.status !== "SUCCEEDED",
+          operation: serializeQuickBooksInvoiceOperation(operation),
+        });
+        if (!writeControl.postAttempted && sendQuickBooksReauthRequired(reply, error)) return;
+        const precreateMessage = quickBooksInvoicePrecreateFailureMessage(failure.code);
+        return reply.code(precreateMessage ? 409 : failure.ambiguous ? 202 : 502).send({
+          error: precreateMessage ?? (failure.ambiguous
             ? "The QuickBooks result is uncertain. Reconcile it before trying again."
-            : "QuickBooks rejected the invoice publish.",
-          code: failure.ambiguous ? "QUICKBOOKS_RESULT_UNCERTAIN" : "QUICKBOOKS_PUBLISH_REJECTED",
+            : "QuickBooks rejected the invoice publish."),
+          code: precreateMessage ? failure.code : failure.ambiguous ? "QUICKBOOKS_RESULT_UNCERTAIN" : "QUICKBOOKS_PUBLISH_REJECTED",
           duplicate: false,
           reconciliationRequired: failure.ambiguous,
           operation: serializeQuickBooksInvoiceOperation(operation),
+        });
+      }
+
+      // Commit the returned identity before a confirmation GET can time out,
+      // refresh credentials, or observe a lease/state transition.
+      try {
+        const bound = await withTenantRlsContext(app.prisma, access.tenantId,
+          (transaction) => bindCreatedQuickBooksInvoiceIdentity(transaction, access, activeClaim, createdInvoice.Id),
+          { maxWait: 5_000, timeout: 15_000 });
+        if (!bound.canComplete) return reply.code(202).send({
+          error: "QuickBooks created the invoice. Reconcile its current state before continuing.",
+          code: "LOCAL_COMMIT_RESULT_UNKNOWN", duplicate: false, reconciliationRequired: bound.operation.status !== "SUCCEEDED",
+          operation: serializeQuickBooksInvoiceOperation(bound.operation),
+        });
+      } catch {
+        const operation = await reloadOperation().catch(() => null);
+        return reply.code(202).send({
+          error: "QuickBooks may have created the invoice. Reconcile before continuing.",
+          code: "LOCAL_COMMIT_RESULT_UNKNOWN", duplicate: false, reconciliationRequired: true,
+          operation: operation ? serializeQuickBooksInvoiceOperation(operation) : {
+            status: "RECONCILIATION_REQUIRED", providerDocNumber: claim.operation.providerDocNumber, reconciliationAvailable: true,
+          },
         });
       }
 
@@ -1914,7 +1983,12 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             providerInvoiceId: createdInvoice.Id,
             failureCode: failure.code,
           }),
-        );
+        ).catch(async (retainError: unknown) => {
+          if (retainError instanceof QuickBooksInvoiceOperationError && retainError.code === "QUICKBOOKS_OPERATION_STALE") {
+            return reloadOperation();
+          }
+          throw retainError;
+        });
         request.log.warn(
           { code: failure.code, invoiceId },
           "QuickBooks invoice was created but its authoritative snapshot remains pending",
