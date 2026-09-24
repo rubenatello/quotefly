@@ -8,6 +8,9 @@ import {
 } from "./data-classification";
 
 const REVIEWED_SCHEMA_FIELD_TEXT = {
+  InvoiceTaxContext: "confirmedAtUtc confirmedByTenantUserId connectionConnectedAtUtc connectionGeneration currency customerId customerMapId customerMapReviewVersion customerMapReviewedAtUtc destination environment id idempotencyKeyHash inputHash invoiceId invoiceVersion jobId lineCount origin providerCustomerId providerRealmId quickBooksConnectionId quotedTaxAmount revision sourceQuoteId subtotalAmount supersededAtUtc tenantId totalAmount transactionDate",
+  InvoiceTaxContextLine: "amount description id invoiceLineItemIdSnapshot invoiceTaxContextId itemKey itemMapId itemMapReviewVersion itemMapReviewedAtUtc position providerItemId quantity taxIntent tenantId unitPrice",
+
   TenantBranding: "addressLine1 addressLine2 businessEmail businessPhone city componentColors createdAt deletedAtUtc hideQuoteFlyAttribution id logoPosition logoUrl postalCode primaryColor quoteMessageTemplate state templateId tenantId updatedAt",
   TenantBrandAsset: "byteLength createdAt data id mimeType sha256 tenantId",
   Tenant: "billingStateEventCreatedAtUtc billingStateEventId createdAt defaultCustomerLocale deletedAtUtc id name onboardingCompletedAtUtc primaryTrade slug stripeCheckoutAttemptExpiresAtUtc stripeCheckoutAttemptId stripeCheckoutSessionExpiresAtUtc stripeCheckoutSessionId stripeCustomerId stripeSubscriptionId subscriptionCurrentPeriodEndUtc subscriptionCurrentPeriodStartUtc subscriptionPlanCode subscriptionStatus timezone trialEndsAtUtc trialStartsAtUtc updatedAt",
@@ -48,6 +51,7 @@ const REVIEWED_SCHEMA_FIELD_TEXT = {
   InvoiceLineItem: "createdAt description id invoiceId lineTotal position quantity sectionLabel sectionType sourceQuoteLineItemIdSnapshot tenantId unitPrice",
   InvoicePayment: "amount createdAt currency deletedAtUtc failedAtUtc failureCode id invoiceId paidAtUtc provider providerInvoiceId providerPaymentId providerSyncToken providerUpdatedAtUtc receiptUrl refundedAmount refundedAtUtc status tenantId updatedAt",
   InvoiceEvent: "actorTenantUserId commandKeyHash commandPayloadHash createdAt fromPaymentStatus fromStatus id invoiceId providerEventId requestId tenantId toPaymentStatus toStatus type",
+  QuickBooksTaxEstimateOperation: "attemptCount attemptTokenHash bindingKeyId canonicalAtUtc canonicalEstimateHash claimExpiresAtUtc claimTokenHash connectionGeneration connectionGenerationAtUtc contractVersion createdAt customerId estimateAstHash estimateAstSnapshot estimateRequestId failedAtUtc id invoiceId invoiceRequestId invoiceTaxContextId invoiceTaxContextInputHash invoiceTaxContextRevision invoiceVersion lastAttemptAtUtc lastFailureCode providerEstimateId providerEstimateSyncToken providerEstimateUpdatedAtUtc providerRealmId providerSubtotal providerTax providerTotal quickBooksConnectionId requestedByTenantUserId reviewBindingDigest reviewRevision reviewedAtUtc reviewedByTenantUserId sourceHash sourceQuoteId sourceSnapshot status supersededAtUtc tenantId uncertainAtUtc updatedAt",
   QuickBooksInvoiceOperation: "allowOnlineAchPayment allowOnlineCardPayment archivedAtUtc attemptCount claimExpiresAtUtc claimTokenHash commandKeyHash createdAt failedAtUtc id invoiceId invoiceLinkFetchedAtUtc lastAttemptAtUtc lastFailureCode lastReconciledAtUtc payloadHash processingStartedAtUtc providerBalance providerDocNumber providerInvoiceId providerInvoiceLink providerInvoiceStatus providerRealmId providerRequestId providerSyncToken providerUpdatedAtUtc quickBooksConnectionId reconciliationCount requestedByTenantUserId status succeededAtUtc tenantId updatedAt",
   SmsMessage: "body deletedAtUtc direction externalSid fromNumber id receivedAt tenantId toNumber",
   QuoteDecisionSession: "createdAt deletedAtUtc id quoteId requesterPhone status tenantId updatedAt",
@@ -58,10 +62,13 @@ const REVIEWED_SCHEMA_FIELD_TEXT = {
   QuickBooksItemMap: "createdAt deletedAtUtc id itemKey quickBooksConnectionId quickBooksItemId quickBooksItemName reviewedAtUtc reviewedByTenantUserId reviewVersion sourceType tenantId updatedAt workPresetId",
   QuickBooksInvoiceSync: "createdAt deletedAtUtc id lastAttemptedAtUtc lastError payloadSnapshot quickBooksConnectionId quickBooksDocNumber quickBooksInvoiceId quoteId requestId status syncedAtUtc tenantId updatedAt",
   QuickBooksWebhookEvent: "attemptCount claimExpiresAtUtc claimTokenHash deadAtUtc entityId eventType id lastError nextAttemptAtUtc operation payload processedAtUtc providerUpdatedAtUtc quickBooksConnectionId realmId receivedAtUtc status tenantId webhookEventId",
+  QuickBooksWebhookReplay: "actorTenantUserId commandHash createdAtUtc eventId id priorAttemptCount priorFailureCode reason tenantId",
   QuickBooksOAuthState: "consumedAtUtc createdAt expiresAtUtc id quickBooksConnectionId stateHash tenantId userId",
   QuickBooksOrphanCredentialRevocation: "attemptCount claimExpiresAtUtc claimTokenHash createdAt deadAtUtc dedupeKeyHash id lastAttemptAtUtc lastErrorCode nextAttemptAtUtc refreshTokenEncrypted revokedAtUtc status tenantId updatedAt",
   QuickBooksRealmBinding: "active createdAt id quickBooksConnectionId realmId tenantId updatedAt",
   QuickBooksCdcCursor: "attemptCount changedSinceUtc createdAt id lastAttemptAtUtc lastErrorCode lastSucceededAtUtc nextAttemptAtUtc quickBooksConnectionId tenantId terminalAtUtc updatedAt",
+  QuickBooksOperationalAlertState: "active alertCode conditionSinceUtc failureStreak firstObservedAtUtc healthyStreak incidentGeneration lastObservedAtUtc lastReminderAtUtc severity",
+  QuickBooksOperationalAlertDelivery: "alertCode attemptCount claimExpiresAtUtc claimToken configurationHash dedupeKeyHash firstAttemptAtUtc id incidentGeneration lastErrorCode metrics nextAttemptAtUtc observedAtUtc sentAtUtc severity status transition",
   WorkerHeartbeat: "cycleStartedAtUtc heartbeatAtUtc instanceRefHash lastCycleDurationMs metrics startedAtUtc status updatedAt workerKey",
   QuoteOutboundEvent: "actorEmail actorName actorUserId bodyPreview channel createdAt customerId deletedAtUtc destination id idempotencyKey quoteId subject tenantId",
   WorkPreset: "catalogContentHash catalogCustomizedAtUtc catalogKey catalogVersion category createdAt defaultQuantity deletedAtUtc description id isDefault name serviceType tenantId unitCost unitPrice unitType updatedAt",
@@ -117,6 +124,9 @@ const MODEL_POLICIES = {
   InvoiceLineItem: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "Immutable tenant invoice scope and amount snapshots" },
   InvoicePayment: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "Provider-safe tenant payment status ledger for invoices" },
   InvoiceEvent: { defaultClassification: "C1_BUSINESS_INTERNAL", tenantScope: "required", purpose: "Content-free immutable invoice/payment transition and idempotency audit" },
+  InvoiceTaxContext: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Immutable manager-confirmed invoice tax context and financial source evidence; no AI or analytics use" },
+  InvoiceTaxContextLine: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Immutable manager-confirmed invoice tax context and financial source evidence; no AI or analytics use" },
+  QuickBooksTaxEstimateOperation: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Immutable reviewed QuickBooks tax Estimate snapshots and provider request identity; restricted financial proof, no AI or analytics use" },
   QuickBooksInvoiceOperation: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "Durable content-free QuickBooks invoice publish claim and reconciliation state" },
   SmsMessage: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Tenant SMS communications" },
   QuoteDecisionSession: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Quote approval and revision workflow" },
@@ -127,10 +137,16 @@ const MODEL_POLICIES = {
   QuickBooksItemMap: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "Tenant-to-QuickBooks item mapping" },
   QuickBooksInvoiceSync: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "QuickBooks invoice export and synchronization state" },
   QuickBooksWebhookEvent: { defaultClassification: "C4_RESTRICTED", tenantScope: "optional", purpose: "QuickBooks webhook processing envelope" },
+  // Even content-free replay history links a live authorization actor to a
+  // provider-recovery command. Keep every field out of AI/RAG and analytics;
+  // manager API access is a separately authorized, explicitly selected surface.
+  QuickBooksWebhookReplay: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Restricted tenant-scoped immutable owner/admin authorization and webhook recovery audit; no AI or analytics use" },
   QuickBooksOAuthState: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Single-use hashed QuickBooks OAuth callback state" },
   QuickBooksOrphanCredentialRevocation: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Encrypted orphan QuickBooks OAuth credential revocation retry and incident state" },
   QuickBooksRealmBinding: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "Minimal tenant-safe QuickBooks webhook realm routing" },
   QuickBooksCdcCursor: { defaultClassification: "C4_RESTRICTED", tenantScope: "required", purpose: "QuickBooks change-data-capture recovery cursor and retry state" },
+  QuickBooksOperationalAlertState: { defaultClassification: "C1_BUSINESS_INTERNAL", tenantScope: "platform", purpose: "Content-free fixed-code QuickBooks operational incident hysteresis; no customer or provider identifiers" },
+  QuickBooksOperationalAlertDelivery: { defaultClassification: "C1_BUSINESS_INTERNAL", tenantScope: "platform", purpose: "Content-free leased fixed-recipient operational alert delivery; bounded counts, no arbitrary email or tenant content" },
   WorkerHeartbeat: { defaultClassification: "C1_BUSINESS_INTERNAL", tenantScope: "platform", purpose: "Content-free background worker liveness and bounded operational metrics" },
   QuoteOutboundEvent: { defaultClassification: "C2_CUSTOMER_CONFIDENTIAL", tenantScope: "required", purpose: "Quote delivery and sharing audit" },
   WorkPreset: { defaultClassification: "C3_FINANCIAL_CONFIDENTIAL", tenantScope: "required", purpose: "Tenant product catalog, prices, and internal costs" },

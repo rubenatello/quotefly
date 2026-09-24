@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { NavigationGuardContext, useGuardedNavigate } from "../../hooks/navigation-guard-context";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import {
   BarChart3,
   CalendarClock,
@@ -48,7 +49,7 @@ import { workspacePageFromPath, type WorkspacePage } from "../crm/workspace-navi
 import { KodySparkIcon } from "./KodySparkIcon";
 import { visibleKodyResultEntries } from "./kody-result-display";
 import {
-  KODY_OPEN_EVENT,
+  subscribeKodyOpen,
   KODY_OUTCOME_EVENT,
   type KodyBookingReviewDetail,
   type KodyDispatchReviewDetail,
@@ -1140,7 +1141,8 @@ export function KodyAssistant({
   aiUsageRenewsAtUtc?: string | null;
   displayTimeZone?: string | null;
 }) {
-  const navigate = useNavigate();
+  const guardedNavigate = useGuardedNavigate();
+  const navigationGuard = useContext(NavigationGuardContext);
   const location = useLocation();
   const track = useTrack();
   const { t } = useTranslation();
@@ -1161,6 +1163,16 @@ export function KodyAssistant({
   );
   const launcherRef = useRef<HTMLButtonElement>(null);
   const originFocusRef = useRef<HTMLElement | null>(null);
+  const navigate = useCallback((to: Parameters<typeof guardedNavigate>[0], options?: Parameters<typeof guardedNavigate>[1], closePanel = false) => {
+    const follow = () => guardedNavigate(to, options);
+    if (closePanel || window.matchMedia("(max-width: 1023px)").matches) {
+      // On narrow pages the contextual entry replaces the generic launcher.
+      const origin = originFocusRef.current;
+      const returnTarget = origin?.isConnected && origin.getClientRects().length ? origin : launcherRef.current;
+      setOpen(false);
+      if (navigationGuard) navigationGuard.withReturnFocus(returnTarget, follow); else follow();
+    } else follow();
+  }, [guardedNavigate, navigationGuard]);
   const panelRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const conversationRef = useRef<HTMLDivElement>(null);
@@ -1233,10 +1245,8 @@ export function KodyAssistant({
   }, []);
 
   useEffect(() => {
-    const handleOpenKody = (event: Event) => {
-      const detail = (event as CustomEvent<KodyOpenDetail>).detail;
-      if (!detail || typeof detail.prompt !== "string") return;
-      originFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return subscribeKodyOpen(({ detail, origin }) => {
+      originFocusRef.current = origin;
       setOpen(true);
       setError(null);
       setPrompt(detail.prompt);
@@ -1249,10 +1259,7 @@ export function KodyAssistant({
         tool: detail.tool ?? "AUTO",
         currentPage: detail.context?.currentPage ?? currentContextPage,
       });
-    };
-
-    window.addEventListener(KODY_OPEN_EVENT, handleOpenKody);
-    return () => window.removeEventListener(KODY_OPEN_EVENT, handleOpenKody);
+    });
   }, [currentContextPage, track]);
 
   useEffect(() => {
@@ -1748,20 +1755,16 @@ export function KodyAssistant({
       // Kody avoids stacking its review dialog with the booking surface. The
       // launcher persists across the route transition, so it is also a valid
       // return target when a Kody-initiated reschedule is canceled.
-      originFocusRef.current = null;
-      setOpen(false);
       navigate(`/app/jobs/${encodeURIComponent(review.jobId)}`, {
         state: { kodyBookingReview: review, kodyFocusReturnId: "kody-launcher" },
-      });
+      }, true);
       return;
     }
 
     if (action.type === "OPEN_DISPATCH_REVIEW") {
       const review = dispatchReviewFromAction(action);
       if (!review) return rejectInvalidAction(t("kody.errors.dispatchReview"), action);
-      originFocusRef.current = null;
-      setOpen(false);
-      navigate(`/app/jobs/${encodeURIComponent(review.jobId)}`, { state: { kodyDispatchReview: review } });
+      navigate(`/app/jobs/${encodeURIComponent(review.jobId)}`, { state: { kodyDispatchReview: review } }, true);
       return;
     }
 

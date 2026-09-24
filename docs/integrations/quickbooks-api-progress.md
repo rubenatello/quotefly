@@ -1,8 +1,14 @@
 # QuickBooks API Progress
 
-Last updated: 2026-09-02
+Last updated: 2026-09-23
 
-Status: Hosted-payment and reconciliation engineering candidate in progress. Provider workflows remain default-off, unavailable to customers, and unapproved for sandbox or production enablement.
+Status: Hosted-payment and reconciliation engineering candidate in progress. Owner-confirmed OAuth connection succeeded on isolated staging. Accounting operations remain disabled there; production provider workflows remain default-off and unavailable to customers.
+
+Current implementation and evidence are tracked in the [September 13 release candidate](quickbooks-release-candidate-2026-09-13.md). Connection proof does not establish invoice, payment, webhook, or recovery behavior against Intuit.
+
+The latest continuation evidence is in the [September 23 staging ledger](quickbooks-staging-evidence-2026-09-23.md). Isolated API source f24ffa6 is deployed with connection-only safeguards after four tax-ledger migrations and independent database checks passed; the web remains at fec2edc. A bounded real sandbox customer/item lookup test passed and restored connection-only mode without selecting mappings or publishing records. Worker failure/restart and recovery checks passed, but operational email delivery and actual inbox receipt remain unproven. One isolated Neon point-in-time restore and guarded migration rehearsal passed and its temporary resources were removed; this does not establish production-volume recovery or a restore rehearsal of the later tax-ledger schema.
+
+The [tax review contract](quickbooks-tax-review-contract.md) and preparatory ledger bind exact invoice inputs and retain uncertain provider-attempt evidence. An internal GET-only reader collects bounded, stripped tax facts through the existing credential wrapper. Approved feature checkpoint 4ca3f7d captures immutable manager-confirmed addresses, calendar date and line tax intent, with a shared-lock safeguard preventing direct non-tax publishing from ignoring taxable intent; its GitHub launch gate passed, but it is not deployed. The next uncommitted assembler binds that context to signed review evidence. Its claim-integrity remediation, independent backend/security review, populated legacy migration rehearsal and combined local gate passed; final Opera review is pending. There is no context route, UI or provider-write adapter for tax reviews in this checkpoint, and taxable invoices remain unavailable. Real positive-tax Estimate/Invoice parity remains required. Keep these engineering prerequisites separate from advertised product capabilities.
 
 The acceptance contract is [QuickBooks Hosted Payments And Reconciliation](quickbooks-hosted-payments-reconciliation.md). That contract defines the authoritative workflow, security boundary, state projection, recovery behavior, and evidence required before enablement.
 
@@ -12,7 +18,7 @@ The acceptance contract is [QuickBooks Hosted Payments And Reconciliation](quick
 - Export accounting data through the QuickBooks-friendly CSV workflow.
 - Allow current owners/admins to inspect local QuickBooks configuration state or disconnect locally stored credentials.
 
-QuoteFly does not currently offer customer-available QuickBooks Online connection, invoice creation, hosted-payment delivery, invoice/payment reconciliation, tax sync, or webhook automation. No Intuit sandbox result, QuickBooks Payments eligibility, production app approval, or production provider operation is claimed.
+QuoteFly does not currently offer customer-available QuickBooks Online connection, invoice creation, hosted-payment delivery, invoice/payment reconciliation, tax sync, or webhook automation. The owner verified the sandbox company connection in staging. QuickBooks Payments eligibility, sandbox accounting operations, production app approval, and production provider operations remain unverified.
 
 ## Engineering candidate
 

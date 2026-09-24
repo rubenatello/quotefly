@@ -1,5 +1,7 @@
-import { lazy, Suspense, useEffect } from "react";
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { lazy, Suspense, useContext, useEffect, useLayoutEffect } from "react";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { WorkspaceNavigationGuard } from "./WorkspaceNavigationGuard";
+import { NavigationGuardContext, useGuardedNavigate } from "../hooks/navigation-guard-context";
 import { useTranslation } from "react-i18next";
 import { WorkspaceRouteLoading } from "./AppLoadingScreen";
 import { CrmShell } from "./CrmShell";
@@ -16,6 +18,7 @@ import { DashboardProvider, type DashboardSession } from "./dashboard/DashboardC
 import type { AppSession } from "../lib/app-session";
 import { resolveAiUsagePresentation } from "../lib/ai-credits";
 import { notificationJobPath } from "../lib/notification-display";
+import { clearPendingKodyOpen } from "./ai/kody-events";
 
 const KodyAssistant = lazy(() => import("./ai/KodyAssistant").then((module) => ({ default: module.KodyAssistant })));
 const AiUsageMilestoneNotifier = lazy(() => import("./ai/AiUsageMilestoneNotifier").then((module) => ({ default: module.AiUsageMilestoneNotifier })));
@@ -56,23 +59,36 @@ function toDashboardSession(s: AppSession): DashboardSession {
   };
 }
 
-export function CrmAppLayout({
-  session,
-  onLogout,
-  onRefreshSession,
-}: {
+type CrmAppLayoutProps = {
   session: AppSession;
   onLogout: () => void;
   onRefreshSession: () => Promise<void>;
-}) {
+};
+
+export function CrmAppLayout(props: CrmAppLayoutProps) {
+  return <WorkspaceNavigationGuard key={`${props.session.userId}:${props.session.tenantId}`}><CrmAppContent {...props} /></WorkspaceNavigationGuard>;
+}
+
+function CrmAppContent({
+  session,
+  onLogout,
+  onRefreshSession,
+}: CrmAppLayoutProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
+  const navigate = useGuardedNavigate();
+  const navigationGuard = useContext(NavigationGuardContext);
   const location = useLocation();
   const canManageCatalog = ["owner", "admin"].includes(session.role.trim().toLowerCase());
   const workspaceLocked =
     session.entitlements?.billingRequired === true &&
     session.entitlements.hasWorkspaceAccess === false &&
     !session.isSuperuser;
+  // Clear before a new workspace's passive subscription can consume an old intent.
+  useLayoutEffect(() => () => clearPendingKodyOpen(), [session.userId, session.tenantId, workspaceLocked]);
+  const handleLogout = () => {
+    const logout = () => { clearPendingKodyOpen(); onLogout(); };
+    if (navigationGuard) navigationGuard.request(logout); else logout();
+  };
   const billingReturnState = new URLSearchParams(location.search).get("billing");
   const billingSubscriptionConfirmed =
     Boolean(session.subscriptionPlanCode) &&
@@ -129,7 +145,7 @@ export function CrmAppLayout({
     return (
       <BillingRequiredScreen
         session={session}
-        onLogout={onLogout}
+        onLogout={handleLogout}
         onRefreshSession={onRefreshSession}
       />
     );
@@ -156,7 +172,7 @@ export function CrmAppLayout({
       currentPage={currentPage}
       onNavigate={handleNavigate}
       onQuickAction={handleQuickAction}
-      onLogout={onLogout}
+      onLogout={handleLogout}
       fullName={session.fullName}
       email={session.email}
       planName={session.effectivePlanName}
@@ -238,6 +254,7 @@ export function CrmAppLayout({
         <BottomTabBar />
         <Suspense fallback={null}>
           <KodyAssistant
+            key={`${session.tenantId}:${session.userId}`}
             currentPage={currentPage}
             canViewInternalCosts={session.role.trim().toLowerCase() !== "member"}
             aiPaidActionsUnavailable={aiUsage.paidActionsUnavailable}

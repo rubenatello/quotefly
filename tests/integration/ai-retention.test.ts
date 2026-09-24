@@ -101,6 +101,9 @@ async function createRetentionRows(fixture: Awaited<ReturnType<typeof createFixt
 
 describe("AI privacy retention", () => {
   beforeEach(async () => {
+    // Remove webhook evidence before tenant/connection cascades can split its
+    // required connection/tenant pair left by preceding integration suites.
+    await prisma.quickBooksWebhookEvent.deleteMany();
     await prisma.tenant.deleteMany();
     await prisma.user.deleteMany();
   });

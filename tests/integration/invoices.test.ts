@@ -1,4 +1,4 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
@@ -14,6 +14,7 @@ import {
 } from "../../src/services/quickbooks";
 import { reconcileQuickBooksInvoice } from "../../src/services/quickbooks-reconciliation";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
+import { confirmInvoiceTaxContext } from "../../src/services/quickbooks-tax-context";
 
 const quickBooksProviderMocks = vi.hoisted(() => ({
   createInvoice: vi.fn(),
@@ -1244,13 +1245,154 @@ describe("invoice ledger API", () => {
     expect(publish.statusCode).toBe(201);
     expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
     const providerPayload = quickBooksProviderMocks.createInvoice.mock.calls[0]?.[3] as {
-      Line: Array<{ Description: string; Amount: number }>;
+      Line: Array<{
+        Description: string;
+        Amount: number;
+        SalesItemLineDetail: { ItemRef: { value: string }; TaxCodeRef: { value: string } };
+      }>;
     };
     expect(providerPayload.Line).toEqual([
-      expect.objectContaining({ Description: "Snapshot labor", Amount: 200 }),
-      expect.objectContaining({ Description: "Snapshot materials", Amount: 100 }),
+      expect.objectContaining({
+        Description: "Snapshot labor",
+        Amount: 200,
+        SalesItemLineDetail: expect.objectContaining({
+          ItemRef: expect.objectContaining({ value: "qb-item-snapshot-1" }),
+          TaxCodeRef: { value: "NON" },
+        }),
+      }),
+      expect.objectContaining({
+        Description: "Snapshot materials",
+        Amount: 100,
+        SalesItemLineDetail: expect.objectContaining({
+          ItemRef: expect.objectContaining({ value: "qb-item-snapshot-2" }),
+          TaxCodeRef: { value: "NON" },
+        }),
+      }),
     ]);
+    expect(providerPayload.Line).toHaveLength(2);
+    expect(providerPayload.Line.every((line) => line.SalesItemLineDetail.TaxCodeRef.value === "NON")).toBe(true);
+    expect(providerPayload.Line.reduce((sum, line) => sum + line.Amount, 0)).toBe(300);
+    const operation = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
+      where: { tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: invoice.id } },
+      select: { payloadHash: true, providerBalance: true },
+    });
+    expect(operation.payloadHash).toBe(quickBooksInvoiceFingerprint({ ...providerPayload, TotalAmt: 300 }));
+    expect(Number(operation.providerBalance)).toBe(300);
     expect(JSON.stringify(providerPayload)).not.toMatch(/Mutated live quote|Late alternate mutation|Optional alternate excluded/);
+  });
+
+  test("confirmed taxable context blocks zero-tax HTTP publish without provider calls or context data disclosure", async () => {
+    const owner = await signUp("tax-context-http");
+    const f = await createQuickBooksReadyInvoice(owner, "tax-context-http");
+    const realmId = `${Date.now()}${Math.floor(Math.random() * 1000000)}`;
+    const connection = await prisma.quickBooksConnection.update({ where: { id: f.connection.id }, data: { realmId, scopes: ["com.intuit.quickbooks.accounting"] } });
+    await prisma.quickBooksRealmBinding.update({ where: { quickBooksConnectionId: connection.id }, data: { realmId } });
+    const baseline = await getQuickBooksReviewBinding(owner, f.invoice.id);
+    const [invoice, customerMap, itemMap, user] = await Promise.all([
+      prisma.invoice.findFirstOrThrow({ where: { tenantId: owner.tenant.id, id: f.invoice.id }, include: { lineItems: { orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }] } } }),
+      prisma.quickBooksCustomerMap.findFirstOrThrow({ where: { tenantId: owner.tenant.id, customerId: f.customer.id } }),
+      prisma.quickBooksItemMap.findFirstOrThrow({ where: { tenantId: owner.tenant.id, quickBooksConnectionId: connection.id } }),
+      prisma.user.findUniqueOrThrow({ where: { id: owner.user.id }, select: { authVersion: true } }),
+    ]);
+    const privateAddress = { Line1: "741 Never-disclose tax-context address", City: "San Francisco", CountrySubDivisionCode: "CA", PostalCode: "94105", Country: "US" };
+    try {
+      await confirmInvoiceTaxContext(prisma, { tenantId: owner.tenant.id, userId: owner.user.id, authVersion: user.authVersion }, "sandbox", {
+        invoiceId: invoice.id, invoiceVersion: invoice.version, expectedRevision: 0, idempotencyKey: randomUUID(), transactionDate: "2026-09-23",
+        origin: privateAddress, destination: privateAddress,
+        connection: { id: connection.id, realmId, environment: "sandbox", connectedAtUtc: connection.connectedAtUtc.toISOString(), generation: 1 },
+        customerMapping: { id: customerMap.id, providerId: customerMap.quickBooksCustomerId, reviewVersion: customerMap.reviewVersion, reviewedAtUtc: customerMap.reviewedAtUtc!.toISOString() },
+        lines: invoice.lineItems.filter(line => line.sectionType === "INCLUDED").map(line => ({ invoiceLineItemId: line.id, taxIntent: "TAXABLE",
+          itemMapping: { id: itemMap.id, providerId: itemMap.quickBooksItemId, reviewVersion: itemMap.reviewVersion, reviewedAtUtc: itemMap.reviewedAtUtc!.toISOString() } })),
+      });
+      const preview = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${invoice.id}/sync-preview`, headers: { cookie: owner.cookie }, payload: {} });
+      expect(preview.statusCode).toBe(200);
+      expect(preview.json()).toMatchObject({ preview: { ready: false, reviewBinding: null, blockers: ["QUICKBOOKS_TAX_CONTEXT_REQUIRES_TAX_WORKFLOW"] } });
+      const publish = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": randomUUID() }, payload: { invoiceVersion: invoice.version, reviewBinding: baseline } });
+      expect(publish.statusCode).toBe(409); expect(publish.json()).toMatchObject({ code: "QUICKBOOKS_REVIEW_STALE" });
+      for (const response of [preview, publish]) {
+        expect(response.body).not.toContain(privateAddress.Line1);
+        for (const field of ["inputHash", "idempotencyKeyHash", "confirmedByTenantUserId", "connectionGeneration", "accessTokenEncrypted", "refreshTokenEncrypted"]) expect(response.body).not.toContain(field);
+        expect(response.body).not.toContain(realmId);
+      }
+      for (const mock of Object.values(quickBooksProviderMocks)) expect(mock).not.toHaveBeenCalled();
+      expect(await prisma.quickBooksInvoiceOperation.count({ where: { tenantId: owner.tenant.id } })).toBe(0);
+    } finally {
+      await prisma.invoiceTaxContextLine.deleteMany({ where: { tenantId: owner.tenant.id } });
+      await prisma.invoiceTaxContext.deleteMany({ where: { tenantId: owner.tenant.id } });
+    }
+  });
+
+  test("an active tax Estimate review blocks ordinary preview and publish before any provider request", async () => {
+    const owner = await signUp("invoice-qb-tax-interlock");
+    const fixture = await createQuickBooksReadyInvoice(owner, "tax-interlock");
+    const invoice = await prisma.invoice.findUniqueOrThrow({ where: { id: fixture.invoice.id } });
+    const member = await prisma.tenantUser.findFirstOrThrow({ where: { tenantId: owner.tenant.id, userId: owner.user.id } });
+    const taxReview = await prisma.quickBooksTaxEstimateOperation.create({ data: {
+      tenantId: owner.tenant.id, invoiceId: invoice.id, customerId: invoice.customerId, sourceQuoteId: invoice.sourceQuoteId,
+      quickBooksConnectionId: fixture.connection.id, requestedByTenantUserId: member.id, reviewedByTenantUserId: member.id,
+      providerRealmId: fixture.connection.realmId, reviewRevision: 1, contractVersion: 1, invoiceVersion: invoice.version,
+      connectionGenerationAtUtc: fixture.connection.connectedAtUtc, sourceSnapshot: { invoiceId: invoice.id }, estimateAstSnapshot: {},
+      sourceHash: "a".repeat(64), estimateAstHash: "b".repeat(64), reviewBindingDigest: "c".repeat(64), bindingKeyId: "synthetic-route-test",
+      estimateRequestId: `estimate-${invoice.id}`, invoiceRequestId: `invoice-${invoice.id}`, reviewedAtUtc: new Date(),
+    } });
+    try {
+      const preview = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${invoice.id}/sync-preview`,
+        headers: { cookie: owner.cookie }, payload: {} });
+      expect(preview.statusCode).toBe(200);
+      expect(preview.json().preview).toMatchObject({ ready: false, reviewBinding: null,
+        blockers: expect.arrayContaining(["QUICKBOOKS_TAX_ESTIMATE_OPERATION_EXISTS"]) });
+      const published = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": `tax-interlock-${invoice.id}` },
+        payload: { invoiceVersion: invoice.version, reviewBinding: fixture.reviewBinding } });
+      expect(published.statusCode).toBe(409);
+      expect(published.json()).toMatchObject({ code: "QUICKBOOKS_REVIEW_STALE" });
+      for (const provider of [quickBooksProviderMocks.createInvoice, quickBooksProviderMocks.fetchInvoice,
+        quickBooksProviderMocks.fetchCustomer, quickBooksProviderMocks.fetchItem, quickBooksProviderMocks.findInvoiceByDocNumber]) {
+        expect(provider).not.toHaveBeenCalled();
+      }
+      expect(await prisma.quickBooksInvoiceOperation.count({ where: { tenantId: owner.tenant.id, invoiceId: invoice.id } })).toBe(0);
+    } finally {
+      await prisma.quickBooksTaxEstimateOperation.delete({ where: { id: taxReview.id } });
+    }
+  });
+
+  test("rejects a taxable QuoteFly invoice before any QuickBooks create", async () => {
+    const owner = await signUp("invoice-qb-tax-blocked");
+    const fixture = await createQuickBooksReadyInvoice(owner, "tax-blocked");
+    const nextVersion = fixture.invoice.version + 1;
+    await prisma.invoice.update({
+      where: { id: fixture.invoice.id },
+      data: { taxAmount: 12, totalAmount: 162, balanceDue: 162, version: nextVersion },
+    });
+
+    const preview = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/sync-preview`,
+      headers: { cookie: owner.cookie },
+      payload: {},
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toMatchObject({
+      preview: {
+        ready: false,
+        blockers: expect.arrayContaining(["QUICKBOOKS_TAX_SYNC_UNSUPPORTED"]),
+        reviewBinding: null,
+      },
+    });
+
+    const publish = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+      headers: {
+        cookie: owner.cookie,
+        "idempotency-key": `qb-tax-blocked-${Date.now()}`,
+      },
+      payload: { invoiceVersion: nextVersion, reviewBinding: fixture.reviewBinding },
+    });
+    expect(publish.statusCode).toBe(409);
+    expect(publish.json()).toMatchObject({ code: "QUICKBOOKS_REVIEW_STALE" });
+    expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
   });
 
   test("reconciles fractional invoice lines to the accepted subtotal and publishes consistent QuickBooks math", async () => {
@@ -1455,6 +1597,354 @@ describe("invoice ledger API", () => {
     })).toBe(0);
   });
 
+  test("numbering preference changed after preview blocks CREATE and requires a fresh reviewed retry", async () => {
+    const owner = await signUp("invoice-qb-numbering-review");
+    const fixture = await createQuickBooksReadyInvoice(owner, "numbering-review");
+    const actual = await vi.importActual<typeof import("../../src/services/quickbooks")>("../../src/services/quickbooks");
+    quickBooksProviderMocks.createInvoice.mockImplementation(actual.createQuickBooksInvoice);
+    let customNumbers = true;
+    let invoicePosts = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/preferences")) return new Response(JSON.stringify({ Preferences: { SalesFormsPrefs: { CustomTxnNumbers: customNumbers } } }));
+      if (url.pathname.endsWith("/query")) return new Response(JSON.stringify({ QueryResponse: {} }));
+      expect(url.pathname.endsWith("/invoice")).toBe(true);
+      expect(init?.method).toBe("POST");
+      invoicePosts += 1;
+      return new Response(JSON.stringify({ Invoice: { Id: "numbering-reviewed-created", TotalAmt: 150, Balance: 150 } }));
+    });
+    const publish = (key: string, reviewBinding: string, retryFailed = false) => app.inject({
+      method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+      headers: { cookie: owner.cookie, "idempotency-key": key },
+      payload: { invoiceVersion: fixture.invoice.version, reviewBinding, retryFailed },
+    });
+    try {
+      // The QuoteFly preview is valid, but the external setting changes before CREATE.
+      customNumbers = false;
+      const failed = await publish("numbering-original", fixture.reviewBinding);
+      expect(failed.statusCode).toBe(409);
+      expect(failed.json()).toMatchObject({ code: "QUICKBOOKS_CUSTOM_NUMBERING_REQUIRED", operation: { status: "FAILED", retryAvailable: true } });
+      expect(invoicePosts).toBe(0);
+      customNumbers = true;
+      const freshReview = await getQuickBooksReviewBinding(owner, fixture.invoice.id);
+      expect(freshReview).not.toBe(fixture.reviewBinding);
+      expect((await publish("numbering-no-consent", freshReview)).statusCode).toBe(409);
+      expect((await publish("numbering-original", freshReview, true)).json().code).toBe("IDEMPOTENCY_KEY_REUSED");
+      expect((await publish("numbering-stale-review", fixture.reviewBinding, true)).json().code).toBe("QUICKBOOKS_REVIEW_STALE");
+      expect(invoicePosts).toBe(0);
+      const retried = await publish("numbering-reviewed-retry", freshReview, true);
+      expect(retried.statusCode).toBe(201);
+      expect(invoicePosts).toBe(1);
+      expect((await publish("numbering-reviewed-retry", freshReview, true)).json().duplicate).toBe(true);
+      expect(invoicePosts).toBe(1);
+    } finally { fetchMock.mockRestore(); }
+  });
+
+  test.each(["expired", "transitioned", "disconnected", "disconnect-intent", "realm", "generation", "setup", "deleted"])(
+    "final numbering fence blocks a %s claim or connection after a deferred query", async (change) => {
+      const owner = await signUp(`invoice-qb-fence-${change}`);
+      const fixture = await createQuickBooksReadyInvoice(owner, `fence-${change}`);
+      const actual = await vi.importActual<typeof import("../../src/services/quickbooks")>("../../src/services/quickbooks");
+      quickBooksProviderMocks.createInvoice.mockImplementation(actual.createQuickBooksInvoice);
+      let posts = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/preferences")) return new Response(JSON.stringify({ Preferences: { SalesFormsPrefs: { CustomTxnNumbers: true } } }));
+        if (url.pathname.endsWith("/query")) {
+          if (change === "expired" || change === "transitioned") {
+            await prisma.quickBooksInvoiceOperation.update({
+              where: { tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: fixture.invoice.id } },
+              data: change === "expired" ? { claimExpiresAtUtc: new Date(Date.now() - 1) }
+                : { status: "RECONCILIATION_REQUIRED", claimTokenHash: null, claimExpiresAtUtc: null,
+                    failedAtUtc: new Date(), lastFailureCode: "SYNTHETIC_CLAIM_TRANSITION" },
+            });
+          } else {
+            const data = change === "disconnected" ? { status: "DISCONNECTED" as const }
+              : change === "disconnect-intent" ? { disconnectRequestedAtUtc: new Date() }
+              : change === "realm" ? { realmId: `${fixture.connection.realmId}-changed` }
+              : change === "generation" ? { connectedAtUtc: new Date(fixture.connection.connectedAtUtc.getTime() + 1) }
+              : change === "setup" ? { setupConfirmedAtUtc: null } : { deletedAtUtc: new Date() };
+            await prisma.quickBooksConnection.update({ where: { id: fixture.connection.id }, data });
+          }
+          return new Response(JSON.stringify({ QueryResponse: {} }));
+        }
+        if (init?.method === "POST") posts++;
+        throw new Error("Unexpected invoice POST");
+      });
+      try {
+        const response = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+          headers: { cookie: owner.cookie, "idempotency-key": `numbering-fence-${change}` },
+          payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding } });
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toMatchObject(change === "transitioned"
+          ? { code: "QUICKBOOKS_OPERATION_STALE", operation: { retryAvailable: false } }
+          : { code: "QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE", operation: { status: "FAILED", retryAvailable: true } });
+        expect(posts).toBe(0);
+        const durable = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: fixture.invoice.id } } });
+        expect(response.json().operation.status).toBe(durable.status);
+        expect(durable.providerInvoiceId).toBeNull();
+      } finally { fetchMock.mockRestore(); }
+    });
+
+  test("a reconnect invalidates a preview even when the company and connection IDs stay the same", async () => {
+    const owner = await signUp("invoice-qb-generation-review");
+    const fixture = await createQuickBooksReadyInvoice(owner, "generation-review");
+    await prisma.quickBooksConnection.update({ where: { id: fixture.connection.id },
+      data: { connectedAtUtc: new Date(fixture.connection.connectedAtUtc.getTime() + 1) } });
+    const response = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+      headers: { cookie: owner.cookie, "idempotency-key": "numbering-old-generation-review" },
+      payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding } });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().code).toBe("QUICKBOOKS_REVIEW_STALE");
+    expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
+  });
+
+  test.each(["preferences", "query"])("%s 401 refresh keeps one CREATE and one immutable attempt", async (unauthorizedAt) => {
+    const owner = await signUp(`invoice-qb-preflight-${unauthorizedAt}`);
+    const fixture = await createQuickBooksReadyInvoice(owner, `preflight-${unauthorizedAt}`);
+    const actual = await vi.importActual<typeof import("../../src/services/quickbooks")>("../../src/services/quickbooks");
+    quickBooksProviderMocks.createInvoice.mockImplementation(actual.createQuickBooksInvoice);
+    quickBooksProviderMocks.refreshToken.mockResolvedValue({ access_token: "refreshed-access", refresh_token: "refreshed-refresh", token_type: "bearer", expires_in: 3600 });
+    let unauthorized = false;
+    const posts: Array<{ url: URL; body: unknown }> = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith(`/${unauthorizedAt}`) && !unauthorized) { unauthorized = true; return new Response("", { status: 401 }); }
+      if (url.pathname.endsWith("/preferences")) return new Response(JSON.stringify({ Preferences: { SalesFormsPrefs: { CustomTxnNumbers: true } } }));
+      if (url.pathname.endsWith("/query")) return new Response(JSON.stringify({ QueryResponse: {} }));
+      posts.push({ url, body: init?.body });
+      return new Response(JSON.stringify({ Invoice: { Id: `created-${unauthorizedAt}`, TotalAmt: 150, Balance: 150 } }));
+    });
+    try {
+      const response = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": `numbering-preflight-${unauthorizedAt}` },
+        payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding } });
+      expect(response.statusCode).toBe(201);
+      expect(posts).toHaveLength(1);
+      const invocations = quickBooksProviderMocks.createInvoice.mock.calls;
+      expect(invocations).toHaveLength(2);
+      expect(invocations[0][5]).toBe(invocations[1][5]);
+      expect(posts[0].url.searchParams.get("requestid")).toBe(invocations[0][4]);
+      expect(posts[0].body).toBe(JSON.stringify(invocations[0][3]));
+    } finally { fetchMock.mockRestore(); }
+  });
+
+  test("POST 401 followed by a changed-generation fence keeps uncertainty and forbids another CREATE", async () => {
+    const owner = await signUp("invoice-qb-post-fence");
+    const fixture = await createQuickBooksReadyInvoice(owner, "post-fence");
+    const actual = await vi.importActual<typeof import("../../src/services/quickbooks")>("../../src/services/quickbooks");
+    quickBooksProviderMocks.createInvoice.mockImplementation(actual.createQuickBooksInvoice);
+    quickBooksProviderMocks.refreshToken.mockResolvedValue({ access_token: "refreshed-access", refresh_token: "refreshed-refresh", token_type: "bearer", expires_in: 3600 });
+    let posts = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/preferences")) return new Response(JSON.stringify({ Preferences: { SalesFormsPrefs: { CustomTxnNumbers: true } } }));
+      if (url.pathname.endsWith("/query")) {
+        if (posts) await prisma.quickBooksConnection.update({ where: { id: fixture.connection.id },
+          data: { connectedAtUtc: new Date(fixture.connection.connectedAtUtc.getTime() + 1) } });
+        return new Response(JSON.stringify({ QueryResponse: {} }));
+      }
+      if (init?.method === "POST") posts++;
+      return new Response("", { status: 401 });
+    });
+    try {
+      const response = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": "numbering-post-401-fence" },
+        payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding } });
+      expect(response.statusCode).toBe(202);
+      expect(response.json()).toMatchObject({ code: "QUICKBOOKS_RESULT_UNCERTAIN", reconciliationRequired: true, operation: { status: "RECONCILIATION_REQUIRED", retryAvailable: false } });
+      expect(response.body).not.toContain("No invoice was created");
+      expect(posts).toBe(1);
+    } finally { fetchMock.mockRestore(); }
+  });
+
+  test.each([false, true])("numbering deadline with prior POST=%s finalizes according to the durable write phase", async (priorPost) => {
+    const owner = await signUp(`invoice-qb-deadline-${priorPost}`);
+    const fixture = await createQuickBooksReadyInvoice(owner, `deadline-${priorPost}`);
+    const actual = await vi.importActual<typeof import("../../src/services/quickbooks")>("../../src/services/quickbooks");
+    quickBooksProviderMocks.createInvoice.mockImplementation(actual.createQuickBooksInvoice);
+    quickBooksProviderMocks.refreshToken.mockResolvedValue({ access_token: "refreshed-access", refresh_token: "refreshed-refresh", token_type: "bearer", expires_in: 3600 });
+    const realNow = Date.now.bind(Date);
+    let advancedNow: number | undefined;
+    const nowMock = vi.spyOn(Date, "now").mockImplementation(() => advancedNow ?? realNow());
+    let posts = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/preferences")) return new Response(JSON.stringify({ Preferences: { SalesFormsPrefs: { CustomTxnNumbers: true } } }));
+      if (url.pathname.endsWith("/query")) {
+        if (!priorPost || posts) advancedNow = realNow() + 120_000;
+        return new Response(JSON.stringify({ QueryResponse: {} }));
+      }
+      if (init?.method === "POST") posts++;
+      return new Response("", { status: 401 });
+    });
+    try {
+      const response = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": `numbering-deadline-${priorPost}` },
+        payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding } });
+      expect(response.statusCode).toBe(priorPost ? 202 : 409);
+      expect(response.json()).toMatchObject(priorPost
+        ? { code: "QUICKBOOKS_RESULT_UNCERTAIN", reconciliationRequired: true, operation: { status: "RECONCILIATION_REQUIRED", retryAvailable: false } }
+        : { code: "QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE", operation: { status: "FAILED", retryAvailable: true } });
+      if (priorPost) expect(response.body).not.toContain("No invoice was created");
+      expect(posts).toBe(priorPost ? 1 : 0);
+    } finally { fetchMock.mockRestore(); nowMock.mockRestore(); }
+  });
+
+  test.each(["expired", "reclaimed", "failed"])("a returned CREATE identity is durable when its claim is %s before immediate binding", async (state) => {
+    const owner = await signUp("invoice-qb-bind-expired");
+    const fixture = await createQuickBooksReadyInvoice(owner, "bind-expired");
+    const actual = await vi.importActual<typeof import("../../src/services/quickbooks")>("../../src/services/quickbooks");
+    quickBooksProviderMocks.createInvoice.mockImplementation(actual.createQuickBooksInvoice);
+    let posts = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/preferences")) return new Response(JSON.stringify({ Preferences: { SalesFormsPrefs: { CustomTxnNumbers: true } } }));
+      if (url.pathname.endsWith("/query")) return new Response(JSON.stringify({ QueryResponse: {} }));
+      posts++;
+      await prisma.quickBooksInvoiceOperation.update({ where: { tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: fixture.invoice.id } },
+        data: state === "expired" ? { claimExpiresAtUtc: new Date(Date.now() - 1) }
+          : state === "failed" ? { status: "FAILED", claimTokenHash: null, claimExpiresAtUtc: null,
+              failedAtUtc: new Date(), lastFailureCode: "SYNTHETIC_FAILED_ATTEMPT" }
+          : { status: "RECONCILING", claimTokenHash: "f".repeat(64), claimExpiresAtUtc: new Date(Date.now() + 120_000) } });
+      return new Response(JSON.stringify({ Invoice: { Id: "created-before-bind-expiry", TotalAmt: 150, Balance: 150 } }));
+    });
+    try {
+      const publish = (key: string) => app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": key },
+        payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding } });
+      const response = await publish("numbering-bind-expired-original");
+      expect(response.statusCode).toBe(202);
+      expect(response.json()).toMatchObject({ reconciliationRequired: true,
+        operation: { status: state === "reclaimed" ? "RECONCILING" : "RECONCILIATION_REQUIRED", retryAvailable: false } });
+      if (state !== "reclaimed") expect(response.json().operation.reconciliationAvailable).toBe(true);
+      expect(quickBooksProviderMocks.fetchInvoice).not.toHaveBeenCalled();
+      const durable = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: fixture.invoice.id } } });
+      expect(durable.providerInvoiceId).toBe("created-before-bind-expiry");
+      expect((await publish("numbering-bind-expired-new-command")).statusCode).toBe(409);
+      expect(posts).toBe(1);
+    } finally { fetchMock.mockRestore(); }
+  });
+
+  test("a provider DocNumber collision remains blocked across fresh reviews with zero invoice writes", async () => {
+    const owner = await signUp("invoice-qb-numbering-collision");
+    const fixture = await createQuickBooksReadyInvoice(owner, "numbering-collision");
+    const actual = await vi.importActual<typeof import("../../src/services/quickbooks")>("../../src/services/quickbooks");
+    quickBooksProviderMocks.createInvoice.mockImplementation(actual.createQuickBooksInvoice);
+    let invoicePosts = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/preferences")) return new Response(JSON.stringify({ Preferences: { SalesFormsPrefs: { CustomTxnNumbers: true } } }));
+      if (url.pathname.endsWith("/query")) return new Response(JSON.stringify({ QueryResponse: { Invoice: [{ Id: "existing-private-id" }] } }));
+      if (init?.method === "POST") invoicePosts += 1;
+      throw new Error("Unexpected provider write");
+    });
+    try {
+      for (const retryFailed of [false, true]) {
+        const response = await app.inject({
+          method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+          headers: { cookie: owner.cookie, "idempotency-key": retryFailed ? "collision-reviewed-retry" : "collision-original" },
+          payload: { invoiceVersion: fixture.invoice.version, reviewBinding: retryFailed ? await getQuickBooksReviewBinding(owner, fixture.invoice.id) : fixture.reviewBinding, retryFailed },
+        });
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toMatchObject({ code: "QUICKBOOKS_DOC_NUMBER_COLLISION", operation: { status: "FAILED", retryAvailable: true } });
+        expect(response.body).not.toContain("existing-private-id");
+      }
+      expect(invoicePosts).toBe(0);
+    } finally { fetchMock.mockRestore(); }
+  });
+
+  test("an actual CREATE timeout after successful numbering checks cannot enter safe preflight retry", async () => {
+    const owner = await signUp("invoice-qb-numbering-uncertain");
+    const fixture = await createQuickBooksReadyInvoice(owner, "numbering-uncertain");
+    const actual = await vi.importActual<typeof import("../../src/services/quickbooks")>("../../src/services/quickbooks");
+    quickBooksProviderMocks.createInvoice.mockImplementation(actual.createQuickBooksInvoice);
+    let invoicePosts = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/preferences")) return new Response(JSON.stringify({ Preferences: { SalesFormsPrefs: { CustomTxnNumbers: true } } }));
+      if (url.pathname.endsWith("/query")) return new Response(JSON.stringify({ QueryResponse: {} }));
+      expect(init?.method).toBe("POST"); invoicePosts += 1;
+      throw new Error("synthetic uncertain provider write");
+    });
+    try {
+      const publish = (retryFailed: boolean) => app.inject({
+        method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": retryFailed ? "numbering-unknown-retry" : "numbering-unknown" },
+        payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding, retryFailed },
+      });
+      const failed = await publish(false);
+      expect(failed.statusCode).toBe(202);
+      expect(failed.json()).toMatchObject({ code: "QUICKBOOKS_RESULT_UNCERTAIN", reconciliationRequired: true, operation: { status: "RECONCILIATION_REQUIRED", retryAvailable: false } });
+      expect((await publish(true)).statusCode).toBe(409);
+      expect(invoicePosts).toBe(1);
+    } finally { fetchMock.mockRestore(); }
+  });
+
+  test("a safely rejected publish needs explicit fresh review and a new command before retry", async () => {
+    const owner = await signUp("invoice-qb-retry");
+    const fixture = await createQuickBooksReadyInvoice(owner, "retry");
+    const publish = (key: string, reviewBinding: string, retryFailed = false) => app.inject({
+      method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+      headers: { cookie: owner.cookie, "idempotency-key": key },
+      payload: { invoiceVersion: fixture.invoice.version, reviewBinding, retryFailed },
+    });
+    quickBooksProviderMocks.createInvoice.mockRejectedValueOnce(new QuickBooksProviderError("QUICKBOOKS_HTTP_400", false, 400));
+    const failed = await publish("retry-original-command", fixture.reviewBinding);
+    expect(failed.statusCode).toBe(502);
+    expect(failed.json().operation).toMatchObject({ status: "FAILED", retryAvailable: true });
+    const original = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: fixture.invoice.id } } });
+    const freshReview = await getQuickBooksReviewBinding(owner, fixture.invoice.id);
+    expect(freshReview).not.toBe(fixture.reviewBinding);
+    expect((await publish("retry-without-consent", freshReview)).statusCode).toBe(409);
+    expect((await publish("retry-original-command", freshReview, true)).json().code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect((await publish("retry-stale-review", fixture.reviewBinding, true)).json().code).toBe("QUICKBOOKS_REVIEW_STALE");
+    expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
+    quickBooksProviderMocks.createInvoice.mockResolvedValue({ Id: "qb-invoice-retried", TotalAmt: 150, Balance: 150 });
+    const retried = await publish("retry-confirmed-command", freshReview, true);
+    expect(retried.statusCode).toBe(201);
+    const current = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: original.id } });
+    expect(current.status).toBe("SUCCEEDED");
+    expect(current.attemptCount).toBe(2);
+    expect(current.providerRequestId).not.toBe(original.providerRequestId);
+    expect(await prisma.invoiceEvent.count({ where: { tenantId: owner.tenant.id, invoiceId: fixture.invoice.id, type: "PROVIDER_SYNC_STARTED" } })).toBe(2);
+    expect((await publish("retry-confirmed-command", freshReview, true)).json().duplicate).toBe(true);
+    expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(2);
+  });
+
+  test("an uncertain publish cannot use the failed-publish retry escape hatch", async () => {
+    const owner = await signUp("invoice-qb-uncertain-retry");
+    const fixture = await createQuickBooksReadyInvoice(owner, "uncertain-retry");
+    quickBooksProviderMocks.createInvoice.mockRejectedValue(new QuickBooksProviderError("QUICKBOOKS_HTTP_503", true, 503));
+    const publish = (key: string, retryFailed: boolean) => app.inject({
+      method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+      headers: { cookie: owner.cookie, "idempotency-key": key },
+      payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding, retryFailed },
+    });
+    expect((await publish("uncertain-initial", false)).statusCode).toBe(202);
+    expect((await publish("uncertain-retry-command", true)).statusCode).toBe(409);
+    expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
+  });
+
+  test("demoted managers cannot claim publish or reconciliation with an existing cookie", async () => {
+    const owner = await signUp("invoice-qb-demoted");
+    const fixture = await createQuickBooksReadyInvoice(owner, "demoted");
+    const admin = await addMember(owner, "Demoted QBO Admin", "admin");
+    await prisma.tenantUser.update({ where: { id: admin.membershipId }, data: { role: "member" } });
+    for (const action of ["publish", "reconcile"]) {
+      const response = await app.inject({
+        method: "POST", url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/${action}`,
+        headers: { cookie: admin.cookie, "idempotency-key": `demoted-${action}` },
+        ...(action === "publish" ? { payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding } } : {}),
+      });
+      expect(response.statusCode).toBe(403);
+    }
+    expect(await prisma.quickBooksInvoiceOperation.count({ where: { tenantId: owner.tenant.id } })).toBe(0);
+    expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
+    expect(quickBooksProviderMocks.fetchInvoice).not.toHaveBeenCalled();
+  });
+
   test("publishes once from a durable claim and replays success without a second provider write", async () => {
     const owner = await signUp("invoice-qb-publish");
     const { invoice, connection, reviewBinding } = await createQuickBooksReadyInvoice(owner, "publish");
@@ -1505,6 +1995,7 @@ describe("invoice ledger API", () => {
         PrivateNote: expect.stringMatching(/^QuoteFly:[0-9a-f]{24}$/),
       }),
       expect.any(String),
+      expect.objectContaining({ beforeCreate: expect.any(Function), claimDeadlineAtMs: expect.any(Number) }),
     );
     const providerPayload = quickBooksProviderMocks.createInvoice.mock.calls[0]?.[3] as Record<string, unknown>;
     expect(providerPayload).not.toHaveProperty("CustomerMemo");
@@ -1934,7 +2425,9 @@ describe("invoice ledger API", () => {
     })).resolves.toMatchObject({
       status: "RECONCILIATION_REQUIRED",
       providerInvoiceId,
-      lastFailureCode: "QUICKBOOKS_REAUTH_REQUIRED",
+      // Immediate binding lets the credential lifecycle quarantine this known
+      // financial identity before the confirmation-read handler reloads it.
+      lastFailureCode: "QUICKBOOKS_CONNECTION_REAUTH_RECONCILIATION_REQUIRED",
     });
     await expect(prisma.quickBooksConnection.findUniqueOrThrow({
       where: { id: connection.id },
@@ -3238,6 +3731,24 @@ describe("invoice ledger API", () => {
       { label: "nonfinite-total", override: { TotalAmt: Number.POSITIVE_INFINITY, Balance: 150 }, code: "QUICKBOOKS_INVOICE_TOTAL_INVALID" },
       { label: "range-balance", override: { Balance: 151 }, code: "QUICKBOOKS_INVOICE_BALANCE_RANGE_INVALID" },
       { label: "missing-freshness", override: { MetaData: undefined }, code: "QUICKBOOKS_INVOICE_FRESHNESS_INVALID" },
+      { label: "nonzero-total-tax", override: { TxnTaxDetail: { TotalTax: 12 } }, code: "QUICKBOOKS_INVOICE_TAX_UNSUPPORTED" },
+      {
+        label: "explicit-taxable-line-code",
+        override: {
+          Line: [{
+            Amount: 150,
+            Description: "Taxable provider item",
+            DetailType: "SalesItemLineDetail",
+            SalesItemLineDetail: {
+              Qty: 1,
+              UnitPrice: 150,
+              ItemRef: { value: "qb-item-taxable" },
+              TaxCodeRef: { value: "TAX" },
+            },
+          }],
+        },
+        code: "QUICKBOOKS_INVOICE_TAX_UNSUPPORTED",
+      },
     ] as const;
     for (const testCase of cases) {
       const fixture = await createQuickBooksReconciliationFixture(

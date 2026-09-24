@@ -1864,6 +1864,7 @@ export type QuickBooksInvoiceOperation = {
   status: QuickBooksInvoiceOperationStatus;
   providerDocNumber: string;
   reconciliationAvailable: boolean;
+  retryAvailable?: boolean;
   paymentMethods?: { ach: boolean; card: boolean };
   providerBalance?: number | null;
   providerInvoiceStatus?: string | null;
@@ -1914,6 +1915,27 @@ export type QuickBooksInvoiceSyncPreview = {
   ready: boolean;
   reviewBinding: string | null;
   operation: QuickBooksInvoiceOperation | null;
+};
+
+export type InvoiceTaxAddress = {
+  Line1: string; Line2?: string; City: string; CountrySubDivisionCode: string; PostalCode: string; Country: "US";
+};
+export type InvoiceTaxDecisions = {
+  transactionDate: string; origin: InvoiceTaxAddress; destination: InvoiceTaxAddress;
+  lines: Array<{ invoiceLineItemId: string; taxIntent: "TAXABLE" | "NON_TAXABLE" }>;
+};
+export type InvoiceTaxContextForm = {
+  invoice: { id: string; version: number; currency: string; subtotalAmount: string; taxAmount: string; totalAmount: string;
+    lines: Array<{ invoiceLineItemId: string; position: number; description: string; quantity: string; unitPrice: string; amount: string;
+      mapping: { reviewed: true; displayName: string | null } }> };
+  currentContext: { revision: number | null; current: boolean; staleReason: string | null; decisions: InvoiceTaxDecisions | null; confirmedAtUtc: string | null };
+  suggestions: { origin: InvoiceTaxAddress | null; destination: null };
+  expectedContextRevision: number; sourceToken: string; sourceTokenExpiresAtUtc: string;
+  taxCalculationProven: false; publishingAuthorized: false;
+};
+export type InvoiceTaxContextConfirmation = {
+  context: { revision: number; current: true; staleReason: null; confirmedAtUtc: string }; replayed: boolean;
+  taxCalculationProven: false; publishingAuthorized: false;
 };
 
 export type QuickBooksInvoiceOperationResponse = {
@@ -2079,6 +2101,33 @@ export type QuickBooksStatusPayload = {
       invoiceSyncs: number;
     };
   };
+};
+
+export type QuickBooksMappingPage = {
+  startPosition: number;
+  limit: number;
+  hasMore: boolean;
+  nextStartPosition: number | null;
+};
+
+export type QuickBooksRecoveryReason = "PROVIDER_RECOVERED" | "CONNECTION_REAUTHORIZED" | "MAPPING_CORRECTED";
+export type QuickBooksRecoveryEvent = {
+  id: string;
+  type: "Invoice" | "Payment" | "RefundReceipt" | "Unsupported";
+  state: "DEAD";
+  reason: string;
+  attempts: number;
+  receivedAtUtc: string;
+  deadAtUtc: string | null;
+  replaySupported: boolean;
+};
+export type QuickBooksRecoveryEvents = {
+  replayEnabled: boolean;
+  reasons: QuickBooksRecoveryReason[];
+  events: QuickBooksRecoveryEvent[];
+  total: number;
+  hasMore: boolean;
+  nextCursor: string | null;
 };
 
 export type QuickBooksSyncPreview = {
@@ -2494,6 +2543,14 @@ export const api = {
   integrations: {
     quickbooks: {
       status: () => request<QuickBooksStatusPayload>(`/v1/integrations/quickbooks/status`),
+      recoveryEvents: (cursor?: string | null) => request<QuickBooksRecoveryEvents>(
+        `/v1/integrations/quickbooks/recovery/events${toQueryString({ limit: 25, cursor: cursor ?? undefined })}`,
+      ),
+      replayRecoveryEvent: (eventId: string, reason: QuickBooksRecoveryReason, idempotencyKey: string) =>
+        request<{ replayId: string; eventId: string; outcome: "QUEUED"; requestedAtUtc: string }>(
+          `/v1/integrations/quickbooks/recovery/events/${encodeURIComponent(eventId)}/replay`,
+          { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ reason }) },
+        ),
 
       connect: () =>
         request<{ authorizationUrl: string }>(`/v1/integrations/quickbooks/connect`, {
@@ -2532,6 +2589,13 @@ export const api = {
           invoice: QuickBooksInvoiceStatusPayload;
         }>(`/v1/integrations/quickbooks/quotes/${quoteId}/invoice-status`),
 
+      invoiceTaxContext: (invoiceId: string) => request<InvoiceTaxContextForm>(
+        `/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/tax-context`, { cache: "no-store" }),
+      confirmInvoiceTaxContext: (invoiceId: string, body: InvoiceTaxDecisions & {
+        expectedContextRevision: number; commandKey: string; sourceToken: string;
+      }) => request<InvoiceTaxContextConfirmation>(
+        `/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/tax-context`,
+        { method: "POST", body: JSON.stringify(body), cache: "no-store" }),
       invoiceSyncPreview: (invoiceId: string, options?: QuickBooksInvoiceReviewOptions) =>
         request<{
           providerWorkflowsEnabled: boolean;
@@ -2553,21 +2617,21 @@ export const api = {
           body: JSON.stringify(body),
         }),
 
-      searchCustomerMappings: (query: string, limit = 10) =>
-        request<{ candidates: QuickBooksCustomerCandidate[] }>(
+      searchCustomerMappings: (query: string, limit = 10, startPosition = 1) =>
+        request<{ candidates: QuickBooksCustomerCandidate[]; page?: QuickBooksMappingPage }>(
           "/v1/integrations/quickbooks/mappings/customers/search",
-          { method: "POST", body: JSON.stringify({ query, limit }) },
+          { method: "POST", body: JSON.stringify({ query, limit, startPosition }) },
         ),
 
-      searchItemMappings: (query: string, limit = 10) =>
-        request<{ candidates: QuickBooksItemCandidate[] }>(
+      searchItemMappings: (query: string, limit = 10, startPosition = 1) =>
+        request<{ candidates: QuickBooksItemCandidate[]; page?: QuickBooksMappingPage }>(
           "/v1/integrations/quickbooks/mappings/items/search",
-          { method: "POST", body: JSON.stringify({ query, limit }) },
+          { method: "POST", body: JSON.stringify({ query, limit, startPosition }) },
         ),
 
       publishQuoteFlyInvoice: (
         invoiceId: string,
-        body: { invoiceVersion: number; reviewBinding: string } & QuickBooksInvoiceReviewOptions,
+        body: { invoiceVersion: number; reviewBinding: string; retryFailed?: boolean } & QuickBooksInvoiceReviewOptions,
         idempotencyKey: string,
       ) => request<QuickBooksInvoiceOperationResponse>(
         `/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/publish`,

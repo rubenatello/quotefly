@@ -7,10 +7,14 @@ import { buildAccessContext } from "../lib/access-policy";
 import { getJwtClaims } from "../lib/auth";
 import { buildTenantEntitlements } from "../lib/subscription";
 import { withTenantRlsContext } from "../lib/tenant-rls";
+import { lockQuickBooksConnection, lockQuickBooksLifecycleParents } from "../services/quickbooks-locks";
 import {
   buildQuickBooksAdminRedirect,
   buildQuickBooksAuthorizationUrl,
   createQuickBooksInvoice,
+  createQuickBooksInvoiceWriteControl,
+  classifyQuickBooksInvoiceWriteFailure,
+  QUICKBOOKS_INVOICE_IDENTITY_BIND_BUDGET_MS,
   createSignedQuickBooksState,
   decryptQuickBooksHostedPaymentLink,
   encryptQuickBooksSecret,
@@ -25,6 +29,7 @@ import {
   normalizeQuickBooksName,
   classifyQuickBooksProviderFailure,
   quickBooksInvoiceFingerprint,
+  quickBooksInvoicePrecreateFailureMessage,
   QuickBooksProviderError,
   searchQuickBooksCustomers,
   searchQuickBooksItems,
@@ -45,6 +50,8 @@ import {
 } from "../services/quickbooks-orphan-revocations";
 import {
   bindQuickBooksInvoiceReconciliationIdentity,
+  bindCreatedQuickBooksInvoiceIdentity,
+  assertQuickBooksInvoiceCreateFence,
   claimQuickBooksInvoicePublish,
   claimQuickBooksInvoiceReconciliation,
   completeQuickBooksInvoicePublish,
@@ -53,6 +60,7 @@ import {
   markQuickBooksInitialReconciliationRequired,
   quickBooksInvoiceLinkAvailable,
   quickBooksInvoiceReconciliationAvailable,
+  quickBooksInvoiceRetryAvailable,
   QuickBooksInvoiceOperationError,
   QuickBooksInvoiceOperationPublicSelect,
   retainCreatedQuickBooksInvoiceForReconciliation,
@@ -89,6 +97,12 @@ import {
   QUICKBOOKS_RECONCILIATION_WORKER_KEY,
   serializeWorkerHeartbeat,
 } from "../services/worker-heartbeats";
+import {
+  confirmInvoiceTaxContextForm,
+  loadInvoiceTaxContextForm,
+  QuickBooksTaxContextError,
+} from "../services/quickbooks-tax-context";
+import { QuickBooksTaxContextFormTokenError } from "../services/quickbooks-tax-context-form-token";
 
 const QuickBooksCallbackQuerySchema = z.object({
   state: z.string().min(1).optional(),
@@ -114,6 +128,7 @@ const QuickBooksBillingEmailReviewSchema = z.preprocess(
 const QuickBooksInvoicePublishBodySchema = z.object({
   invoiceVersion: z.number().int().min(1),
   reviewBinding: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  retryFailed: z.boolean().optional().default(false),
   billingEmail: QuickBooksBillingEmailReviewSchema,
   allowOnlineAchPayment: z.boolean().optional().default(false),
   allowOnlineCardPayment: z.boolean().optional().default(false),
@@ -139,6 +154,7 @@ const QuickBooksItemMappingReviewBodySchema = z.object({
 const QuickBooksMappingSearchBodySchema = z.object({
   query: z.string().trim().min(2).max(80),
   limit: z.number().int().min(1).max(25).optional().default(10),
+  startPosition: z.number().int().min(1).max(1_000_000).optional().default(1),
 }).strict();
 
 const QuickBooksSetupConfirmationBodySchema = z.object({
@@ -391,6 +407,7 @@ function serializeQuickBooksInvoiceOperation(operation: QuickBooksInvoiceOperati
     },
     paymentLinkAvailable: quickBooksInvoiceLinkAvailable(operation),
     reconciliationAvailable: quickBooksInvoiceReconciliationAvailable(operation),
+    retryAvailable: quickBooksInvoiceRetryAvailable(operation),
   };
 }
 
@@ -489,6 +506,45 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       error: "QuickBooks accounting workflows are paused while connection-only validation is active.",
       code: "QUICKBOOKS_OAUTH_ONLY_MODE",
     });
+  }
+
+  const taxContextPrivateRoute = {
+    onRequest: async (_request: FastifyRequest, reply: FastifyReply) => {
+      reply.header("Cache-Control", "private, no-store");
+    },
+    preHandler: [app.authenticate],
+  };
+
+  function sendTaxContextError(reply: FastifyReply, error: unknown) {
+    if (error instanceof QuickBooksTaxContextFormTokenError) {
+      return reply.code(error.statusCode).send({
+        error: error.code === "QUICKBOOKS_TAX_CONTEXT_FORM_EXPIRED"
+          ? "This tax review form expired. Reload it before saving."
+          : "This tax review form is no longer current. Reload it before saving.",
+        code: error.code,
+      });
+    }
+    if (error instanceof QuickBooksTaxContextError) {
+      const messages: Record<string, string> = {
+        QUICKBOOKS_TAX_MANAGER_REQUIRED: "Only owners or admins can manage QuickBooks tax settings.",
+        QUICKBOOKS_TAX_CONTEXT_INPUT_INVALID: "The tax review form is invalid.",
+        QUICKBOOKS_TAX_INVOICE_CHANGED: "This invoice is unavailable or changed. Reload it before continuing.",
+        QUICKBOOKS_TAX_CONNECTION_CHANGED: "The QuickBooks connection changed. Reload before continuing.",
+        QUICKBOOKS_TAX_MAPPING_CHANGED: "A QuickBooks mapping changed. Reload before continuing.",
+        QUICKBOOKS_TAX_LINES_CHANGED: "The invoice lines changed. Reload before continuing.",
+        QUICKBOOKS_TAX_CONTEXT_CHANGED: "The tax review source changed. Reload before continuing.",
+        QUICKBOOKS_TAX_CONTEXT_REVISION_CHANGED: "The tax review was updated elsewhere. Reload before continuing.",
+        QUICKBOOKS_TAX_CONTEXT_IDEMPOTENCY_CONFLICT: "This save command was already used for different tax decisions.",
+        QUICKBOOKS_TAX_CONTEXT_UNCHANGED: "These tax decisions are already saved.",
+        QUICKBOOKS_TAX_COMPETING_INVOICE_OPERATION: "This invoice already has a QuickBooks accounting operation.",
+        QUICKBOOKS_TAX_RECONCILIATION_REQUIRED: "This invoice requires QuickBooks reconciliation before tax review can change.",
+      };
+      return reply.code(error.statusCode).send({
+        error: messages[error.code] ?? "The QuickBooks tax review cannot be saved right now.",
+        code: error.code,
+      });
+    }
+    throw error;
   }
 
   function reconciliationRuntimeAvailable(): boolean {
@@ -862,6 +918,9 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       });
       const stateHash = createHash("sha256").update(state, "utf8").digest("hex");
       const credentialLifecycleBlocked = await withTenantRlsContext(app.prisma, claims.tenantId, async (transaction) => {
+        await lockQuickBooksLifecycleParents(transaction, claims.tenantId, access.tenantUserId);
+        await transaction.$queryRaw(Prisma.sql`SELECT "id" FROM "User" WHERE "id" = ${claims.userId} FOR KEY SHARE`);
+        await lockQuickBooksConnection(transaction, claims.tenantId);
         const now = new Date();
         await transaction.$queryRaw(Prisma.sql`
           SELECT 1::int AS "locked"
@@ -1143,34 +1202,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             )
           ) acquired
         `);
-        const currentConnection = await transaction.quickBooksConnection.findUnique({
-          where: { tenantId: verifiedState.tenantId },
-          select: {
-            id: true,
-            realmId: true,
-            status: true,
-            accessTokenEncrypted: true,
-            refreshTokenEncrypted: true,
-            disconnectedAtUtc: true,
-            disconnectRequestedAtUtc: true,
-            tokenRefreshClaimHash: true,
-            setupConfirmedAtUtc: true,
-            setupConfirmedByTenantUserId: true,
-            lastSyncAtUtc: true,
-            lastWebhookAtUtc: true,
-            deletedAtUtc: true,
-            realmBinding: { select: { active: true } },
-            _count: {
-              select: {
-                customerMaps: true,
-                itemMaps: true,
-                invoiceSyncs: true,
-                invoiceOperations: true,
-                webhookEvents: true,
-              },
-            },
-          },
-        });
+        await transaction.$queryRaw(Prisma.sql`SELECT "id" FROM "Tenant" WHERE "id" = ${verifiedState.tenantId} FOR UPDATE`);
          // Lock the exact selected-tenant actor, user, and tenant rows before
          // persisting credentials. A concurrent demotion/deletion must either
          // commit first and be observed here, or wait until this authorization
@@ -1220,6 +1252,35 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
          ) {
            throw new QuickBooksCredentialLifecycleBlockedError();
          }
+        await transaction.$queryRaw(Prisma.sql`SELECT "id" FROM "QuickBooksConnection" WHERE "tenantId" = ${verifiedState.tenantId} FOR UPDATE`);
+        const currentConnection = await transaction.quickBooksConnection.findUnique({
+          where: { tenantId: verifiedState.tenantId },
+          select: {
+            id: true,
+            realmId: true,
+            status: true,
+            accessTokenEncrypted: true,
+            refreshTokenEncrypted: true,
+            disconnectedAtUtc: true,
+            disconnectRequestedAtUtc: true,
+            tokenRefreshClaimHash: true,
+            setupConfirmedAtUtc: true,
+            setupConfirmedByTenantUserId: true,
+            lastSyncAtUtc: true,
+            lastWebhookAtUtc: true,
+            deletedAtUtc: true,
+            realmBinding: { select: { active: true } },
+            _count: {
+              select: {
+                customerMaps: true,
+                itemMaps: true,
+                invoiceSyncs: true,
+                invoiceOperations: true,
+                webhookEvents: true,
+              },
+            },
+          },
+        });
         const switchingRealm = Boolean(
           currentConnection && currentConnection.realmId !== callbackRealmId,
         );
@@ -1496,6 +1557,8 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         app.prisma,
         claims.tenantId,
         async (transaction) => {
+          await lockQuickBooksLifecycleParents(transaction, claims.tenantId, access.tenantUserId);
+          await lockQuickBooksConnection(transaction, claims.tenantId);
           await transaction.$queryRaw(Prisma.sql`
             SELECT 1::int AS "locked"
             FROM (
@@ -1580,15 +1643,16 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       try {
         const candidates = await runQuickBooksProviderRequest(
           connection,
-          (accessToken) => searchQuickBooksCustomers(app.env, connection.realmId, accessToken, query.query, query.limit),
+          (accessToken) => searchQuickBooksCustomers(app.env, connection.realmId, accessToken, query.query, query.limit, query.startPosition),
         );
         reply.header("Cache-Control", "private, no-store");
         return {
-          candidates: candidates.map((customer) => ({
+          candidates: candidates.candidates.map((customer) => ({
             quickBooksCustomerId: customer.Id,
             displayName: customer.DisplayName ?? "QuickBooks customer",
             email: customer.PrimaryEmailAddr?.Address ?? null,
           })),
+          page: candidates.page,
         };
       } catch (error) {
         if (sendQuickBooksReauthRequired(reply, error)) return;
@@ -1611,15 +1675,16 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       try {
         const candidates = await runQuickBooksProviderRequest(
           connection,
-          (accessToken) => searchQuickBooksItems(app.env, connection.realmId, accessToken, query.query, query.limit),
+          (accessToken) => searchQuickBooksItems(app.env, connection.realmId, accessToken, query.query, query.limit, query.startPosition),
         );
         reply.header("Cache-Control", "private, no-store");
         return {
-          candidates: candidates.map((item) => ({
+          candidates: candidates.candidates.map((item) => ({
             quickBooksItemId: item.Id,
             name: item.Name ?? "QuickBooks item",
             type: item.Type ?? null,
           })),
+          page: candidates.page,
         };
       } catch (error) {
         if (sendQuickBooksReauthRequired(reply, error)) return;
@@ -1697,6 +1762,55 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  app.get(
+    "/integrations/quickbooks/invoices/:invoiceId/tax-context",
+    taxContextPrivateRoute,
+    async (request, reply) => {
+      const claims = getJwtClaims(request);
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
+      const params = QuickBooksInvoiceParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: "The invoice reference is invalid.", code: "QUICKBOOKS_TAX_CONTEXT_INPUT_INVALID" });
+      }
+      try {
+        return await loadInvoiceTaxContextForm(app.prisma, claims, app.env, params.data.invoiceId);
+      } catch (error) {
+        return sendTaxContextError(reply, error);
+      }
+    },
+  );
+
+  app.post(
+    "/integrations/quickbooks/invoices/:invoiceId/tax-context",
+    taxContextPrivateRoute,
+    async (request, reply) => {
+      const claims = getJwtClaims(request);
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
+      const params = QuickBooksInvoiceParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: "The invoice reference is invalid.", code: "QUICKBOOKS_TAX_CONTEXT_INPUT_INVALID" });
+      }
+      try {
+        const result = await confirmInvoiceTaxContextForm(app.prisma, claims, app.env, params.data.invoiceId, request.body);
+        return {
+          context: {
+            revision: result.revision,
+            current: result.current,
+            staleReason: result.staleReason,
+            confirmedAtUtc: result.confirmedAtUtc,
+          },
+          replayed: result.replayed,
+          taxCalculationProven: false as const,
+          publishingAuthorized: false as const,
+        };
+      } catch (error) {
+        return sendTaxContextError(reply, error);
+      }
+    },
+  );
+
   app.post(
     "/integrations/quickbooks/invoices/:invoiceId/sync-preview",
     { preHandler: [app.authenticate] },
@@ -1741,6 +1855,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const access = buildAccessContext(request);
       const claims = getJwtClaims(request);
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       const { invoiceId } = QuickBooksInvoiceParamsSchema.parse(request.params);
       const body = QuickBooksInvoicePublishBodySchema.parse(request.body);
       const key = quickBooksIdempotencyKey(request);
@@ -1770,6 +1885,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             idempotencyKey: key,
             reviewBinding: body.reviewBinding,
             reviewSecret: app.env.JWT_SECRET,
+            retryFailed: body.retryFailed,
             paymentReview: {
               billingEmail: body.billingEmail,
               allowOnlineAchPayment: body.allowOnlineAchPayment,
@@ -1829,6 +1945,26 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         ...claim.connection,
         realmId: claim.operation.providerRealmId,
       };
+      const activeClaim = claim;
+      const reloadOperation = () => withTenantRlsContext(app.prisma, access.tenantId,
+        (transaction) => transaction.quickBooksInvoiceOperation.findFirstOrThrow({
+          where: { tenantId: access.tenantId, invoiceId, archivedAtUtc: null },
+          select: QuickBooksInvoiceOperationPublicSelect,
+        }));
+      const writeControl = createQuickBooksInvoiceWriteControl({
+        payload: claim.providerPayload, providerRequestId: claim.providerRequestId,
+        realmId: claim.operation.providerRealmId,
+        claimDeadlineAtMs: claim.operation.claimExpiresAtUtc!.getTime(),
+        beforeCreate: async () => {
+          if (!(await hasLiveQuickBooksManagerAccess(claims.tenantId, claims.userId))) {
+            throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_OPERATION_STALE",
+              "QuickBooks access changed. Refresh its status before continuing.");
+          }
+          await withTenantRlsContext(app.prisma, access.tenantId,
+            (transaction) => assertQuickBooksInvoiceCreateFence(transaction, access, activeClaim,
+              app.env.QUICKBOOKS_PROVIDER_TIMEOUT_MS + QUICKBOOKS_INVOICE_IDENTITY_BIND_BUDGET_MS));
+        },
+      });
       let createdInvoice: Awaited<ReturnType<typeof createQuickBooksInvoice>>;
       try {
         createdInvoice = await runQuickBooksProviderRequest(
@@ -1839,10 +1975,18 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             accessToken,
             claim.providerPayload,
             claim.providerRequestId,
+            writeControl,
           ),
         );
       } catch (error) {
-        const failure = classifyQuickBooksProviderFailure(error);
+        const fenceDenied = error instanceof QuickBooksInvoiceOperationError
+          || (error instanceof QuickBooksProviderError && error.code === "QUICKBOOKS_PUBLISH_DEADLINE");
+        const failure = fenceDenied && !writeControl.postAttempted
+          ? { code: "QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE", ambiguous: false }
+          : classifyQuickBooksInvoiceWriteFailure(error, writeControl);
+        let stale = false;
+        // A stale worker must never overwrite a reconciliation claim or a
+        // completed operation. Return the authoritative state instead.
         const operation = await withTenantRlsContext(
           app.prisma,
           access.tenantId,
@@ -1852,20 +1996,55 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             failureCode: failure.code,
             ambiguous: failure.ambiguous,
           }),
-        );
+        ).catch(async (finalizeError: unknown) => {
+          if (finalizeError instanceof QuickBooksInvoiceOperationError && finalizeError.code === "QUICKBOOKS_OPERATION_STALE") {
+            stale = true;
+            return reloadOperation();
+          }
+          throw finalizeError;
+        });
         request.log.error(
           { code: failure.code, ambiguous: failure.ambiguous, invoiceId },
           "QuickBooks invoice publish failed",
         );
-        if (sendQuickBooksReauthRequired(reply, error)) return;
-        return reply.code(failure.ambiguous ? 202 : 502).send({
-          error: failure.ambiguous
+        if (stale) return reply.code(writeControl.postAttempted ? 202 : 409).send({
+          error: "The QuickBooks operation or connection changed. Refresh its status and reconcile before continuing.",
+          code: writeControl.postAttempted ? "QUICKBOOKS_RESULT_UNCERTAIN" : "QUICKBOOKS_OPERATION_STALE",
+          duplicate: false, reconciliationRequired: operation.status !== "SUCCEEDED",
+          operation: serializeQuickBooksInvoiceOperation(operation),
+        });
+        if (!writeControl.postAttempted && sendQuickBooksReauthRequired(reply, error)) return;
+        const precreateMessage = quickBooksInvoicePrecreateFailureMessage(failure.code);
+        return reply.code(precreateMessage ? 409 : failure.ambiguous ? 202 : 502).send({
+          error: precreateMessage ?? (failure.ambiguous
             ? "The QuickBooks result is uncertain. Reconcile it before trying again."
-            : "QuickBooks rejected the invoice publish.",
-          code: failure.ambiguous ? "QUICKBOOKS_RESULT_UNCERTAIN" : "QUICKBOOKS_PUBLISH_REJECTED",
+            : "QuickBooks rejected the invoice publish."),
+          code: precreateMessage ? failure.code : failure.ambiguous ? "QUICKBOOKS_RESULT_UNCERTAIN" : "QUICKBOOKS_PUBLISH_REJECTED",
           duplicate: false,
           reconciliationRequired: failure.ambiguous,
           operation: serializeQuickBooksInvoiceOperation(operation),
+        });
+      }
+
+      // Commit the returned identity before a confirmation GET can time out,
+      // refresh credentials, or observe a lease/state transition.
+      try {
+        const bound = await withTenantRlsContext(app.prisma, access.tenantId,
+          (transaction) => bindCreatedQuickBooksInvoiceIdentity(transaction, access, activeClaim, createdInvoice.Id),
+          { maxWait: 5_000, timeout: 15_000 });
+        if (!bound.canComplete) return reply.code(202).send({
+          error: "QuickBooks created the invoice. Reconcile its current state before continuing.",
+          code: "LOCAL_COMMIT_RESULT_UNKNOWN", duplicate: false, reconciliationRequired: bound.operation.status !== "SUCCEEDED",
+          operation: serializeQuickBooksInvoiceOperation(bound.operation),
+        });
+      } catch {
+        const operation = await reloadOperation().catch(() => null);
+        return reply.code(202).send({
+          error: "QuickBooks may have created the invoice. Reconcile before continuing.",
+          code: "LOCAL_COMMIT_RESULT_UNKNOWN", duplicate: false, reconciliationRequired: true,
+          operation: operation ? serializeQuickBooksInvoiceOperation(operation) : {
+            status: "RECONCILIATION_REQUIRED", providerDocNumber: claim.operation.providerDocNumber, reconciliationAvailable: true,
+          },
         });
       }
 
@@ -1898,7 +2077,12 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             providerInvoiceId: createdInvoice.Id,
             failureCode: failure.code,
           }),
-        );
+        ).catch(async (retainError: unknown) => {
+          if (retainError instanceof QuickBooksInvoiceOperationError && retainError.code === "QUICKBOOKS_OPERATION_STALE") {
+            return reloadOperation();
+          }
+          throw retainError;
+        });
         request.log.warn(
           { code: failure.code, invoiceId },
           "QuickBooks invoice was created but its authoritative snapshot remains pending",
@@ -2027,6 +2211,8 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const access = buildAccessContext(request);
+      const claims = getJwtClaims(request);
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
       const { invoiceId } = QuickBooksInvoiceParamsSchema.parse(request.params);
       if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
       if (!isQuickBooksConfigured(app.env)) {

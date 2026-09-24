@@ -1,7 +1,8 @@
+import { useGuardedNavigate } from "../../hooks/navigation-guard-context";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { CalendarDays, ExternalLink, FileCheck2, ReceiptText, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
+
 import { money, useDashboard } from "../dashboard/DashboardContext";
 import {
   Alert,
@@ -20,6 +21,7 @@ import {
   type QuickBooksInvoiceReviewOptions,
   type QuickBooksInvoiceSyncPreview,
   type QuickBooksItemCandidate,
+  type QuickBooksMappingPage,
 } from "../../lib/api";
 import { localizedApiError } from "../../lib/localized-api-error";
 import { invoicePaymentDisplay } from "../../lib/invoice-payment-display";
@@ -30,8 +32,12 @@ import {
   safeQuickBooksHostedPaymentUrl,
 } from "../../lib/quickbooks-payment-link";
 import { tenantWallTimeToIso, toTenantDateTimeInput, validTimeZone } from "../../lib/tenant-time";
+import { InvoiceTaxContextForm } from "./InvoiceTaxContextForm";
+
+export type InvoiceTaxContextActivity = { open: boolean; pending: boolean; saving: boolean };
 
 type InvoicePanelProps = {
+  onTaxContextActivityChange?: (activity: InvoiceTaxContextActivity) => void;
   jobId?: string;
   sourceQuoteId?: string;
   sourceLabel: string;
@@ -85,15 +91,18 @@ export function InvoicePanel({
   createBlockedReason,
   kodyInvoiceId = null,
   onKodyInvoiceConsumed,
+  onTaxContextActivityChange,
 }: InvoicePanelProps) {
   const { t, i18n } = useTranslation();
-  const navigate = useNavigate();
+  const navigate = useGuardedNavigate();
   const { session } = useDashboard();
   const headingId = useId();
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const focusedControlRef = useRef<HTMLElement | null>(null);
+  const quickBooksReviewTriggerRef = useRef<HTMLButtonElement>(null);
   const locale = i18n.resolvedLanguage ?? "en-US";
   const timeZone = validTimeZone(session?.timezone ?? "UTC");
-  const sourceKey = jobId ? `job:${jobId}` : sourceQuoteId ? `quote:${sourceQuoteId}` : "missing";
+  const sourceKey = `${session?.tenantId ?? "missing"}:${jobId ? `job:${jobId}` : sourceQuoteId ? `quote:${sourceQuoteId}` : "missing"}`;
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -109,6 +118,17 @@ export function InvoicePanel({
   const [quickBooksAllowAch, setQuickBooksAllowAch] = useState(false);
   const [quickBooksAllowCard, setQuickBooksAllowCard] = useState(false);
   const [quickBooksReviewDirty, setQuickBooksReviewDirty] = useState(false);
+  const [taxContextPending, setTaxContextPending] = useState(false);
+  const [taxContextSaving, setTaxContextSaving] = useState(false);
+  const [taxContextOpen, setTaxContextOpen] = useState(false);
+  useEffect(() => {
+    onTaxContextActivityChange?.({ open: taxContextOpen, pending: taxContextPending, saving: taxContextSaving });
+  }, [taxContextOpen, taxContextPending, taxContextSaving, onTaxContextActivityChange]);
+  useEffect(() => () => {
+    onTaxContextActivityChange?.({ open: false, pending: false, saving: false });
+  }, [onTaxContextActivityChange]);
+  const taxContextPendingRef = useRef(false);
+  taxContextPendingRef.current = taxContextPending;
   const [quickBooksCustomerId, setQuickBooksCustomerId] = useState("");
   const [quickBooksItemIds, setQuickBooksItemIds] = useState<Record<string, string>>({});
   const [quickBooksCustomerSearch, setQuickBooksCustomerSearch] = useState("");
@@ -118,6 +138,9 @@ export function InvoicePanel({
   const [quickBooksSearchLoading, setQuickBooksSearchLoading] = useState<string | null>(null);
   const [quickBooksSearchErrors, setQuickBooksSearchErrors] = useState<Record<string, string>>({});
   const [quickBooksSearchCompleted, setQuickBooksSearchCompleted] = useState<Record<string, boolean>>({});
+  const [quickBooksSearchPages, setQuickBooksSearchPages] = useState<Record<string, QuickBooksMappingPage | undefined>>({});
+  const quickBooksResultsRefs = useRef<Record<string, HTMLUListElement | null>>({});
+  const quickBooksPageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [quickBooksPaymentLink, setQuickBooksPaymentLink] = useState<string | null>(null);
   const [quickBooksPaymentLinkLoading, setQuickBooksPaymentLinkLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -245,6 +268,15 @@ export function InvoicePanel({
     const operationSource = sourceRef.current;
     const requestedInvoiceId = currentInvoice.id;
     const generation = ++quickBooksGenerationRef.current;
+    const focusedControl = focusedControlRef.current;
+    const invoiceGeneration = operationGenerationRef.current;
+    const mutationGeneration = quickBooksOperationGenerationRef.current;
+    const mappingGeneration = quickBooksMappingMutationGenerationRef.current;
+    const paymentLinkGeneration = quickBooksPaymentLinkGenerationRef.current;
+    const mutationsAreCurrent = () => operationGenerationRef.current === invoiceGeneration
+      && quickBooksOperationGenerationRef.current === mutationGeneration
+      && quickBooksMappingMutationGenerationRef.current === mappingGeneration
+      && quickBooksPaymentLinkGenerationRef.current === paymentLinkGeneration;
     setQuickBooksLoading(true);
     if (options.clearError !== false) setQuickBooksError(null);
     try {
@@ -257,13 +289,9 @@ export function InvoicePanel({
         requestedInvoiceId,
         responseInvoiceId: response.preview.invoice.id,
         currentInvoiceId: activeInvoiceRef.current?.id ?? null,
-      })) return;
+      }) || !mutationsAreCurrent()) return;
       setQuickBooksEnabled(response.providerWorkflowsEnabled);
       setQuickBooksPreview(response.preview);
-      setInvoice((current) => current?.id === response.preview.invoice.id
-        && current.version !== response.preview.invoice.version
-        ? { ...current, version: response.preview.invoice.version }
-        : current);
       setQuickBooksBillingEmail(response.preview.billingEmail ?? "");
       setQuickBooksAllowAch(response.preview.paymentMethods?.ach ?? false);
       setQuickBooksAllowCard(response.preview.paymentMethods?.card ?? false);
@@ -275,7 +303,26 @@ export function InvoicePanel({
       setQuickBooksItemCandidates({});
       setQuickBooksSearchErrors({});
       setQuickBooksSearchCompleted({});
+      setQuickBooksSearchPages({});
+      quickBooksLookupGenerationRef.current += 1;
+      setQuickBooksSearchLoading(null);
       setQuickBooksReviewDirty(false);
+      // A provider operation can update the entire canonical payment projection.
+      // The preview's version alone cannot refresh the visible balance or badges.
+      const refreshed = await api.invoices.get(requestedInvoiceId);
+      if (!isCurrentQuickBooksRequestContext({
+        requestedSource: operationSource,
+        requestedGeneration: generation,
+        currentSource: sourceRef.current,
+        currentGeneration: quickBooksGenerationRef.current,
+        requestedInvoiceId,
+        responseInvoiceId: refreshed.invoice.id,
+        currentInvoiceId: activeInvoiceRef.current?.id ?? null,
+      }) || !mutationsAreCurrent()) return;
+      setInvoice((current) => current?.id === refreshed.invoice.id
+        && current.version <= refreshed.invoice.version
+        ? refreshed.invoice
+        : current);
     } catch (err) {
       if (!isCurrentQuickBooksRequestContext({
         requestedSource: operationSource,
@@ -284,8 +331,9 @@ export function InvoicePanel({
         currentGeneration: quickBooksGenerationRef.current,
         requestedInvoiceId,
         currentInvoiceId: activeInvoiceRef.current?.id ?? null,
-      })) return;
-      if (!options.preservePreviewOnError) setQuickBooksPreview(null);
+      }) || !mutationsAreCurrent()) return;
+      if (!options.preservePreviewOnError && !taxContextPendingRef.current) setQuickBooksPreview(null);
+      if (taxContextPendingRef.current) setQuickBooksEnabled(false);
       setQuickBooksError(localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.loadError" }));
     } finally {
       if (isCurrentQuickBooksRequestContext({
@@ -295,12 +343,25 @@ export function InvoicePanel({
         currentGeneration: quickBooksGenerationRef.current,
         requestedInvoiceId,
         currentInvoiceId: activeInvoiceRef.current?.id ?? null,
-      })) setQuickBooksLoading(false);
+      })) {
+        setQuickBooksLoading(false);
+        requestAnimationFrame(() => {
+          if (generation !== quickBooksGenerationRef.current || sourceRef.current !== operationSource) return;
+          if (!focusedControl || (document.activeElement !== document.body && document.activeElement !== focusedControl)) return;
+          const target = focusedControl.isConnected && !focusedControl.matches(':disabled') && !focusedControl.closest('[inert]')
+            ? focusedControl : headingRef.current;
+          target?.focus();
+        });
+      }
     }
   }, [t]);
 
   useEffect(() => {
     setDueDate(defaultDueDate(timeZone));
+    setTaxContextPending(false);
+    setTaxContextSaving(false);
+    setTaxContextOpen(false);
+    focusedControlRef.current = null;
     setInvoice(null);
     setError(null);
     setNotice(null);
@@ -324,6 +385,7 @@ export function InvoicePanel({
     setQuickBooksSearchLoading(null);
     setQuickBooksSearchErrors({});
     setQuickBooksSearchCompleted({});
+    setQuickBooksSearchPages({});
     setQuickBooksPaymentLink(null);
     setQuickBooksPaymentLinkLoading(false);
     commandRef.current = null;
@@ -337,13 +399,15 @@ export function InvoicePanel({
     };
   }, [loadInvoice, sourceKey, timeZone]);
 
+  const invoiceId = invoice?.id;
   useEffect(() => {
-    if (!invoice || !canCreate) return;
-    void loadQuickBooksPreview(invoice);
+    const currentInvoice = activeInvoiceRef.current;
+    if (!invoiceId || currentInvoice?.id !== invoiceId || !canCreate) return;
+    void loadQuickBooksPreview(currentInvoice);
     return () => {
       quickBooksGenerationRef.current += 1;
     };
-  }, [canCreate, invoice, loadQuickBooksPreview]);
+  }, [canCreate, invoiceId, loadQuickBooksPreview]);
 
   useEffect(() => {
     if (!kodyInvoiceId || loading || error) return;
@@ -435,6 +499,8 @@ export function InvoicePanel({
       || !quickBooksPreview.reviewBinding
       || !quickBooksEnabled
       || quickBooksSaving
+      || taxContextPending
+      || quickBooksLoading
     ) return;
     const reviewedPreview = quickBooksPreview;
     if (!isQuickBooksPreviewCurrentForPublish({
@@ -468,6 +534,7 @@ export function InvoicePanel({
         {
           invoiceVersion: reviewedPreview.invoice.version,
           reviewBinding,
+          retryFailed: reviewedPreview.operation?.retryAvailable === true,
           billingEmail: reviewedPreview.billingEmail,
           allowOnlineAchPayment: reviewedPreview.paymentMethods?.ach ?? false,
           allowOnlineCardPayment: reviewedPreview.paymentMethods?.card ?? false,
@@ -496,7 +563,7 @@ export function InvoicePanel({
   };
 
   const handleQuickBooksReviewOptions = async () => {
-    if (!invoice || quickBooksLoading || quickBooksSaving || quickBooksBillingEmailInvalid) {
+    if (!invoice || taxContextPending || quickBooksLoading || quickBooksSaving || quickBooksBillingEmailInvalid) {
       if (quickBooksBillingEmailInvalid) setQuickBooksError(t("invoices.quickBooks.invalidBillingEmail"));
       return;
     }
@@ -504,7 +571,7 @@ export function InvoicePanel({
     await loadQuickBooksPreview(invoice, { reviewOptions: quickBooksReviewOptions });
   };
 
-  const handleQuickBooksCustomerSearch = async () => {
+  const handleQuickBooksCustomerSearch = async (startPosition = 1) => {
     const query = quickBooksCustomerSearch.trim();
     if (query.length < 2) {
       setQuickBooksSearchErrors((current) => ({ ...current, customer: t("invoices.quickBooks.searchMinimum") }));
@@ -514,15 +581,19 @@ export function InvoicePanel({
     const generation = ++quickBooksLookupGenerationRef.current;
     setQuickBooksSearchLoading("customer");
     setQuickBooksSearchErrors((current) => ({ ...current, customer: "" }));
-    setQuickBooksSearchCompleted((current) => ({ ...current, customer: false }));
+    const changingPage = Boolean(quickBooksSearchPages.customer && quickBooksSearchPages.customer.startPosition !== startPosition);
+    if (!quickBooksSearchPages.customer) setQuickBooksSearchCompleted((current) => ({ ...current, customer: false }));
     try {
-      const response = await api.integrations.quickbooks.searchCustomerMappings(query);
+      const response = await api.integrations.quickbooks.searchCustomerMappings(query, 10, startPosition);
       if (!quickBooksLookupIsCurrent(operationSource, generation)) return;
       setQuickBooksCustomerCandidates(response.candidates ?? []);
       setQuickBooksSearchCompleted((current) => ({ ...current, customer: true }));
+      setQuickBooksSearchPages((current) => ({ ...current, customer: response.page ?? { startPosition, limit: 10, hasMore: false, nextStartPosition: null } }));
+      if (changingPage) requestAnimationFrame(() => {
+        if (quickBooksLookupIsCurrent(operationSource, generation)) (quickBooksResultsRefs.current.customer ?? quickBooksPageRefs.current.customer)?.focus();
+      });
     } catch (err) {
       if (!quickBooksLookupIsCurrent(operationSource, generation)) return;
-      setQuickBooksCustomerCandidates([]);
       setQuickBooksSearchErrors((current) => ({
         ...current,
         customer: localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.searchError" }),
@@ -532,7 +603,7 @@ export function InvoicePanel({
     }
   };
 
-  const handleQuickBooksItemSearch = async (itemKey: string) => {
+  const handleQuickBooksItemSearch = async (itemKey: string, startPosition = 1) => {
     const query = quickBooksItemSearches[itemKey]?.trim() ?? "";
     if (query.length < 2) {
       setQuickBooksSearchErrors((current) => ({ ...current, [itemKey]: t("invoices.quickBooks.searchMinimum") }));
@@ -542,15 +613,19 @@ export function InvoicePanel({
     const generation = ++quickBooksLookupGenerationRef.current;
     setQuickBooksSearchLoading(itemKey);
     setQuickBooksSearchErrors((current) => ({ ...current, [itemKey]: "" }));
-    setQuickBooksSearchCompleted((current) => ({ ...current, [itemKey]: false }));
+    const changingPage = Boolean(quickBooksSearchPages[itemKey] && quickBooksSearchPages[itemKey]?.startPosition !== startPosition);
+    if (!quickBooksSearchPages[itemKey]) setQuickBooksSearchCompleted((current) => ({ ...current, [itemKey]: false }));
     try {
-      const response = await api.integrations.quickbooks.searchItemMappings(query);
+      const response = await api.integrations.quickbooks.searchItemMappings(query, 10, startPosition);
       if (!quickBooksLookupIsCurrent(operationSource, generation)) return;
       setQuickBooksItemCandidates((current) => ({ ...current, [itemKey]: response.candidates ?? [] }));
       setQuickBooksSearchCompleted((current) => ({ ...current, [itemKey]: true }));
+      setQuickBooksSearchPages((current) => ({ ...current, [itemKey]: response.page ?? { startPosition, limit: 10, hasMore: false, nextStartPosition: null } }));
+      if (changingPage) requestAnimationFrame(() => {
+        if (quickBooksLookupIsCurrent(operationSource, generation)) (quickBooksResultsRefs.current[itemKey] ?? quickBooksPageRefs.current[itemKey])?.focus();
+      });
     } catch (err) {
       if (!quickBooksLookupIsCurrent(operationSource, generation)) return;
-      setQuickBooksItemCandidates((current) => ({ ...current, [itemKey]: [] }));
       setQuickBooksSearchErrors((current) => ({
         ...current,
         [itemKey]: localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.searchError" }),
@@ -560,9 +635,42 @@ export function InvoicePanel({
     }
   };
 
+  const renderQuickBooksSearchPagination = (key: string, label: string, count: number) => {
+    const page = quickBooksSearchPages[key];
+    if (!page) return null;
+    const searchPage = (position: number) => key === "customer"
+      ? handleQuickBooksCustomerSearch(position)
+      : handleQuickBooksItemSearch(key, position);
+    return (
+      <div ref={(element) => { quickBooksPageRefs.current[key] = element; }} tabIndex={-1} className="space-y-2" role="group" aria-label={t("invoices.quickBooks.searchPages", { label })}>
+        <p className="text-xs leading-5 text-[var(--qf-text-muted)]" aria-live="polite">
+          {t("invoices.quickBooks.searchPagePosition", { start: page.startPosition, count })}
+          {" "}{t("invoices.quickBooks.searchPagesLive")}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" className="min-h-11"
+            aria-label={t("invoices.quickBooks.searchPreviousLabel", { label })}
+            disabled={page.startPosition === 1 || Boolean(quickBooksSearchLoading) || !quickBooksEnabled}
+            onClick={() => void searchPage(Math.max(1, page.startPosition - page.limit))}>
+            {t("invoices.quickBooks.searchPrevious")}
+          </Button>
+          <Button type="button" variant="outline" className="min-h-11"
+            aria-label={t("invoices.quickBooks.searchNextLabel", { label })}
+            disabled={page.nextStartPosition === null || Boolean(quickBooksSearchLoading) || !quickBooksEnabled}
+            onClick={() => { if (page.nextStartPosition !== null) void searchPage(page.nextStartPosition); }}>
+            {t("invoices.quickBooks.searchNext")}
+          </Button>
+        </div>
+        {page.hasMore && page.nextStartPosition === null ? (
+          <p className="text-xs leading-5 text-[var(--qf-text-muted)]">{t("invoices.quickBooks.searchNarrow")}</p>
+        ) : null}
+      </div>
+    );
+  };
+
   const handleQuickBooksCustomerMappingReview = async () => {
     const providerCustomerId = quickBooksCustomerId.trim();
-    if (!invoice || !providerCustomerId || quickBooksMappingSaving) {
+    if (!invoice || taxContextPending || !providerCustomerId || quickBooksMappingSaving) {
       if (!providerCustomerId) setQuickBooksError(t("invoices.quickBooks.customerIdRequired"));
       return;
     }
@@ -603,7 +711,7 @@ export function InvoicePanel({
   const handleQuickBooksItemMappingReview = async (line: QuickBooksInvoiceSyncPreview["lineItems"][number]) => {
     const itemKey = line.itemKey ?? line.description;
     const providerItemId = quickBooksItemIds[itemKey]?.trim();
-    if (!invoice || !providerItemId || quickBooksMappingSaving) {
+    if (!invoice || taxContextPending || !providerItemId || quickBooksMappingSaving) {
       if (!providerItemId) setQuickBooksError(t("invoices.quickBooks.itemIdRequired"));
       return;
     }
@@ -682,9 +790,7 @@ export function InvoicePanel({
         return;
       }
       setQuickBooksPaymentLink(safeUrl);
-      setInvoice((current) => current?.id === response.invoiceId
-        ? { ...current, paymentStatus: response.paymentStatus, balanceDue: response.balanceDue }
-        : current);
+      await loadQuickBooksPreview(invoice, { clearError: false, preservePreviewOnError: true });
     } catch (err) {
       if (!quickBooksPaymentLinkIsCurrent(operationSource, generation)) return;
       setQuickBooksPaymentLink(null);
@@ -720,6 +826,7 @@ export function InvoicePanel({
     <section
       aria-labelledby={headingId}
       data-testid="invoice-panel"
+      onFocusCapture={event => { focusedControlRef.current = event.target as HTMLElement; }}
       className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4 shadow-[var(--qf-shadow-sm)] sm:p-5"
     >
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -846,16 +953,20 @@ export function InvoicePanel({
 
               {quickBooksLoading ? (
                 <div className="mt-3"><LoadingState variant="compact" title={t("invoices.quickBooks.loading")} /></div>
-              ) : quickBooksPreview ? (
-                <div className="mt-3 space-y-3">
+              ) : null}
+              {quickBooksPreview ? (
+                <div className="mt-3 space-y-3" inert={quickBooksLoading} aria-busy={quickBooksLoading}>
                   {!quickBooksEnabled ? (
                     <div id="quickbooks-review-paused-help">
                       <Alert tone="info">{t("invoices.quickBooks.paused")}</Alert>
                     </div>
                   ) : null}
-                  {!quickBooksPreview.operation && quickBooksPreview.connection ? (
+                  {quickBooksPreview.operation?.status === "FAILED" ? (
+                    <Alert tone="error">{t("invoices.quickBooks.failed")}</Alert>
+                  ) : null}
+                  {(!quickBooksPreview.operation || quickBooksPreview.operation.retryAvailable) && quickBooksPreview.connection ? (
                     <fieldset
-                      disabled={!quickBooksEnabled}
+                      disabled={!quickBooksEnabled || quickBooksLoading}
                       aria-describedby={!quickBooksEnabled ? "quickbooks-review-paused-help" : undefined}
                       className="space-y-4 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3 disabled:opacity-75 sm:p-4"
                       data-testid="quickbooks-review-controls"
@@ -866,6 +977,9 @@ export function InvoicePanel({
                         <p className="mt-1 text-xs leading-5 text-[var(--qf-text-muted)]">{t("invoices.quickBooks.reviewSetupDescription")}</p>
                       </div>
 
+                      {taxContextPending ? <Alert tone="info">{t("invoices.quickBooks.taxEditsPending")}</Alert> : null}
+                      <fieldset disabled={taxContextPending} className="space-y-4" data-testid="quickbooks-mapping-controls">
+                      <legend className="sr-only">{t("invoices.quickBooks.reviewSetupTitle")}</legend>
                       <div className="space-y-2 border-t border-[var(--qf-border)] pt-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <p className="text-xs font-semibold text-[var(--qf-text-soft)]">{t("invoices.quickBooks.customerMapping")}</p>
@@ -881,7 +995,11 @@ export function InvoicePanel({
                             value={quickBooksCustomerSearch}
                             autoComplete="off"
                             onChange={(event) => {
+                              quickBooksLookupGenerationRef.current += 1;
+                              setQuickBooksSearchLoading(null);
                               setQuickBooksCustomerSearch(event.target.value);
+                              setQuickBooksCustomerCandidates([]);
+                              setQuickBooksSearchPages((current) => ({ ...current, customer: undefined }));
                               setQuickBooksSearchCompleted((current) => ({ ...current, customer: false }));
                               setQuickBooksSearchErrors((current) => ({ ...current, customer: "" }));
                             }}
@@ -922,7 +1040,7 @@ export function InvoicePanel({
                           </div>
                         ) : null}
                         {quickBooksCustomerCandidates.length ? (
-                          <ul aria-label={t("invoices.quickBooks.customerResults")} className="max-h-52 space-y-1 overflow-y-auto rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-1">
+                          <ul ref={(element) => { quickBooksResultsRefs.current.customer = element; }} tabIndex={-1} aria-label={t("invoices.quickBooks.customerResults")} className="max-h-52 space-y-1 overflow-y-auto rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] p-1">
                             {quickBooksCustomerCandidates.map((candidate) => {
                               const selected = candidate.quickBooksCustomerId === quickBooksCustomerId;
                               return (
@@ -948,6 +1066,7 @@ export function InvoicePanel({
                             })}
                           </ul>
                         ) : null}
+                        {renderQuickBooksSearchPagination("customer", t("invoices.quickBooks.customerResults"), quickBooksCustomerCandidates.length)}
                         <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
                           <details className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel-muted)]">
                             <summary className="flex min-h-11 cursor-pointer items-center px-3 text-xs font-semibold text-[var(--qf-text-soft)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
@@ -1001,7 +1120,11 @@ export function InvoicePanel({
                                   value={quickBooksItemSearches[itemKey] ?? ""}
                                   autoComplete="off"
                                   onChange={(event) => {
+                                    quickBooksLookupGenerationRef.current += 1;
+                                    setQuickBooksSearchLoading(null);
                                     setQuickBooksItemSearches((current) => ({ ...current, [itemKey]: event.target.value }));
+                                    setQuickBooksItemCandidates((current) => ({ ...current, [itemKey]: [] }));
+                                    setQuickBooksSearchPages((current) => ({ ...current, [itemKey]: undefined }));
                                     setQuickBooksSearchCompleted((current) => ({ ...current, [itemKey]: false }));
                                     setQuickBooksSearchErrors((current) => ({ ...current, [itemKey]: "" }));
                                   }}
@@ -1043,7 +1166,7 @@ export function InvoicePanel({
                                 </div>
                               ) : null}
                               {quickBooksItemCandidates[itemKey]?.length ? (
-                                <ul aria-label={t("invoices.quickBooks.itemResults", { description: line.description })} className="mt-2 max-h-52 space-y-1 overflow-y-auto rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] p-1">
+                                <ul ref={(element) => { quickBooksResultsRefs.current[itemKey] = element; }} tabIndex={-1} aria-label={t("invoices.quickBooks.itemResults", { description: line.description })} className="mt-2 max-h-52 space-y-1 overflow-y-auto rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)] p-1">
                                   {quickBooksItemCandidates[itemKey].map((candidate) => {
                                     const selected = candidate.quickBooksItemId === quickBooksItemIds[itemKey];
                                     return (
@@ -1069,6 +1192,7 @@ export function InvoicePanel({
                                   })}
                                 </ul>
                               ) : null}
+                              {renderQuickBooksSearchPagination(itemKey, t("invoices.quickBooks.itemResults", { description: line.description }), quickBooksItemCandidates[itemKey]?.length ?? 0)}
                               <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
                                 <details className="rounded-lg border border-[var(--qf-border)] bg-[var(--qf-panel)]">
                                   <summary className="flex min-h-11 cursor-pointer items-center px-3 text-xs font-semibold text-[var(--qf-text-soft)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)]">
@@ -1108,7 +1232,24 @@ export function InvoicePanel({
                         })}
                       </div>
 
-                      <fieldset className="space-y-3 border-t border-[var(--qf-border)] pt-3">
+                      </fieldset>
+
+                      {invoice.status === "DRAFT" && quickBooksReviewDirty ? <Alert tone="info">{t("invoices.quickBooks.taxReviewPending")}</Alert> : null}
+                      {invoice.status === "DRAFT" ? <InvoiceTaxContextForm
+                        key={`${session?.tenantId}:${invoice.id}`}
+                        invoiceId={invoice.id}
+                        invoiceVersion={invoice.version}
+                        reviewFingerprint={JSON.stringify([quickBooksPreview.customerMapping, quickBooksPreview.lineItems.map(line => [line.itemKey, line.quickBooksItemId, line.reviewedAtUtc])])}
+                        disabled={quickBooksReviewDirty || !quickBooksEnabled || quickBooksLoading || quickBooksSaving || Boolean(quickBooksMappingSaving) || !quickBooksPreview.customerMapping?.reviewedAtUtc || quickBooksPreview.lineItems.some(line => !line.reviewedAtUtc)}
+                        onPendingChange={setTaxContextPending}
+                        onSavingChange={setTaxContextSaving}
+                        onOpenChange={setTaxContextOpen}
+                        onSaved={async () => {
+                          setNotice({ message: t("invoices.taxContext.saved"), tone: "success" });
+                          await loadQuickBooksPreview(invoice);
+                        }}
+                      /> : null}
+                      <fieldset disabled={taxContextPending} className="space-y-3 border-t border-[var(--qf-border)] pt-3">
                         <legend className="text-xs font-semibold text-[var(--qf-text-soft)]">{t("invoices.quickBooks.paymentChoices")}</legend>
                         <Input
                           type="email"
@@ -1182,9 +1323,8 @@ export function InvoicePanel({
                     <Alert tone="success">{t("invoices.quickBooks.success", { number: quickBooksPreview.providerDocNumber })}</Alert>
                   ) : quickBooksPreview.operation?.status === "RECONCILIATION_REQUIRED" ? (
                     <Alert tone="warning">{t("invoices.quickBooks.reconciliationRequired")}</Alert>
-                  ) : quickBooksPreview.operation?.status === "FAILED" ? (
-                    <Alert tone="error">{t("invoices.quickBooks.failed")}</Alert>
-                  ) : quickBooksPreview.operation ? (
+                  ) : quickBooksPreview.operation?.status === "FAILED" ? null
+                    : quickBooksPreview.operation ? (
                     <Alert tone="info">{t("invoices.quickBooks.inProgress")}</Alert>
                   ) : quickBooksPreview.blockers.length ? (
                     <div>
@@ -1237,10 +1377,10 @@ export function InvoicePanel({
                       <RefreshCw size={16} aria-hidden="true" />
                       {t("invoices.quickBooks.reconcile")}
                     </Button>
-                  ) : quickBooksEnabled && quickBooksPreview.ready && quickBooksPreviewMatchesInvoice && !quickBooksPreview.operation && !quickBooksReviewDirty && !quickBooksBillingEmailInvalid ? (
-                    <Button type="button" variant="outline" className="min-h-11" onClick={() => setQuickBooksConfirmOpen(true)}>
+                  ) : quickBooksEnabled && !quickBooksLoading && quickBooksPreview.ready && quickBooksPreviewMatchesInvoice && (!quickBooksPreview.operation || quickBooksPreview.operation.retryAvailable) && !quickBooksReviewDirty && !quickBooksBillingEmailInvalid && !taxContextPending ? (
+                    <Button ref={quickBooksReviewTriggerRef} type="button" variant="outline" className="min-h-11" onClick={() => setQuickBooksConfirmOpen(true)}>
                       <FileCheck2 size={16} aria-hidden="true" />
-                      {t("invoices.quickBooks.review")}
+                      {t(quickBooksPreview.operation?.retryAvailable ? "invoices.quickBooks.reviewRetry" : "invoices.quickBooks.review")}
                     </Button>
                   ) : quickBooksPreview.operation?.status === "PROCESSING" || quickBooksPreview.operation?.status === "RECONCILING" ? (
                     <Button type="button" variant="outline" className="min-h-11" onClick={() => void loadQuickBooksPreview(invoice)}>
@@ -1309,11 +1449,14 @@ export function InvoicePanel({
 
       <ConfirmModal
         open={quickBooksConfirmOpen}
-        onClose={() => setQuickBooksConfirmOpen(false)}
+        onClose={() => {
+          setQuickBooksConfirmOpen(false);
+          requestAnimationFrame(() => quickBooksReviewTriggerRef.current?.focus());
+        }}
         onConfirm={() => void handleQuickBooksPublish()}
         title={t("invoices.quickBooks.confirmTitle")}
-        description={t("invoices.quickBooks.confirmDescription")}
-        confirmLabel={t("invoices.quickBooks.publish")}
+        description={t(quickBooksPreview?.operation?.retryAvailable ? "invoices.quickBooks.confirmRetryDescription" : "invoices.quickBooks.confirmDescription")}
+        confirmLabel={t(quickBooksPreview?.operation?.retryAvailable ? "invoices.quickBooks.retryPublish" : "invoices.quickBooks.publish")}
         confirmVariant="primary"
         loading={quickBooksSaving}
         size="md"

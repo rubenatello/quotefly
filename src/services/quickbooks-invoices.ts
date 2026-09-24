@@ -3,12 +3,17 @@ import { Prisma } from "@prisma/client";
 import type { AccessContext } from "../lib/access-policy";
 import { hasCapability } from "../lib/access-policy";
 import { setTenantRlsContext } from "../lib/tenant-rls";
-import { quickBooksInvoiceFingerprint } from "./quickbooks";
+import { quickBooksInvoiceFingerprint, QUICKBOOKS_INVOICE_PRECREATE_FAILURE_CODES } from "./quickbooks";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
+import { lockQuickBooksInvoicePublication } from "./quickbooks-locks";
 
 type Transaction = Prisma.TransactionClient;
 
 const CLAIM_TTL_MS = 2 * 60 * 1000;
+// The direct path publishes only zero-tax invoices without active TAXABLE intent.
+// Explicitly override a mapped QuickBooks item's default tax treatment so a
+// taxable catalog item cannot cause Intuit to calculate tax for this release.
+const QUICKBOOKS_NON_TAX_CODE = "NON";
 
 export class QuickBooksInvoiceOperationError extends Error {
   constructor(
@@ -112,6 +117,7 @@ type SyncContext = {
     realmId: string;
     companyName: string | null;
     status: string;
+    connectedAtUtc: Date;
     accessTokenEncrypted: string | null;
     refreshTokenEncrypted: string | null;
     accessTokenExpiresAtUtc: Date | null;
@@ -247,6 +253,10 @@ function reviewBindingForContext(
       reconciliationFingerprint: context.payloadHash,
       connectionId: context.connection.id,
       realmId: context.connection.realmId,
+      connectedAtUtc: context.connection.connectedAtUtc.toISOString(),
+      failedAttempt: context.operation?.status === "FAILED"
+        ? { id: context.operation.id, attempt: context.operation.attemptCount, failure: context.operation.lastFailureCode }
+        : null,
     }), "utf8")
     .digest("base64url");
 }
@@ -291,14 +301,7 @@ function requireManager(access: AccessContext) {
 }
 
 async function lockInvoiceOperation(transaction: Transaction, access: AccessContext, invoiceId: string) {
-  await transaction.$queryRaw(Prisma.sql`
-    SELECT 1::int AS "locked"
-    FROM (
-      SELECT pg_advisory_xact_lock(
-        hashtextextended(${`quickbooks-invoice:${access.tenantId}:${invoiceId}`}, 0)
-      )
-    ) acquired
-  `);
+  await lockQuickBooksInvoicePublication(transaction, access.tenantId, invoiceId);
 }
 
 async function lockCommandKey(transaction: Transaction, access: AccessContext, commandKeyHash: string) {
@@ -370,6 +373,17 @@ export function quickBooksInvoiceReconciliationAvailable(
     && Boolean(operation.claimExpiresAtUtc && operation.claimExpiresAtUtc.getTime() <= nowMs);
 }
 
+// An unsuperseded explicit tax intent remains authoritative even when its source
+// is stale. Only a new manager-confirmed NON_TAXABLE revision can release this
+// interlock; staleness must never silently turn TAXABLE into provider code NON.
+async function hasActiveTaxableContext(transaction: Transaction, tenantId: string, invoiceId: string) {
+  return Boolean(await transaction.invoiceTaxContext.findFirst({
+    where: { tenantId, invoiceId, supersededAtUtc: null,
+      lines: { some: { tenantId, taxIntent: "TAXABLE" } } },
+    select: { id: true },
+  }));
+}
+
 async function loadSyncContext(
   transaction: Transaction,
   access: AccessContext,
@@ -425,12 +439,13 @@ async function loadSyncContext(
     throw new QuickBooksInvoiceOperationError(404, "INVOICE_NOT_FOUND", "Invoice not found for tenant.");
   }
 
-  const [connection, operation] = await Promise.all([
+  const [connection, operation, taxEstimateOperation, taxableContext] = await Promise.all([
     transaction.quickBooksConnection.findFirst({
       where: {
         tenantId: access.tenantId,
         deletedAtUtc: null,
         status: "CONNECTED",
+        disconnectRequestedAtUtc: null,
         setupConfirmedAtUtc: { not: null },
         setupConfirmedByTenantUserId: { not: null },
         setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
@@ -441,6 +456,7 @@ async function loadSyncContext(
         realmId: true,
         companyName: true,
         status: true,
+        connectedAtUtc: true,
         accessTokenEncrypted: true,
         refreshTokenEncrypted: true,
         accessTokenExpiresAtUtc: true,
@@ -452,6 +468,14 @@ async function loadSyncContext(
       where: { tenantId: access.tenantId, invoiceId, archivedAtUtc: null },
       select: QuickBooksInvoiceOperationPublicSelect,
     }),
+    transaction.quickBooksTaxEstimateOperation.findFirst({
+      where: {
+        tenantId: access.tenantId, invoiceId,
+        OR: [{ supersededAtUtc: null }, { attemptCount: { gt: 0 } }, { providerEstimateId: { not: null } }],
+      },
+      select: { id: true },
+    }),
+    hasActiveTaxableContext(transaction, access.tenantId, invoiceId),
   ]);
 
   const docNumber = providerDocNumber(invoice.invoiceNumber);
@@ -517,6 +541,8 @@ async function loadSyncContext(
   });
 
   const blockers: string[] = [];
+  if (taxableContext) blockers.push("QUICKBOOKS_TAX_CONTEXT_REQUIRES_TAX_WORKFLOW");
+  if (taxEstimateOperation) blockers.push("QUICKBOOKS_TAX_ESTIMATE_OPERATION_EXISTS");
   if (!connection) blockers.push("QUICKBOOKS_NOT_CONNECTED");
   if (invoice.sourceQuote.status !== "ACCEPTED") blockers.push("INVOICE_SOURCE_NOT_ACCEPTED");
   if (invoice.status === "VOID" || invoice.status === "UNCOLLECTIBLE") blockers.push("INVOICE_STATUS_UNSUPPORTED");
@@ -572,6 +598,7 @@ async function loadSyncContext(
             SalesItemLineDetail: {
               Qty: providerPricing.quantity,
               UnitPrice: providerPricing.unitPrice,
+              TaxCodeRef: { value: QUICKBOOKS_NON_TAX_CODE },
               ItemRef: {
                 value: line.quickBooksItemId,
                 name: line.quickBooksItemName,
@@ -677,11 +704,27 @@ export async function getQuickBooksInvoiceSyncPreview(
 ): Promise<QuickBooksInvoiceSyncPreview> {
   requireManager(access);
   await setTenantRlsContext(transaction, access.tenantId);
+  await lockInvoiceOperation(transaction, access, invoiceId);
   return previewFromContext(
     await loadSyncContext(transaction, access, invoiceId, paymentReview),
     access.tenantId,
     reviewSecret,
   );
+}
+
+/** Only explicit provider rejections or a pre-call authorization failure are
+ * eligible. Timeouts, unknown outcomes, and any retained provider identity must
+ * stay in reconciliation, even if an inconsistent row is marked FAILED. */
+export function quickBooksInvoiceRetryAvailable(operation: QuickBooksInvoiceOperationPublic): boolean {
+  return operation.status === "FAILED"
+    && !operation.providerInvoiceId
+    && !operation.providerSyncToken
+    && !operation.providerInvoiceLink
+    && operation.providerBalance === null
+    && !operation.succeededAtUtc
+    && !operation.lastReconciledAtUtc
+    && !operation.claimExpiresAtUtc
+    && ["AUTHORIZATION_CHANGED", "QUICKBOOKS_HTTP_400", "QUICKBOOKS_HTTP_401", "QUICKBOOKS_HTTP_403", "QUICKBOOKS_HTTP_404", "QUICKBOOKS_HTTP_422", ...QUICKBOOKS_INVOICE_PRECREATE_FAILURE_CODES].includes(operation.lastFailureCode ?? "");
 }
 
 export async function claimQuickBooksInvoicePublish(
@@ -693,6 +736,7 @@ export async function claimQuickBooksInvoicePublish(
     idempotencyKey: string;
     reviewBinding: string;
     reviewSecret: string;
+    retryFailed?: boolean;
     paymentReview?: QuickBooksHostedPaymentReview;
   },
 ): Promise<QuickBooksInvoicePublishClaim> {
@@ -715,7 +759,14 @@ export async function claimQuickBooksInvoicePublish(
     );
   }
 
-  if (context.operation) {
+  const retryFailed = Boolean(params.retryFailed && context.operation && quickBooksInvoiceRetryAvailable(context.operation));
+  if (params.retryFailed && (!context.operation || (context.operation.status === "FAILED" && !retryFailed))) {
+    throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_RETRY_UNSAFE", "This operation cannot be retried. Reconcile any uncertain provider result first.");
+  }
+  if (retryFailed && reusedCommand) {
+    throw new QuickBooksInvoiceOperationError(409, "IDEMPOTENCY_KEY_REUSED", "Use a new command after reviewing the failed invoice.");
+  }
+  if (context.operation && !retryFailed) {
     if (context.operation.status === "SUCCEEDED") {
       return {
         duplicate: true,
@@ -809,13 +860,12 @@ export async function claimQuickBooksInvoicePublish(
   const claimToken = randomBytes(32).toString("hex");
   const providerRequestId = randomUUID();
   const claimExpiresAtUtc = new Date(now.getTime() + CLAIM_TTL_MS);
-  const operation = await transaction.quickBooksInvoiceOperation.create({
-    data: {
+  const operationData = {
       tenantId: access.tenantId,
       invoiceId: params.invoiceId,
       quickBooksConnectionId: context.connection.id,
       requestedByTenantUserId: access.tenantUserId,
-      status: "PROCESSING",
+      status: "PROCESSING" as const,
       commandKeyHash,
       payloadHash: context.payloadHash,
       providerRealmId: context.connection.realmId,
@@ -824,14 +874,22 @@ export async function claimQuickBooksInvoicePublish(
       providerDocNumber: context.providerDocNumber,
       allowOnlineAchPayment: context.paymentReview.allowOnlineAchPayment,
       allowOnlineCardPayment: context.paymentReview.allowOnlineCardPayment,
-      attemptCount: 1,
+      attemptCount: (context.operation?.attemptCount ?? 0) + 1,
       reconciliationCount: 0,
       processingStartedAtUtc: now,
       claimExpiresAtUtc,
       lastAttemptAtUtc: now,
-    },
-    select: QuickBooksInvoiceOperationPublicSelect,
-  });
+  };
+  const operation = retryFailed && context.operation
+    ? await transaction.quickBooksInvoiceOperation.update({
+        where: { id: context.operation.id },
+        data: { ...operationData, failedAtUtc: null, lastFailureCode: null },
+        select: QuickBooksInvoiceOperationPublicSelect,
+      })
+    : await transaction.quickBooksInvoiceOperation.create({
+        data: operationData,
+        select: QuickBooksInvoiceOperationPublicSelect,
+      });
 
   await transaction.invoiceEvent.create({
     data: {
@@ -858,6 +916,80 @@ export async function claimQuickBooksInvoicePublish(
     providerPayload: context.providerPayload,
     providerRequestId,
   };
+}
+
+type ActivePublishClaim = Extract<QuickBooksInvoicePublishClaim, { claimToken: string }>;
+
+/** Last durable fence after provider reads, including every credential replay. */
+export async function assertQuickBooksInvoiceCreateFence(
+  transaction: Transaction,
+  access: AccessContext,
+  claim: ActivePublishClaim,
+  requiredRemainingMs: number,
+): Promise<void> {
+  await setTenantRlsContext(transaction, access.tenantId);
+  await lockInvoiceOperation(transaction, access, claim.operation.invoiceId);
+  const current = await transaction.quickBooksInvoiceOperation.findFirst({
+    where: {
+      id: claim.operation.id, tenantId: access.tenantId, invoiceId: claim.operation.invoiceId,
+      quickBooksConnectionId: claim.connection.id, providerRealmId: claim.operation.providerRealmId,
+      providerRequestId: claim.providerRequestId, payloadHash: claim.operation.payloadHash,
+      status: "PROCESSING", claimTokenHash: sha256(claim.claimToken), archivedAtUtc: null,
+      providerInvoiceId: null,
+      claimExpiresAtUtc: { gt: new Date(Date.now() + requiredRemainingMs) },
+      connection: {
+        tenantId: access.tenantId, id: claim.connection.id, realmId: claim.operation.providerRealmId,
+        connectedAtUtc: claim.connection.connectedAtUtc, status: "CONNECTED", deletedAtUtc: null,
+        disconnectRequestedAtUtc: null, setupConfirmedAtUtc: { not: null },
+        setupConfirmedByTenantUserId: { not: null }, setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
+      },
+    },
+    select: { id: true },
+  });
+  if (!current || await hasActiveTaxableContext(transaction, access.tenantId, claim.operation.invoiceId)) {
+    throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_OPERATION_STALE",
+    "The QuickBooks operation or connection changed. Refresh its status before continuing.");
+  }
+}
+
+/** Retain irreversible CREATE evidence before any subsequent provider request.
+ * A lease/state transition may prevent completion, but cannot erase this identity.
+ */
+export async function bindCreatedQuickBooksInvoiceIdentity(
+  transaction: Transaction,
+  access: AccessContext,
+  claim: ActivePublishClaim,
+  providerInvoiceId: string,
+): Promise<{ operation: QuickBooksInvoiceOperationPublic; canComplete: boolean }> {
+  await setTenantRlsContext(transaction, access.tenantId);
+  await lockInvoiceOperation(transaction, access, claim.operation.invoiceId);
+  const current = await transaction.quickBooksInvoiceOperation.findFirst({
+    where: {
+      id: claim.operation.id, tenantId: access.tenantId, invoiceId: claim.operation.invoiceId,
+      quickBooksConnectionId: claim.connection.id, providerRealmId: claim.operation.providerRealmId,
+      providerRequestId: claim.providerRequestId, payloadHash: claim.operation.payloadHash, archivedAtUtc: null,
+    },
+    select: { ...QuickBooksInvoiceOperationPublicSelect, claimTokenHash: true },
+  });
+  if (!current || (current.providerInvoiceId && current.providerInvoiceId !== providerInvoiceId)
+      || (current.status === "SUCCEEDED" && !current.providerInvoiceId)) {
+    throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_OPERATION_STALE",
+      "The QuickBooks operation identity changed. Reconcile before continuing.");
+  }
+  const canComplete = current.status === "PROCESSING" && current.claimTokenHash === sha256(claim.claimToken)
+    && Boolean(current.claimExpiresAtUtc && current.claimExpiresAtUtc.getTime() > Date.now());
+  const operation = await transaction.quickBooksInvoiceOperation.update({
+    where: { id: current.id },
+    data: {
+      providerInvoiceId,
+      ...(!canComplete && (current.status === "PROCESSING" || current.status === "FAILED") ? {
+        status: "RECONCILIATION_REQUIRED", claimTokenHash: null, claimExpiresAtUtc: null,
+        lastFailureCode: "QUICKBOOKS_CREATED_IDENTITY_RETAINED", failedAtUtc: new Date(),
+      } : {}),
+    },
+    select: QuickBooksInvoiceOperationPublicSelect,
+  });
+  return { operation, canComplete };
 }
 
 async function finishOperation(
@@ -1089,6 +1221,9 @@ export async function claimQuickBooksInvoiceReconciliation(
   const context = await loadSyncContext(transaction, access, invoiceId);
   if (!context.operation) {
     throw new QuickBooksInvoiceOperationError(404, "QUICKBOOKS_OPERATION_NOT_FOUND", "No QuickBooks invoice operation exists for this invoice.");
+  }
+  if (["QUICKBOOKS_INVOICE_DELETED_MANUAL_REVIEW", "QUICKBOOKS_INVOICE_NOT_FOUND_MANUAL_REVIEW"].includes(context.operation.lastFailureCode ?? "")) {
+    throw new QuickBooksInvoiceOperationError(409, context.operation.lastFailureCode!, "The QuickBooks invoice was deleted or could not be found. Review it with your accountant before changing this record.");
   }
   if (
     context.operation.status === "SUCCEEDED"
