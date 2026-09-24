@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useContext, useMemo, useState } from "react";
+import { NavigationGuardContext, NavigationGuardPendingContext } from "../../hooks/navigation-guard-context";
 import { useTranslation } from "react-i18next";
 import { api } from "../../lib/api";
 import { useLocale } from "../../i18n";
@@ -38,6 +39,8 @@ function formatUsd(locale: string, amount: number): string {
 export function TrialConversionBanner({ trialEndsAtUtc, ownerView }: TrialConversionBannerProps) {
   const { t } = useTranslation();
   const { locale } = useLocale();
+  const navigationGuard = useContext(NavigationGuardContext);
+  const pendingChanges = useContext(NavigationGuardPendingContext);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const daysRemaining = useMemo(() => trialDaysRemaining(trialEndsAtUtc), [trialEndsAtUtc]);
@@ -47,18 +50,22 @@ export function TrialConversionBanner({ trialEndsAtUtc, ownerView }: TrialConver
   const monthlyPrice = t("billing.monthlyPrice", { price: formatUsd(locale, BASIC_PLAN.monthlyPriceUsd) });
 
   async function startCheckout() {
-    if (!ownerView || loading) return;
+    if (!ownerView || loading || navigationGuard?.isActive()) return;
     setLoading(true);
     setError(null);
     try {
       const result = await api.billing.createCheckoutSession({ planCode: BASIC_PLAN.code });
       if (!result.checkoutUrl) throw new Error("Missing Stripe checkout redirect URL");
+      // Edits can begin while checkout creation is in flight. Keep the draft
+      // mounted and let the owner choose the plan again after saving it.
+      if (navigationGuard?.isActive()) return;
       window.location.assign(result.checkoutUrl);
     } catch (checkoutError) {
       setError(localizedApiError(checkoutError, t, {
         fallbackKey: "billing.checkoutUnavailable",
         statusKeys: { 409: "apiErrors.subscriptionExists" },
       }));
+    } finally {
       setLoading(false);
     }
   }
@@ -92,7 +99,7 @@ export function TrialConversionBanner({ trialEndsAtUtc, ownerView }: TrialConver
           </p>
         </div>
         {ownerView ? (
-          <Button type="button" onClick={() => void startCheckout()} loading={loading} disabled={loading} className="shrink-0">
+          <Button type="button" onClick={() => void startCheckout()} loading={loading} disabled={loading || pendingChanges} className="shrink-0">
             <span className="sm:hidden">{t("billing.trial.chooseShort", { price: firstPaidPrice })}</span>
             <span className="hidden sm:inline">{t("billing.trial.chooseLong", { price: firstPaidPrice })}</span>
           </Button>
@@ -100,6 +107,7 @@ export function TrialConversionBanner({ trialEndsAtUtc, ownerView }: TrialConver
           <p className="text-sm font-medium text-[var(--qf-warning-text)]">{t("billing.trial.ownerChoose")}</p>
         )}
       </div>
+      {ownerView && pendingChanges ? <p role="status" className="mt-2 text-sm text-[var(--qf-text-soft)]">{t("invoices.taxContext.checkoutPending")}</p> : null}
       {error ? (
         <div className="mt-3">
           <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert>

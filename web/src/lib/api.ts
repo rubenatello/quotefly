@@ -1917,6 +1917,27 @@ export type QuickBooksInvoiceSyncPreview = {
   operation: QuickBooksInvoiceOperation | null;
 };
 
+export type InvoiceTaxAddress = {
+  Line1: string; Line2?: string; City: string; CountrySubDivisionCode: string; PostalCode: string; Country: "US";
+};
+export type InvoiceTaxDecisions = {
+  transactionDate: string; origin: InvoiceTaxAddress; destination: InvoiceTaxAddress;
+  lines: Array<{ invoiceLineItemId: string; taxIntent: "TAXABLE" | "NON_TAXABLE" }>;
+};
+export type InvoiceTaxContextForm = {
+  invoice: { id: string; version: number; currency: string; subtotalAmount: string; taxAmount: string; totalAmount: string;
+    lines: Array<{ invoiceLineItemId: string; position: number; description: string; quantity: string; unitPrice: string; amount: string;
+      mapping: { reviewed: true; displayName: string | null } }> };
+  currentContext: { revision: number | null; current: boolean; staleReason: string | null; decisions: InvoiceTaxDecisions | null; confirmedAtUtc: string | null };
+  suggestions: { origin: InvoiceTaxAddress | null; destination: null };
+  expectedContextRevision: number; sourceToken: string; sourceTokenExpiresAtUtc: string;
+  taxCalculationProven: false; publishingAuthorized: false;
+};
+export type InvoiceTaxContextConfirmation = {
+  context: { revision: number; current: true; staleReason: null; confirmedAtUtc: string }; replayed: boolean;
+  taxCalculationProven: false; publishingAuthorized: false;
+};
+
 export type QuickBooksInvoiceOperationResponse = {
   duplicate?: boolean;
   reconciliationRequired?: boolean;
@@ -2568,6 +2589,13 @@ export const api = {
           invoice: QuickBooksInvoiceStatusPayload;
         }>(`/v1/integrations/quickbooks/quotes/${quoteId}/invoice-status`),
 
+      invoiceTaxContext: (invoiceId: string) => request<InvoiceTaxContextForm>(
+        `/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/tax-context`, { cache: "no-store" }),
+      confirmInvoiceTaxContext: (invoiceId: string, body: InvoiceTaxDecisions & {
+        expectedContextRevision: number; commandKey: string; sourceToken: string;
+      }) => request<InvoiceTaxContextConfirmation>(
+        `/v1/integrations/quickbooks/invoices/${encodeURIComponent(invoiceId)}/tax-context`,
+        { method: "POST", body: JSON.stringify(body), cache: "no-store" }),
       invoiceSyncPreview: (invoiceId: string, options?: QuickBooksInvoiceReviewOptions) =>
         request<{
           providerWorkflowsEnabled: boolean;

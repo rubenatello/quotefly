@@ -23,7 +23,7 @@ import {
 import { useDashboard, formatDateTime, money, type SendChannel } from "../components/dashboard/DashboardContext";
 import { AiPaidPauseNotice, KodyFieldAssistButton } from "../components/ai/KodyFieldAssistButton";
 import { openKody } from "../components/ai/kody-events";
-import { InvoicePanel } from "../components/invoices/InvoicePanel";
+import { InvoicePanel, type InvoiceTaxContextActivity } from "../components/invoices/InvoicePanel";
 import {
   FeatureLockedCard,
   HistoryEventPill,
@@ -344,6 +344,7 @@ export function QuoteDeskView() {
   const navigate = useNavigate();
   const location = useLocation();
   const [lineItemPendingDeleteId, setLineItemPendingDeleteId] = useState<string | null>(null);
+  const [taxContextActivity, setTaxContextActivity] = useState<InvoiceTaxContextActivity>({ open: false, pending: false, saving: false });
   const [activeTab, setActiveTab] = useState<DeskTab>("quote");
   const [pendingOutboundAction, setPendingOutboundAction] = useState<PendingOutboundAction | null>(null);
   const [pendingOutboundOrigin, setPendingOutboundOrigin] = useState<"kody" | null>(null);
@@ -391,6 +392,7 @@ export function QuoteDeskView() {
   const [unlockConfirmOpen, setUnlockConfirmOpen] = useState(false);
   const [quoteRetentionAction, setQuoteRetentionAction] = useState<"archive" | "delete" | null>(null);
   const [quoteRetentionSaving, setQuoteRetentionSaving] = useState(false);
+  const quoteRetentionTriggerRef = useRef<HTMLElement | null>(null);
   const [restoreRevisionTarget, setRestoreRevisionTarget] = useState<QuoteRevision | null>(null);
   const [restoreRevisionSaving, setRestoreRevisionSaving] = useState(false);
   const [pendingLifecycleStatus, setPendingLifecycleStatus] = useState<PendingLifecycleStatus>(null);
@@ -970,12 +972,25 @@ export function QuoteDeskView() {
     };
   }, [deskDraftStorageKey, hydratedDeskDraftKey]);
 
+  const existingQuoteDirtyHydratedNotSaving = hasUnsavedQuoteSheetChanges
+    && hydratedDeskDraftKey === deskDraftStorageKey
+    && !saving;
   const {
     navigationPromptOpen,
     requestNavigation,
     cancelNavigation,
     continueNavigation,
-  } = useUnsavedChangesGuard(hasUnsavedQuoteSheetChanges && hydratedDeskDraftKey === deskDraftStorageKey && !saving);
+  } = useUnsavedChangesGuard(
+    existingQuoteDirtyHydratedNotSaving || taxContextActivity.pending,
+    taxContextActivity.pending
+      ? {
+        blockNavigation: taxContextActivity.saving,
+        historyPrompt: t(existingQuoteDirtyHydratedNotSaving
+          ? "invoices.taxContext.leaveCombinedPrompt"
+          : "invoices.taxContext.leavePrompt"),
+      }
+      : undefined,
+  );
 
   function clearStoredDeskDraft() {
     preventDeskDraftPersistenceRef.current = true;
@@ -1212,6 +1227,10 @@ export function QuoteDeskView() {
   }
 
   function requestOutboundAction(action: PendingOutboundAction) {
+    if (action === "pdf-preview" && taxContextActivity.pending) {
+      setError(t("invoices.taxContext.previewPending"));
+      return;
+    }
     if (isQuotePricingReviewBlocking(activeAiPricingReview, selectedQuote?.id)) {
       setActiveTab("quote");
       setMobilePane("editor");
@@ -1734,19 +1753,14 @@ export function QuoteDeskView() {
     setLineItemPendingDeleteId(null);
   }
 
-  async function confirmQuoteRetentionAction() {
-    if (!selectedQuote || !quoteRetentionAction) return;
-    if (hasUnsavedQuoteSheetChanges) {
-      setQuoteRetentionAction(null);
-      setError(t("quoteDesk.errors.retentionDirty"));
-      return;
-    }
+  async function executeQuoteRetentionAction(action: "archive" | "delete") {
+    if (!selectedQuote) return;
 
     setQuoteRetentionSaving(true);
     setError(null);
 
     try {
-      if (quoteRetentionAction === "archive") {
+      if (action === "archive") {
         await api.quotes.archive(selectedQuote.id);
         notify.success(t("quoteDesk.notifications.archivedTitle"), {
           description: t("quoteDesk.notifications.archivedDescription", { title: selectedQuote.title }),
@@ -1758,17 +1772,37 @@ export function QuoteDeskView() {
         });
       }
 
-      setQuoteRetentionAction(null);
       clearStoredDeskDraft();
       await loadQuotes();
       navigate("/app/quotes");
     } catch (err) {
-      notify.error(quoteRetentionAction === "archive" ? t("quoteDesk.notifications.archiveFailed") : t("quoteDesk.notifications.deleteFailed"), {
+      notify.error(action === "archive" ? t("quoteDesk.notifications.archiveFailed") : t("quoteDesk.notifications.deleteFailed"), {
         description: localizedApiError(err, t, { fallbackKey: "quoteDesk.notifications.unchanged" }),
       });
     } finally {
       setQuoteRetentionSaving(false);
     }
+  }
+
+  function requestQuoteRetentionAction(action: "archive" | "delete", trigger: HTMLElement) {
+    quoteRetentionTriggerRef.current = trigger;
+    setQuoteRetentionAction(action);
+  }
+
+  function confirmQuoteRetentionAction() {
+    const action = quoteRetentionAction;
+    if (!selectedQuote || !action) return;
+    if (hasUnsavedQuoteSheetChanges) {
+      setQuoteRetentionAction(null);
+      setError(t("quoteDesk.errors.retentionDirty"));
+      return;
+    }
+    setQuoteRetentionAction(null);
+    if (taxContextActivity.pending) {
+      requestNavigation(() => void executeQuoteRetentionAction(action), quoteRetentionTriggerRef.current);
+      return;
+    }
+    void executeQuoteRetentionAction(action);
   }
 
   if (quoteDetailLoading && (!selectedQuote || selectedQuote.id !== quoteId)) {
@@ -1786,7 +1820,11 @@ export function QuoteDeskView() {
     );
   }
 
-  if (quoteDetailError) {
+  const retainQuoteDeskDuringTaxRefreshError = Boolean(
+    quoteDetailError && taxContextActivity.pending && selectedQuote?.id === quoteId,
+  );
+
+  if (quoteDetailError && !retainQuoteDeskDuringTaxRefreshError) {
     return (
       <div className="space-y-5" data-testid="quote-detail-error">
         <PageHeader
@@ -1864,6 +1902,19 @@ export function QuoteDeskView() {
       />
 
       {error ? <Alert tone="error" onDismiss={() => setError(null)}>{error}</Alert> : null}
+      {retainQuoteDeskDuringTaxRefreshError && quoteDetailError ? (
+        <Alert tone="error">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-medium">{t("quoteDesk.errors.load")}</p>
+              <p className="text-sm">{quoteDetailError.message}</p>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => void retrySelectedQuote()}>
+              {t("quoteDesk.actions.retry")}
+            </Button>
+          </div>
+        </Alert>
+      ) : null}
       {notice ? <Alert tone="success" onDismiss={() => setNotice(null)}>{notice}</Alert> : null}
       {acceptedJobAction ? (
         <div role="status" className="flex flex-col gap-3 rounded-2xl border border-[var(--qf-success-border)] bg-[var(--qf-success-surface)] px-4 py-3 text-sm text-[var(--qf-success-text)] sm:flex-row sm:items-center sm:justify-between">
@@ -1882,7 +1933,7 @@ export function QuoteDeskView() {
                 {t("quoteDesk.lifecycle.bookWithKody")}
               </Button>
             ) : null}
-            <Button variant="outline" size="sm" onClick={() => navigate(`/app/jobs/${acceptedJobAction.id}`)}>
+            <Button variant="outline" size="sm" onClick={() => requestNavigation(() => navigate(`/app/jobs/${acceptedJobAction.id}`))}>
               <ExternalLink size={15} />
               {t("quoteDesk.lifecycle.openJob")}
             </Button>
@@ -1896,6 +1947,7 @@ export function QuoteDeskView() {
           sourceLabel={t("invoices.sourceQuoteLabel", { title: selectedQuote.title })}
           sourceAmount={selectedQuote.totalAmount}
           canCreate={canCreateInvoices}
+          onTaxContextActivityChange={setTaxContextActivity}
         />
       ) : null}
       {canManageAssignments || selectedQuote.assignedTenantUser ? (
@@ -2461,7 +2513,7 @@ export function QuoteDeskView() {
                           fullWidth
                           variant="warning"
                           icon={<Archive size={14} />}
-                          onClick={() => setQuoteRetentionAction("archive")}
+                          onClick={(event) => requestQuoteRetentionAction("archive", event.currentTarget)}
                         >
                           {t("quoteDesk.actions.archive")}
                         </Button>
@@ -2469,7 +2521,7 @@ export function QuoteDeskView() {
                           fullWidth
                           variant="danger"
                           icon={<Trash2 size={14} />}
-                          onClick={() => setQuoteRetentionAction("delete")}
+                          onClick={(event) => requestQuoteRetentionAction("delete", event.currentTarget)}
                         >
                           {t("quoteDesk.actions.delete")}
                         </Button>
@@ -2481,9 +2533,17 @@ export function QuoteDeskView() {
                   <Button fullWidth variant="outline" icon={<RotateCcw size={14} />} onClick={revertQuoteSheetToLastSaved} disabled={!hasUnsavedQuoteSheetChanges}>
                     {t("quoteDesk.actions.revert")}
                   </Button>
-                  <Button fullWidth variant="outline" icon={<Eye size={14} />} onClick={() => requestOutboundAction("pdf-preview")}>
+                  <Button
+                    fullWidth
+                    variant="outline"
+                    icon={<Eye size={14} />}
+                    onClick={() => requestOutboundAction("pdf-preview")}
+                    disabled={taxContextActivity.pending}
+                    title={taxContextActivity.pending ? t("invoices.taxContext.previewPending") : undefined}
+                  >
                     {t("quoteDesk.actions.previewPdf")}
                   </Button>
+                  {taxContextActivity.pending ? <p role="status" className="text-xs text-[var(--qf-text-soft)]">{t("invoices.taxContext.previewPending")}</p> : null}
                   <Button fullWidth variant="outline" onClick={() => requestNavigation(() => navigateToBuilder(selectedQuote.customerId))}>
                     {t("quoteDesk.actions.startAnother")}
                   </Button>
@@ -2492,7 +2552,7 @@ export function QuoteDeskView() {
                       fullWidth
                       variant="warning"
                       icon={<Archive size={14} />}
-                      onClick={() => setQuoteRetentionAction("archive")}
+                      onClick={(event) => requestQuoteRetentionAction("archive", event.currentTarget)}
                     >
                       {t("quoteDesk.actions.archive")}
                     </Button>
@@ -2500,7 +2560,7 @@ export function QuoteDeskView() {
                       fullWidth
                       variant="danger"
                       icon={<Trash2 size={14} />}
-                      onClick={() => setQuoteRetentionAction("delete")}
+                      onClick={(event) => requestQuoteRetentionAction("delete", event.currentTarget)}
                     >
                       {t("quoteDesk.actions.delete")}
                     </Button>
@@ -2544,7 +2604,7 @@ export function QuoteDeskView() {
         </div>
       ) : null}
 
-      {activeTab === "quote" ? (
+      {activeTab === "quote" && !taxContextActivity.open ? (
         <div className="xl:hidden">
           <div className="h-24" />
           <WorkflowActionDock>
@@ -2893,9 +2953,20 @@ export function QuoteDeskView() {
         open={navigationPromptOpen}
         onClose={cancelNavigation}
         onConfirm={continueNavigation}
-        title={t("quoteDesk.leave.title")}
-        description={t("quoteDesk.leave.description")}
-        confirmLabel={t("quoteDesk.leave.confirm")}
+        title={taxContextActivity.saving
+          ? t("invoices.taxContext.savingTitle")
+          : taxContextActivity.pending ? t("invoices.taxContext.leaveTitle") : t("quoteDesk.leave.title")}
+        description={taxContextActivity.saving
+          ? t("invoices.taxContext.savingLeaveHelp")
+          : taxContextActivity.pending
+          ? t(existingQuoteDirtyHydratedNotSaving
+            ? "invoices.taxContext.leaveCombinedDescription"
+            : "invoices.taxContext.leaveDescription")
+          : t("quoteDesk.leave.description")}
+        confirmLabel={taxContextActivity.saving
+          ? t("invoices.taxContext.savingTitle")
+          : taxContextActivity.pending ? t("invoices.taxContext.leaveConfirm") : t("quoteDesk.leave.confirm")}
+        confirmDisabled={taxContextActivity.saving}
         confirmVariant="warning"
       />
 
@@ -3096,9 +3167,12 @@ export function QuoteDeskView() {
               setPreviewOpen(false);
               requestOutboundAction("pdf-preview");
             }}
+            disabled={taxContextActivity.pending}
+            title={taxContextActivity.pending ? t("invoices.taxContext.previewPending") : undefined}
           >
             {t("quoteDesk.actions.previewPdf")}
           </Button>
+          {taxContextActivity.pending ? <p role="status" className="text-xs text-[var(--qf-text-soft)]">{t("invoices.taxContext.previewPending")}</p> : null}
         </ModalFooter>
       </Modal>
 

@@ -1,7 +1,8 @@
+import { useGuardedNavigate } from "../../hooks/navigation-guard-context";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { CalendarDays, ExternalLink, FileCheck2, ReceiptText, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
+
 import { money, useDashboard } from "../dashboard/DashboardContext";
 import {
   Alert,
@@ -31,8 +32,12 @@ import {
   safeQuickBooksHostedPaymentUrl,
 } from "../../lib/quickbooks-payment-link";
 import { tenantWallTimeToIso, toTenantDateTimeInput, validTimeZone } from "../../lib/tenant-time";
+import { InvoiceTaxContextForm } from "./InvoiceTaxContextForm";
+
+export type InvoiceTaxContextActivity = { open: boolean; pending: boolean; saving: boolean };
 
 type InvoicePanelProps = {
+  onTaxContextActivityChange?: (activity: InvoiceTaxContextActivity) => void;
   jobId?: string;
   sourceQuoteId?: string;
   sourceLabel: string;
@@ -86,12 +91,14 @@ export function InvoicePanel({
   createBlockedReason,
   kodyInvoiceId = null,
   onKodyInvoiceConsumed,
+  onTaxContextActivityChange,
 }: InvoicePanelProps) {
   const { t, i18n } = useTranslation();
-  const navigate = useNavigate();
+  const navigate = useGuardedNavigate();
   const { session } = useDashboard();
   const headingId = useId();
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const focusedControlRef = useRef<HTMLElement | null>(null);
   const quickBooksReviewTriggerRef = useRef<HTMLButtonElement>(null);
   const locale = i18n.resolvedLanguage ?? "en-US";
   const timeZone = validTimeZone(session?.timezone ?? "UTC");
@@ -111,6 +118,17 @@ export function InvoicePanel({
   const [quickBooksAllowAch, setQuickBooksAllowAch] = useState(false);
   const [quickBooksAllowCard, setQuickBooksAllowCard] = useState(false);
   const [quickBooksReviewDirty, setQuickBooksReviewDirty] = useState(false);
+  const [taxContextPending, setTaxContextPending] = useState(false);
+  const [taxContextSaving, setTaxContextSaving] = useState(false);
+  const [taxContextOpen, setTaxContextOpen] = useState(false);
+  useEffect(() => {
+    onTaxContextActivityChange?.({ open: taxContextOpen, pending: taxContextPending, saving: taxContextSaving });
+  }, [taxContextOpen, taxContextPending, taxContextSaving, onTaxContextActivityChange]);
+  useEffect(() => () => {
+    onTaxContextActivityChange?.({ open: false, pending: false, saving: false });
+  }, [onTaxContextActivityChange]);
+  const taxContextPendingRef = useRef(false);
+  taxContextPendingRef.current = taxContextPending;
   const [quickBooksCustomerId, setQuickBooksCustomerId] = useState("");
   const [quickBooksItemIds, setQuickBooksItemIds] = useState<Record<string, string>>({});
   const [quickBooksCustomerSearch, setQuickBooksCustomerSearch] = useState("");
@@ -250,6 +268,7 @@ export function InvoicePanel({
     const operationSource = sourceRef.current;
     const requestedInvoiceId = currentInvoice.id;
     const generation = ++quickBooksGenerationRef.current;
+    const focusedControl = focusedControlRef.current;
     const invoiceGeneration = operationGenerationRef.current;
     const mutationGeneration = quickBooksOperationGenerationRef.current;
     const mappingGeneration = quickBooksMappingMutationGenerationRef.current;
@@ -313,7 +332,8 @@ export function InvoicePanel({
         requestedInvoiceId,
         currentInvoiceId: activeInvoiceRef.current?.id ?? null,
       }) || !mutationsAreCurrent()) return;
-      if (!options.preservePreviewOnError) setQuickBooksPreview(null);
+      if (!options.preservePreviewOnError && !taxContextPendingRef.current) setQuickBooksPreview(null);
+      if (taxContextPendingRef.current) setQuickBooksEnabled(false);
       setQuickBooksError(localizedApiError(err, t, { fallbackKey: "invoices.quickBooks.loadError" }));
     } finally {
       if (isCurrentQuickBooksRequestContext({
@@ -323,12 +343,25 @@ export function InvoicePanel({
         currentGeneration: quickBooksGenerationRef.current,
         requestedInvoiceId,
         currentInvoiceId: activeInvoiceRef.current?.id ?? null,
-      })) setQuickBooksLoading(false);
+      })) {
+        setQuickBooksLoading(false);
+        requestAnimationFrame(() => {
+          if (generation !== quickBooksGenerationRef.current || sourceRef.current !== operationSource) return;
+          if (!focusedControl || (document.activeElement !== document.body && document.activeElement !== focusedControl)) return;
+          const target = focusedControl.isConnected && !focusedControl.matches(':disabled') && !focusedControl.closest('[inert]')
+            ? focusedControl : headingRef.current;
+          target?.focus();
+        });
+      }
     }
   }, [t]);
 
   useEffect(() => {
     setDueDate(defaultDueDate(timeZone));
+    setTaxContextPending(false);
+    setTaxContextSaving(false);
+    setTaxContextOpen(false);
+    focusedControlRef.current = null;
     setInvoice(null);
     setError(null);
     setNotice(null);
@@ -466,6 +499,8 @@ export function InvoicePanel({
       || !quickBooksPreview.reviewBinding
       || !quickBooksEnabled
       || quickBooksSaving
+      || taxContextPending
+      || quickBooksLoading
     ) return;
     const reviewedPreview = quickBooksPreview;
     if (!isQuickBooksPreviewCurrentForPublish({
@@ -528,7 +563,7 @@ export function InvoicePanel({
   };
 
   const handleQuickBooksReviewOptions = async () => {
-    if (!invoice || quickBooksLoading || quickBooksSaving || quickBooksBillingEmailInvalid) {
+    if (!invoice || taxContextPending || quickBooksLoading || quickBooksSaving || quickBooksBillingEmailInvalid) {
       if (quickBooksBillingEmailInvalid) setQuickBooksError(t("invoices.quickBooks.invalidBillingEmail"));
       return;
     }
@@ -635,7 +670,7 @@ export function InvoicePanel({
 
   const handleQuickBooksCustomerMappingReview = async () => {
     const providerCustomerId = quickBooksCustomerId.trim();
-    if (!invoice || !providerCustomerId || quickBooksMappingSaving) {
+    if (!invoice || taxContextPending || !providerCustomerId || quickBooksMappingSaving) {
       if (!providerCustomerId) setQuickBooksError(t("invoices.quickBooks.customerIdRequired"));
       return;
     }
@@ -676,7 +711,7 @@ export function InvoicePanel({
   const handleQuickBooksItemMappingReview = async (line: QuickBooksInvoiceSyncPreview["lineItems"][number]) => {
     const itemKey = line.itemKey ?? line.description;
     const providerItemId = quickBooksItemIds[itemKey]?.trim();
-    if (!invoice || !providerItemId || quickBooksMappingSaving) {
+    if (!invoice || taxContextPending || !providerItemId || quickBooksMappingSaving) {
       if (!providerItemId) setQuickBooksError(t("invoices.quickBooks.itemIdRequired"));
       return;
     }
@@ -791,6 +826,7 @@ export function InvoicePanel({
     <section
       aria-labelledby={headingId}
       data-testid="invoice-panel"
+      onFocusCapture={event => { focusedControlRef.current = event.target as HTMLElement; }}
       className="rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4 shadow-[var(--qf-shadow-sm)] sm:p-5"
     >
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -917,8 +953,9 @@ export function InvoicePanel({
 
               {quickBooksLoading ? (
                 <div className="mt-3"><LoadingState variant="compact" title={t("invoices.quickBooks.loading")} /></div>
-              ) : quickBooksPreview ? (
-                <div className="mt-3 space-y-3">
+              ) : null}
+              {quickBooksPreview ? (
+                <div className="mt-3 space-y-3" inert={quickBooksLoading} aria-busy={quickBooksLoading}>
                   {!quickBooksEnabled ? (
                     <div id="quickbooks-review-paused-help">
                       <Alert tone="info">{t("invoices.quickBooks.paused")}</Alert>
@@ -929,7 +966,7 @@ export function InvoicePanel({
                   ) : null}
                   {(!quickBooksPreview.operation || quickBooksPreview.operation.retryAvailable) && quickBooksPreview.connection ? (
                     <fieldset
-                      disabled={!quickBooksEnabled}
+                      disabled={!quickBooksEnabled || quickBooksLoading}
                       aria-describedby={!quickBooksEnabled ? "quickbooks-review-paused-help" : undefined}
                       className="space-y-4 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-3 disabled:opacity-75 sm:p-4"
                       data-testid="quickbooks-review-controls"
@@ -940,6 +977,9 @@ export function InvoicePanel({
                         <p className="mt-1 text-xs leading-5 text-[var(--qf-text-muted)]">{t("invoices.quickBooks.reviewSetupDescription")}</p>
                       </div>
 
+                      {taxContextPending ? <Alert tone="info">{t("invoices.quickBooks.taxEditsPending")}</Alert> : null}
+                      <fieldset disabled={taxContextPending} className="space-y-4" data-testid="quickbooks-mapping-controls">
+                      <legend className="sr-only">{t("invoices.quickBooks.reviewSetupTitle")}</legend>
                       <div className="space-y-2 border-t border-[var(--qf-border)] pt-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <p className="text-xs font-semibold text-[var(--qf-text-soft)]">{t("invoices.quickBooks.customerMapping")}</p>
@@ -1192,7 +1232,24 @@ export function InvoicePanel({
                         })}
                       </div>
 
-                      <fieldset className="space-y-3 border-t border-[var(--qf-border)] pt-3">
+                      </fieldset>
+
+                      {invoice.status === "DRAFT" && quickBooksReviewDirty ? <Alert tone="info">{t("invoices.quickBooks.taxReviewPending")}</Alert> : null}
+                      {invoice.status === "DRAFT" ? <InvoiceTaxContextForm
+                        key={`${session?.tenantId}:${invoice.id}`}
+                        invoiceId={invoice.id}
+                        invoiceVersion={invoice.version}
+                        reviewFingerprint={JSON.stringify([quickBooksPreview.customerMapping, quickBooksPreview.lineItems.map(line => [line.itemKey, line.quickBooksItemId, line.reviewedAtUtc])])}
+                        disabled={quickBooksReviewDirty || !quickBooksEnabled || quickBooksLoading || quickBooksSaving || Boolean(quickBooksMappingSaving) || !quickBooksPreview.customerMapping?.reviewedAtUtc || quickBooksPreview.lineItems.some(line => !line.reviewedAtUtc)}
+                        onPendingChange={setTaxContextPending}
+                        onSavingChange={setTaxContextSaving}
+                        onOpenChange={setTaxContextOpen}
+                        onSaved={async () => {
+                          setNotice({ message: t("invoices.taxContext.saved"), tone: "success" });
+                          await loadQuickBooksPreview(invoice);
+                        }}
+                      /> : null}
+                      <fieldset disabled={taxContextPending} className="space-y-3 border-t border-[var(--qf-border)] pt-3">
                         <legend className="text-xs font-semibold text-[var(--qf-text-soft)]">{t("invoices.quickBooks.paymentChoices")}</legend>
                         <Input
                           type="email"
@@ -1320,7 +1377,7 @@ export function InvoicePanel({
                       <RefreshCw size={16} aria-hidden="true" />
                       {t("invoices.quickBooks.reconcile")}
                     </Button>
-                  ) : quickBooksEnabled && quickBooksPreview.ready && quickBooksPreviewMatchesInvoice && (!quickBooksPreview.operation || quickBooksPreview.operation.retryAvailable) && !quickBooksReviewDirty && !quickBooksBillingEmailInvalid ? (
+                  ) : quickBooksEnabled && !quickBooksLoading && quickBooksPreview.ready && quickBooksPreviewMatchesInvoice && (!quickBooksPreview.operation || quickBooksPreview.operation.retryAvailable) && !quickBooksReviewDirty && !quickBooksBillingEmailInvalid && !taxContextPending ? (
                     <Button ref={quickBooksReviewTriggerRef} type="button" variant="outline" className="min-h-11" onClick={() => setQuickBooksConfirmOpen(true)}>
                       <FileCheck2 size={16} aria-hidden="true" />
                       {t(quickBooksPreview.operation?.retryAvailable ? "invoices.quickBooks.reviewRetry" : "invoices.quickBooks.review")}

@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
+import { NavigationGuardContext } from "../hooks/navigation-guard-context";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
@@ -70,6 +71,8 @@ export function CrmShell({
   onNavigateToJob,
 }: CrmShellProps) {
   const { t } = useTranslation();
+  const navigationGuard = useContext(NavigationGuardContext);
+  const commandReturnFocusRef = useRef<HTMLElement | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const savedValue = localStorage.getItem("qf_sidebar_collapsed");
@@ -130,14 +133,22 @@ export function CrmShell({
   }, [mobileOpen]);
 
   const handleNavigate = (page: WorkspaceNavigationId) => {
-    onNavigate(page);
+    const target = commandOpen ? commandReturnFocusRef.current : mobileOpen ? mobileMenuTriggerRef.current : null;
+    if (navigationGuard && target) navigationGuard.withReturnFocus(target, () => onNavigate(page)); else onNavigate(page);
     setMobileOpen(false);
     setCommandOpen(false);
   };
 
   const handleQuickAction = (action: "new-customer" | "new-quote") => {
     setMobileOpen(false);
-    onQuickAction(action);
+    const target = commandOpen ? commandReturnFocusRef.current : mobileOpen ? mobileMenuTriggerRef.current : null;
+    if (navigationGuard && target) navigationGuard.withReturnFocus(target, () => onQuickAction(action)); else onQuickAction(action);
+    setCommandOpen(false);
+  };
+
+  const openCommand = () => {
+    commandReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setCommandOpen(true);
   };
 
   const handleToggleMobile = () => {
@@ -193,7 +204,7 @@ export function CrmShell({
         backgroundInert={mobileOpen}
         menuButtonRef={mobileMenuTriggerRef}
         onToggleMobile={handleToggleMobile}
-        onOpenCommand={() => setCommandOpen(true)}
+        onOpenCommand={openCommand}
         onNavigate={handleNavigate}
         onQuickAction={handleQuickAction}
         onLogout={onLogout}
@@ -298,7 +309,7 @@ export function CrmShell({
 
                 <button
                   type="button"
-                  onClick={() => setCommandOpen(true)}
+                  onClick={openCommand}
                       className="inline-flex min-w-[176px] items-center gap-3 rounded-xl border border-qf-border bg-qf-surface-muted px-3.5 py-2 text-sm font-medium text-qf-text-soft transition hover:border-[var(--qf-border-strong)] hover:bg-qf-surface hover:text-qf-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--qf-focus)] xl:min-w-[196px] 2xl:min-w-[216px]"
                 >
                   <span className="inline-flex items-center gap-2">
@@ -388,7 +399,10 @@ export function CrmShell({
         onOpenChange={setNotificationCenterOpen}
         displayTimeZone={displayTimeZone}
         onUnreadCountChange={setNotificationUnreadCount}
-        onOpenJob={onNavigateToJob}
+        onOpenJob={jobId => {
+          if (navigationGuard) navigationGuard.withReturnFocus(notificationReturnFocusRef.current, () => onNavigateToJob(jobId));
+          else onNavigateToJob(jobId);
+        }}
         returnFocusRef={notificationReturnFocusRef}
       />
 

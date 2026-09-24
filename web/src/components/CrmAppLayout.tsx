@@ -1,5 +1,7 @@
-import { lazy, Suspense, useEffect, useLayoutEffect } from "react";
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { lazy, Suspense, useContext, useEffect, useLayoutEffect } from "react";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { WorkspaceNavigationGuard } from "./WorkspaceNavigationGuard";
+import { NavigationGuardContext, useGuardedNavigate } from "../hooks/navigation-guard-context";
 import { useTranslation } from "react-i18next";
 import { WorkspaceRouteLoading } from "./AppLoadingScreen";
 import { CrmShell } from "./CrmShell";
@@ -57,17 +59,24 @@ function toDashboardSession(s: AppSession): DashboardSession {
   };
 }
 
-export function CrmAppLayout({
-  session,
-  onLogout,
-  onRefreshSession,
-}: {
+type CrmAppLayoutProps = {
   session: AppSession;
   onLogout: () => void;
   onRefreshSession: () => Promise<void>;
-}) {
+};
+
+export function CrmAppLayout(props: CrmAppLayoutProps) {
+  return <WorkspaceNavigationGuard key={`${props.session.userId}:${props.session.tenantId}`}><CrmAppContent {...props} /></WorkspaceNavigationGuard>;
+}
+
+function CrmAppContent({
+  session,
+  onLogout,
+  onRefreshSession,
+}: CrmAppLayoutProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
+  const navigate = useGuardedNavigate();
+  const navigationGuard = useContext(NavigationGuardContext);
   const location = useLocation();
   const canManageCatalog = ["owner", "admin"].includes(session.role.trim().toLowerCase());
   const workspaceLocked =
@@ -77,8 +86,8 @@ export function CrmAppLayout({
   // Clear before a new workspace's passive subscription can consume an old intent.
   useLayoutEffect(() => () => clearPendingKodyOpen(), [session.userId, session.tenantId, workspaceLocked]);
   const handleLogout = () => {
-    clearPendingKodyOpen();
-    onLogout();
+    const logout = () => { clearPendingKodyOpen(); onLogout(); };
+    if (navigationGuard) navigationGuard.request(logout); else logout();
   };
   const billingReturnState = new URLSearchParams(location.search).get("billing");
   const billingSubscriptionConfirmed =
