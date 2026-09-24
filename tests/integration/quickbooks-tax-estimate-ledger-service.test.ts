@@ -10,7 +10,7 @@ import { lockQuickBooksInvoicePublication } from "../../src/services/quickbooks-
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
 import {
   claimReviewedTaxEstimate, markTaxEstimateUncertain, assembleReviewedTaxEstimate,
-  retainTaxEstimateIdentity,
+  readTaxEstimateCredentialTarget, retainTaxEstimateIdentity,
 } from "../../src/services/quickbooks-tax-estimate-ledger";
 import type { TaxReviewSource } from "../../src/services/quickbooks-tax-review-contract";
 
@@ -210,6 +210,7 @@ describe("QuickBooks tax Estimate ledger services", () => {
     const a = await fixture(); const b = await fixture(); const row = await persist(a);
     const binding = syntheticReview(a.source, keys).binding;
     await expect(assembleReviewedTaxEstimate(runtimePrisma, b.actor, testRuntime(keys), { invoiceId: a.invoice.id, expectedContextRevision: 1 })).rejects.toMatchObject({ code: "QUICKBOOKS_TAX_INVOICE_CHANGED" });
+    await expect(readTaxEstimateCredentialTarget(runtimePrisma, b.actor, testRuntime(keys), row.id)).rejects.toMatchObject({ code: "QUICKBOOKS_TAX_OPERATION_NOT_FOUND" });
     await expect(claimReviewedTaxEstimate(runtimePrisma, b.actor, testRuntime(keys), row.id)).rejects.toMatchObject({ code: "QUICKBOOKS_TAX_OPERATION_NOT_FOUND" });
     expect(await prisma.quickBooksTaxEstimateOperation.count({ where: { tenantId: b.tenant.id } })).toBe(0);
   });
@@ -222,6 +223,7 @@ describe("QuickBooks tax Estimate ledger services", () => {
     if (change === "tenant_deleted") await prisma.tenant.update({ where: { id: f.tenant.id }, data: { deletedAtUtc: new Date() } });
     if (change === "auth_version") await prisma.user.update({ where: { id: f.user.id }, data: { authVersion: 1 } });
     await expect(persist(f)).rejects.toMatchObject({ code: "QUICKBOOKS_TAX_MANAGER_REQUIRED" });
+    await expect(readTaxEstimateCredentialTarget(runtimePrisma, f.actor, testRuntime(keys), row.id)).rejects.toMatchObject({ code: "QUICKBOOKS_TAX_MANAGER_REQUIRED" });
     await expect(claimReviewedTaxEstimate(runtimePrisma, f.actor, testRuntime(keys), row.id)).rejects.toMatchObject({ code: "QUICKBOOKS_TAX_MANAGER_REQUIRED" });
     expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: "REVIEWED", attemptCount: 0 });
   });
@@ -373,9 +375,63 @@ describe("QuickBooks tax Estimate ledger services", () => {
     expect(results.filter((result) => result.outcome === "NOT_CLAIMED")).toHaveLength(1);
     expect(results.every((result) => result.publishingAuthorized === false)).toBe(true);
     const winner = results.find((result) => result.outcome === "CLAIMED")!;
+    expect(winner.dispatch.attempt).toMatchObject({ tenantId: f.tenant.id, operationId: row.id,
+      estimateRequestId: row.estimateRequestId, sourceHash: row.sourceHash, claimToken: winner.claimToken });
+    expect(winner.dispatch.connection).toEqual({ id: f.connection.id, tenantId: f.tenant.id,
+      realmId: f.connection.realmId, environment: "sandbox", generation: 1 });
+    expect(winner.dispatch.estimateAst).toEqual(syntheticReview(f.source, keys).estimateAst);
+    expect(Date.parse(winner.dispatch.attempt.claimExpiresAtUtc)).toBeGreaterThan(Date.now());
+    expect(Object.isFrozen(winner.dispatch)).toBe(true);
+    expect(Object.isFrozen(winner.dispatch.attempt)).toBe(true);
+    expect(Object.isFrozen(winner.dispatch.connection)).toBe(true);
+    expect(Object.isFrozen(winner.dispatch.estimateAst)).toBe(true);
+    expect(Object.isFrozen(winner.dispatch.estimateAst.Line)).toBe(true);
+    expect(Object.isFrozen(winner.dispatch.estimateAst.Line[0].SalesItemLineDetail)).toBe(true);
+    await expect(readTaxEstimateCredentialTarget(runtimePrisma, f.actor, testRuntime(keys), row.id))
+      .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_OPERATION_NOT_READY" });
     const stored = await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } });
     expect(stored).toMatchObject({ status: "ESTIMATE_PROCESSING", attemptCount: 1, claimTokenHash: sha256(winner.claimToken), attemptTokenHash: sha256(winner.claimToken), estimateRequestId: row.estimateRequestId, invoiceRequestId: row.invoiceRequestId });
     expect(JSON.stringify(stored)).not.toContain(winner.claimToken);
+  });
+
+  test("credential target read is exact, immutable and consumes no attempt", async () => {
+    const f = await fixture(); const row = await persist(f);
+    const before = await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } });
+    const target = await readTaxEstimateCredentialTarget(runtimePrisma, f.actor, testRuntime(keys), row.id);
+    expect(target).toEqual({ outcome: "READY", connection: { id: f.connection.id, tenantId: f.tenant.id,
+      realmId: f.connection.realmId, environment: "sandbox", generation: 1 }, publishingAuthorized: false });
+    expect(Object.isFrozen(target)).toBe(true);
+    expect(Object.isFrozen(target.connection)).toBe(true);
+    expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } })).toEqual(before);
+  });
+
+  test("credential target and claim reject configured environment mismatch before an attempt", async () => {
+    const f = await fixture(); const row = await persist(f);
+    const production = { ...testRuntime(keys), QUICKBOOKS_ENVIRONMENT: "production" as const };
+    await expect(readTaxEstimateCredentialTarget(runtimePrisma, f.actor, production, row.id))
+      .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_ENVIRONMENT_MISMATCH" });
+    await expect(claimReviewedTaxEstimate(runtimePrisma, f.actor, production, row.id))
+      .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_ENVIRONMENT_MISMATCH" });
+    expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } }))
+      .toMatchObject({ status: "REVIEWED", attemptCount: 0, attemptTokenHash: null, claimTokenHash: null, lastAttemptAtUtc: null });
+  });
+
+  test("credential target accepts the previous review key and rejects retired or changed evidence without an attempt", async () => {
+    const previous = await fixture(); const previousRow = await persist(previous);
+    await expect(readTaxEstimateCredentialTarget(runtimePrisma, previous.actor, testRuntime(rotatedKeys), previousRow.id))
+      .resolves.toMatchObject({ outcome: "READY", publishingAuthorized: false });
+    const retired = await fixture(); const retiredRow = await persist(retired);
+    await expect(readTaxEstimateCredentialTarget(runtimePrisma, retired.actor,
+      testRuntime({ QUICKBOOKS_TOKEN_ENCRYPTION_KEY: rotatedKeys.QUICKBOOKS_TOKEN_ENCRYPTION_KEY }), retiredRow.id))
+      .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_STORED_REVIEW_INVALID" });
+    const changed = await fixture(); const changedRow = await persist(changed);
+    await prisma.invoice.update({ where: { id: changed.invoice.id }, data: { version: 2 } });
+    await expect(readTaxEstimateCredentialTarget(runtimePrisma, changed.actor, testRuntime(keys), changedRow.id))
+      .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_INVOICE_CHANGED" });
+    for (const operationId of [previousRow.id, retiredRow.id, changedRow.id]) {
+      expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: operationId } }))
+        .toMatchObject({ status: "REVIEWED", attemptCount: 0, attemptTokenHash: null, claimTokenHash: null, lastAttemptAtUtc: null });
+    }
   });
 
   test("an expired lease quarantines durably and never grants another claim", async () => {

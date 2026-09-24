@@ -1,5 +1,5 @@
 import { createHash, hkdfSync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { Prisma, type PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient, type QuickBooksTaxEstimateOperation } from "@prisma/client";
 import { z } from "zod";
 import type { QuickBooksCredentialRuntimeEnv } from "../config/quickbooks-runtime-types";
 import { lockAndReadCurrentInvoiceTaxContext } from "./quickbooks-tax-context";
@@ -33,6 +33,14 @@ function canonicalJson(value: unknown): string {
 function sameHexDigest(left: string, right: string) {
   if (!/^[a-f0-9]{64}$/.test(left) || !/^[a-f0-9]{64}$/.test(right)) return false;
   return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
+}
+
+function freeze<T>(value: T): Readonly<T> {
+  if (value !== null && typeof value === "object") {
+    for (const child of Object.values(value)) freeze(child);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 /** Fixed diagnostics only; never attach input, snapshots, provider errors or keys. */
@@ -197,6 +205,54 @@ async function requireCurrentSource(tx: Transaction, actor: Actor, source: TaxRe
   }
 }
 
+function verifiedStoredReview(current: QuickBooksTaxEstimateOperation, environment: QuickBooksCredentialRuntimeEnv) {
+  if (current.contractVersion !== 2 || !current.invoiceTaxContextId || !current.invoiceTaxContextRevision
+    || !current.invoiceTaxContextInputHash || !current.connectionGeneration) reject("QUICKBOOKS_TAX_CONTEXT_BINDING_REQUIRED");
+  try {
+    const keys = reviewKeys(environment);
+    const signingKey = current.bindingKeyId === keys.current.id ? keys.current
+      : current.bindingKeyId === keys.previous?.id ? keys.previous : null;
+    if (!signingKey) return reject("QUICKBOOKS_TAX_STORED_REVIEW_INVALID");
+    const snapshot = createQuickBooksTaxReview(current.sourceSnapshot, signingKey.key);
+    const storedAst = canonicalJson(current.estimateAstSnapshot);
+    const recomputedAst = canonicalJson(snapshot.estimateAst);
+    if (snapshot.sourceHash !== current.sourceHash || snapshot.estimateAstHash !== current.estimateAstHash
+      || sha256(storedAst) !== current.estimateAstHash || storedAst !== recomputedAst
+      || !sameHexDigest(sha256(snapshot.binding), current.reviewBindingDigest)
+      || current.tenantId !== snapshot.source.tenantId || current.invoiceId !== snapshot.source.invoiceId
+      || current.customerId !== snapshot.source.customerId || current.sourceQuoteId !== snapshot.source.sourceQuoteId
+      || current.quickBooksConnectionId !== snapshot.source.connection.id
+      || current.providerRealmId !== snapshot.source.connection.realmId
+      || current.connectionGenerationAtUtc.toISOString() !== snapshot.source.connection.connectedAtUtc
+      || current.invoiceTaxContextId !== snapshot.source.invoiceTaxContext.id
+      || current.invoiceTaxContextRevision !== snapshot.source.invoiceTaxContext.revision
+      || current.invoiceTaxContextInputHash !== snapshot.source.invoiceTaxContext.inputHash
+      || current.connectionGeneration !== snapshot.source.connection.generation) {
+      return reject("QUICKBOOKS_TAX_STORED_REVIEW_INVALID");
+    }
+    if (snapshot.source.connection.environment !== environment.QUICKBOOKS_ENVIRONMENT) {
+      return reject("QUICKBOOKS_TAX_ENVIRONMENT_MISMATCH");
+    }
+    if (!snapshot.assessment.providerPrerequisitesReady || !snapshot.assessment.reviewSourceReady) {
+      return reject("QUICKBOOKS_TAX_REVIEW_NOT_READY");
+    }
+    return snapshot;
+  } catch (error) {
+    if (error instanceof QuickBooksTaxLedgerError) throw error;
+    return reject("QUICKBOOKS_TAX_STORED_REVIEW_INVALID");
+  }
+}
+
+function connectionTarget(actor: Actor, source: TaxReviewSource) {
+  return freeze({
+    id: source.connection.id,
+    tenantId: actor.tenantId,
+    realmId: source.connection.realmId,
+    environment: source.connection.environment,
+    generation: source.connection.generation,
+  });
+}
+
 const summarySelect = {
   id: true, status: true, reviewRevision: true, sourceHash: true, estimateAstHash: true,
   estimateRequestId: true, invoiceRequestId: true, providerEstimateId: true, reviewedAtUtc: true,
@@ -315,6 +371,29 @@ export async function assembleReviewedTaxEstimate(prisma: PrismaClient, actor: A
   }, REVIEW_TRANSACTION_OPTIONS);
 }
 
+/**
+ * Resolve a reviewed operation to its current credential target without
+ * consuming an attempt. This returns identifiers only; credential material is
+ * acquired separately by the serialized credential service.
+ */
+export async function readTaxEstimateCredentialTarget(prisma: PrismaClient, actor: Actor,
+  environment: QuickBooksCredentialRuntimeEnv, operationId: string) {
+  return withTenantRlsContext(prisma, actor.tenantId, async (tx) => {
+    await lockManager(tx, actor);
+    const operation = await tx.quickBooksTaxEstimateOperation.findFirst({ where: { id: operationId, tenantId: actor.tenantId } });
+    if (!operation) return reject("QUICKBOOKS_TAX_OPERATION_NOT_FOUND");
+    await lockInvoice(tx, actor.tenantId, operation.invoiceId);
+    const current = await tx.quickBooksTaxEstimateOperation.findFirstOrThrow({ where: { id: operation.id, tenantId: actor.tenantId } });
+    if (current.status !== "REVIEWED" || current.supersededAtUtc || current.attemptCount !== 0
+      || current.attemptTokenHash || current.claimTokenHash || current.claimExpiresAtUtc || current.lastAttemptAtUtc
+      || current.providerEstimateId) reject("QUICKBOOKS_TAX_OPERATION_NOT_READY");
+    const snapshot = verifiedStoredReview(current, environment);
+    await requireCurrentSource(tx, actor, snapshot.source, new Date());
+    return freeze({ outcome: "READY" as const, connection: connectionTarget(actor, snapshot.source),
+      publishingAuthorized: false as const });
+  }, REVIEW_TRANSACTION_OPTIONS);
+}
+
 /** A durable internal lease, explicitly not permission to issue a provider write. */
 export async function claimReviewedTaxEstimate(prisma: PrismaClient, actor: Actor,
   environment: QuickBooksCredentialRuntimeEnv, operationId: string) {
@@ -334,40 +413,23 @@ export async function claimReviewedTaxEstimate(prisma: PrismaClient, actor: Acto
     if (current.status !== "REVIEWED" || current.attemptCount !== 0 || current.attemptTokenHash || current.providerEstimateId) {
       return { outcome: "NOT_CLAIMED" as const, publishingAuthorized: false as const };
     }
-    if (current.contractVersion !== 2 || !current.invoiceTaxContextId || !current.invoiceTaxContextRevision
-      || !current.invoiceTaxContextInputHash || !current.connectionGeneration) reject("QUICKBOOKS_TAX_CONTEXT_BINDING_REQUIRED");
-    let snapshot: ReturnType<typeof createQuickBooksTaxReview>;
-    try {
-      const keys = reviewKeys(environment);
-      const signingKey = current.bindingKeyId === keys.current.id ? keys.current
-        : current.bindingKeyId === keys.previous?.id ? keys.previous : null;
-      if (!signingKey) return reject("QUICKBOOKS_TAX_STORED_REVIEW_INVALID");
-      snapshot = createQuickBooksTaxReview(current.sourceSnapshot, signingKey.key);
-      const storedAst = canonicalJson(current.estimateAstSnapshot);
-      const recomputedAst = canonicalJson(snapshot.estimateAst);
-      if (snapshot.sourceHash !== current.sourceHash || snapshot.estimateAstHash !== current.estimateAstHash
-        || sha256(storedAst) !== current.estimateAstHash || storedAst !== recomputedAst
-        || !sameHexDigest(sha256(snapshot.binding), current.reviewBindingDigest)) {
-        return reject("QUICKBOOKS_TAX_STORED_REVIEW_INVALID");
-      }
-    } catch {
-      return reject("QUICKBOOKS_TAX_STORED_REVIEW_INVALID");
-    }
-    if (current.invoiceTaxContextId !== snapshot.source.invoiceTaxContext.id
-      || current.invoiceTaxContextRevision !== snapshot.source.invoiceTaxContext.revision
-      || current.invoiceTaxContextInputHash !== snapshot.source.invoiceTaxContext.inputHash
-      || current.connectionGeneration !== snapshot.source.connection.generation) reject("QUICKBOOKS_TAX_STORED_REVIEW_INVALID");
+    const snapshot = verifiedStoredReview(current, environment);
     await requireCurrentSource(tx, actor, snapshot.source, now);
     const claimToken = randomBytes(32).toString("base64url");
     const tokenHash = sha256(claimToken);
+    const claimExpiresAtUtc = new Date(now.getTime() + CLAIM_MS);
     const updated = await tx.quickBooksTaxEstimateOperation.updateMany({ where: {
       id: current.id, tenantId: actor.tenantId, status: "REVIEWED", attemptCount: 0, supersededAtUtc: null,
     }, data: { status: "ESTIMATE_PROCESSING", claimTokenHash: tokenHash, attemptTokenHash: tokenHash,
-      claimExpiresAtUtc: new Date(now.getTime() + CLAIM_MS), attemptCount: 1, lastAttemptAtUtc: now } });
+      claimExpiresAtUtc, attemptCount: 1, lastAttemptAtUtc: now } });
     if (updated.count !== 1) return { outcome: "NOT_CLAIMED" as const, publishingAuthorized: false as const };
+    const attempt = freeze({ tenantId: actor.tenantId, operationId: current.id,
+      estimateRequestId: current.estimateRequestId, sourceHash: current.sourceHash, claimToken,
+      claimExpiresAtUtc: claimExpiresAtUtc.toISOString() });
+    const dispatch = freeze({ attempt, connection: connectionTarget(actor, snapshot.source), estimateAst: snapshot.estimateAst });
     return { outcome: "CLAIMED" as const, operationId: current.id, claimToken,
       estimateRequestId: current.estimateRequestId, invoiceRequestId: current.invoiceRequestId,
-      sourceHash: current.sourceHash, publishingAuthorized: false as const };
+      sourceHash: current.sourceHash, dispatch, publishingAuthorized: false as const };
   }, REVIEW_TRANSACTION_OPTIONS);
 }
 
