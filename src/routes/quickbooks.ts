@@ -97,6 +97,12 @@ import {
   QUICKBOOKS_RECONCILIATION_WORKER_KEY,
   serializeWorkerHeartbeat,
 } from "../services/worker-heartbeats";
+import {
+  confirmInvoiceTaxContextForm,
+  loadInvoiceTaxContextForm,
+  QuickBooksTaxContextError,
+} from "../services/quickbooks-tax-context";
+import { QuickBooksTaxContextFormTokenError } from "../services/quickbooks-tax-context-form-token";
 
 const QuickBooksCallbackQuerySchema = z.object({
   state: z.string().min(1).optional(),
@@ -500,6 +506,45 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       error: "QuickBooks accounting workflows are paused while connection-only validation is active.",
       code: "QUICKBOOKS_OAUTH_ONLY_MODE",
     });
+  }
+
+  const taxContextPrivateRoute = {
+    onRequest: async (_request: FastifyRequest, reply: FastifyReply) => {
+      reply.header("Cache-Control", "private, no-store");
+    },
+    preHandler: [app.authenticate],
+  };
+
+  function sendTaxContextError(reply: FastifyReply, error: unknown) {
+    if (error instanceof QuickBooksTaxContextFormTokenError) {
+      return reply.code(error.statusCode).send({
+        error: error.code === "QUICKBOOKS_TAX_CONTEXT_FORM_EXPIRED"
+          ? "This tax review form expired. Reload it before saving."
+          : "This tax review form is no longer current. Reload it before saving.",
+        code: error.code,
+      });
+    }
+    if (error instanceof QuickBooksTaxContextError) {
+      const messages: Record<string, string> = {
+        QUICKBOOKS_TAX_MANAGER_REQUIRED: "Only owners or admins can manage QuickBooks tax settings.",
+        QUICKBOOKS_TAX_CONTEXT_INPUT_INVALID: "The tax review form is invalid.",
+        QUICKBOOKS_TAX_INVOICE_CHANGED: "This invoice is unavailable or changed. Reload it before continuing.",
+        QUICKBOOKS_TAX_CONNECTION_CHANGED: "The QuickBooks connection changed. Reload before continuing.",
+        QUICKBOOKS_TAX_MAPPING_CHANGED: "A QuickBooks mapping changed. Reload before continuing.",
+        QUICKBOOKS_TAX_LINES_CHANGED: "The invoice lines changed. Reload before continuing.",
+        QUICKBOOKS_TAX_CONTEXT_CHANGED: "The tax review source changed. Reload before continuing.",
+        QUICKBOOKS_TAX_CONTEXT_REVISION_CHANGED: "The tax review was updated elsewhere. Reload before continuing.",
+        QUICKBOOKS_TAX_CONTEXT_IDEMPOTENCY_CONFLICT: "This save command was already used for different tax decisions.",
+        QUICKBOOKS_TAX_CONTEXT_UNCHANGED: "These tax decisions are already saved.",
+        QUICKBOOKS_TAX_COMPETING_INVOICE_OPERATION: "This invoice already has a QuickBooks accounting operation.",
+        QUICKBOOKS_TAX_RECONCILIATION_REQUIRED: "This invoice requires QuickBooks reconciliation before tax review can change.",
+      };
+      return reply.code(error.statusCode).send({
+        error: messages[error.code] ?? "The QuickBooks tax review cannot be saved right now.",
+        code: error.code,
+      });
+    }
+    throw error;
   }
 
   function reconciliationRuntimeAvailable(): boolean {
@@ -1713,6 +1758,55 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         if (error instanceof QuickBooksMappingError) return reply.code(error.statusCode).send({ error: error.message, code: error.code });
         if (sendQuickBooksReauthRequired(reply, error)) return;
         throw error;
+      }
+    },
+  );
+
+  app.get(
+    "/integrations/quickbooks/invoices/:invoiceId/tax-context",
+    taxContextPrivateRoute,
+    async (request, reply) => {
+      const claims = getJwtClaims(request);
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
+      const params = QuickBooksInvoiceParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: "The invoice reference is invalid.", code: "QUICKBOOKS_TAX_CONTEXT_INPUT_INVALID" });
+      }
+      try {
+        return await loadInvoiceTaxContextForm(app.prisma, claims, app.env, params.data.invoiceId);
+      } catch (error) {
+        return sendTaxContextError(reply, error);
+      }
+    },
+  );
+
+  app.post(
+    "/integrations/quickbooks/invoices/:invoiceId/tax-context",
+    taxContextPrivateRoute,
+    async (request, reply) => {
+      const claims = getJwtClaims(request);
+      if (!(await requireLiveQuickBooksManagerAccess(claims, reply))) return;
+      if (!accountingWorkflowsAvailable()) return accountingWorkflowsUnavailable(reply);
+      const params = QuickBooksInvoiceParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: "The invoice reference is invalid.", code: "QUICKBOOKS_TAX_CONTEXT_INPUT_INVALID" });
+      }
+      try {
+        const result = await confirmInvoiceTaxContextForm(app.prisma, claims, app.env, params.data.invoiceId, request.body);
+        return {
+          context: {
+            revision: result.revision,
+            current: result.current,
+            staleReason: result.staleReason,
+            confirmedAtUtc: result.confirmedAtUtc,
+          },
+          replayed: result.replayed,
+          taxCalculationProven: false as const,
+          publishingAuthorized: false as const,
+        };
+      } catch (error) {
+        return sendTaxContextError(reply, error);
       }
     },
   );

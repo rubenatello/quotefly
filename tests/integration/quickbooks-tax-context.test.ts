@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
+import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { buildServer } from "../../src/app";
 import { prisma } from "../../src/lib/prisma";
 import { setTenantRlsContext } from "../../src/lib/tenant-rls";
 import { capabilitiesForRole, type AccessContext } from "../../src/lib/access-policy";
@@ -8,7 +10,8 @@ import { assertQuickBooksInvoiceCreateFence, bindCreatedQuickBooksInvoiceIdentit
   claimQuickBooksInvoicePublish, getQuickBooksInvoiceSyncPreview } from "../../src/services/quickbooks-invoices";
 import { lockQuickBooksInvoicePublication } from "../../src/services/quickbooks-locks";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
-import { confirmInvoiceTaxContext, readInvoiceTaxContextAssessment, type InvoiceTaxContextInput } from "../../src/services/quickbooks-tax-context";
+import { confirmInvoiceTaxContext, confirmInvoiceTaxContextForm, loadInvoiceTaxContextForm,
+  readInvoiceTaxContextAssessment, type InvoiceTaxContextInput } from "../../src/services/quickbooks-tax-context";
 import { assembleReviewedTaxEstimate, claimReviewedTaxEstimate } from "../../src/services/quickbooks-tax-estimate-ledger";
 import type { TaxReviewSource } from "../../src/services/quickbooks-tax-review-contract";
 import { readQuickBooksTaxProviderFacts } from "../../src/services/quickbooks-tax-provider-facts";
@@ -16,6 +19,7 @@ import { syntheticFacts, testRuntime } from "../helpers/tax-review-fixture";
 vi.mock("../../src/services/quickbooks-tax-provider-facts", () => ({ readQuickBooksTaxProviderFacts: vi.fn() }));
 const tenantIds: string[] = []; const userIds: string[] = [];
 const keys = { QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "synthetic-tax-context-tests-only-key-material" };
+let app: FastifyInstance;
 const runtimePrisma = new Proxy(prisma, {
   get(target, property) {
     if (property === "$transaction") {
@@ -93,7 +97,7 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 
 describe("manager-confirmed invoice tax context", () => {
  const fetchSpy = vi.spyOn(globalThis, "fetch");
- beforeAll(() => { fetchSpy.mockRejectedValue(new Error("Provider calls forbidden")); });
+ beforeAll(async () => { fetchSpy.mockRejectedValue(new Error("Provider calls forbidden")); app = buildServer(); await app.ready(); });
  test("zero quoted tax cannot override explicit TAXABLE intent, even when its context is stale", async () => {
   const f = await zeroTaxFixture(); const baseline = await directPreview(f); expect(baseline.ready).toBe(true);
   await confirm(f);
@@ -342,8 +346,165 @@ describe("manager-confirmed invoice tax context", () => {
   expect(await assess(f)).toMatchObject({ current: false, staleReason: code });
   expect(await prisma.invoiceTaxContext.count({ where: { tenantId: f.tenant.id } })).toBe(1);
  });
+ test("manager form projects server prices, saves explicit decisions, and replays through a reissued token", async () => {
+  const f = await fixture(); const environment = testRuntime(keys);
+  const before = await prisma.invoice.findUniqueOrThrow({ where: { id: f.invoice.id } });
+  const loaded = await loadInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id);
+  expect(loaded).toMatchObject({ invoice: { id: f.invoice.id, subtotalAmount: "100.00", taxAmount: "8.00",
+    totalAmount: "108.00", lines: [{ invoiceLineItemId: f.line.id, amount: "100.00", mapping: { reviewed: true } }] },
+    currentContext: { revision: null, decisions: null }, expectedContextRevision: 0,
+    taxCalculationProven: false, publishingAuthorized: false });
+  expect(JSON.stringify(loaded)).not.toMatch(/provider(?:Customer|Item|Realm)Id/);
+  const tokenPayload = JSON.parse(Buffer.from(loaded.sourceToken.split(".")[1], "base64url").toString("utf8"));
+  expect(tokenPayload).not.toHaveProperty("source"); expect(tokenPayload).not.toHaveProperty("sourceHash");
+  const commandKey = randomUUID();
+  const body = { transactionDate: "2026-09-23", origin: f.source.origin, destination: f.source.destination,
+    lines: [{ invoiceLineItemId: f.line.id, taxIntent: "TAXABLE" as const }],
+    expectedContextRevision: loaded.expectedContextRevision, commandKey, sourceToken: loaded.sourceToken };
+  expect(await confirmInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id, body))
+    .toMatchObject({ current: true, revision: 1, replayed: false, taxCalculationProven: false, publishingAuthorized: false });
+  const reissued = await loadInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id);
+  expect(reissued.currentContext).toMatchObject({ current: true, revision: 1,
+    decisions: { transactionDate: "2026-09-23", lines: [{ invoiceLineItemId: f.line.id, taxIntent: "TAXABLE" }] } });
+  expect(await confirmInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id,
+    { ...body, expectedContextRevision: 1, sourceToken: reissued.sourceToken }))
+    .toMatchObject({ current: true, revision: 1, replayed: true });
+  expect(await prisma.invoice.findUniqueOrThrow({ where: { id: f.invoice.id } })).toEqual(before);
+  expect(await prisma.quickBooksTaxEstimateOperation.count({ where: { tenantId: f.tenant.id } })).toBe(0);
+ });
+ test("form token rejects source drift and cross-actor copying before mutation", async () => {
+  const f = await fixture(); const environment = testRuntime(keys);
+  const loaded = await loadInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id);
+  const body = { transactionDate: "2026-09-23", origin: f.source.origin, destination: f.source.destination,
+    lines: [{ invoiceLineItemId: f.line.id, taxIntent: "TAXABLE" as const }], expectedContextRevision: 0,
+    commandKey: randomUUID(), sourceToken: loaded.sourceToken };
+  await prisma.quickBooksItemMap.update({ where: { id: f.itemMap.id }, data: { reviewVersion: 2 } });
+  await expect(confirmInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id, body))
+    .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_CONTEXT_FORM_STALE" });
+  expect(await prisma.invoiceTaxContext.count({ where: { tenantId: f.tenant.id } })).toBe(0);
+  await prisma.quickBooksItemMap.update({ where: { id: f.itemMap.id }, data: { reviewVersion: 1 } });
+  const otherUser = await prisma.user.create({ data: { email: `${randomUUID()}@example.test`, fullName: "Other admin", passwordHash: "synthetic" } });
+  userIds.push(otherUser.id);
+  await prisma.tenantUser.create({ data: { tenantId: f.tenant.id, userId: otherUser.id, role: "admin" } });
+  await expect(confirmInvoiceTaxContextForm(runtimePrisma, { ...f.actor, userId: otherUser.id }, environment, f.invoice.id, body))
+    .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_CONTEXT_FORM_STALE" });
+  expect(await prisma.invoiceTaxContext.count({ where: { tenantId: f.tenant.id } })).toBe(0);
+ });
+ test.each(["price", "customerMap", "generation", "connectedAt", "setup", "scope", "realm"] as const)
+ ("form confirmation rejects %s drift after GET", async kind => {
+  const f = await fixture(); const environment = testRuntime(keys);
+  const loaded = await loadInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id);
+  const body = { transactionDate: "2026-09-23", origin: f.source.origin, destination: f.source.destination,
+    lines: [{ invoiceLineItemId: f.line.id, taxIntent: "TAXABLE" as const }], expectedContextRevision: 0,
+    commandKey: randomUUID(), sourceToken: loaded.sourceToken };
+  if (kind === "price") {
+    await prisma.invoiceLineItem.update({ where: { id: f.line.id }, data: { unitPrice: 60, lineTotal: 120 } });
+    await prisma.invoice.update({ where: { id: f.invoice.id }, data: { subtotalAmount: 120, totalAmount: 128, balanceDue: 128 } });
+  }
+  if (kind === "customerMap") await prisma.quickBooksCustomerMap.update({ where: { id: f.customerMap.id }, data: { quickBooksCustomerId: "84" } });
+  if (kind === "generation") await prisma.quickBooksConnectionEvent.create({ data: { tenantId: f.tenant.id,
+    quickBooksConnectionId: f.connection.id, requestId: randomUUID(), action: "RECONNECTED", outcome: "SUCCEEDED", connectionGeneration: 2 } });
+  if (kind === "connectedAt") await prisma.quickBooksConnection.update({ where: { id: f.connection.id }, data: { connectedAtUtc: new Date(Date.now() + 10_000) } });
+  if (kind === "setup") await prisma.quickBooksConnection.update({ where: { id: f.connection.id },
+    data: { setupConfirmedAtUtc: null, setupConfirmedByTenantUserId: null, setupChecklistVersion: null } });
+  if (kind === "scope") await prisma.quickBooksConnection.update({ where: { id: f.connection.id }, data: { scopes: [] } });
+  if (kind === "realm") await prisma.quickBooksRealmBinding.update({ where: { quickBooksConnectionId: f.connection.id }, data: { active: false } });
+  const expected = ["setup", "scope", "realm"].includes(kind) ? "QUICKBOOKS_TAX_CONNECTION_CHANGED"
+    : "QUICKBOOKS_TAX_CONTEXT_FORM_STALE";
+  await expect(confirmInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id, body))
+    .rejects.toMatchObject({ code: expected });
+  expect(await prisma.invoiceTaxContext.count({ where: { tenantId: f.tenant.id } })).toBe(0);
+ });
+ test("POST waits for a mapping review writer and validates the committed version", async () => {
+  const f = await fixture(); const environment = testRuntime(keys);
+  const loaded = await loadInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id);
+  const body = { transactionDate: "2026-09-23", origin: f.source.origin, destination: f.source.destination,
+    lines: [{ invoiceLineItemId: f.line.id, taxIntent: "TAXABLE" as const }], expectedContextRevision: 0,
+    commandKey: randomUUID(), sourceToken: loaded.sourceToken };
+  const entered = deferred<number>(); const release = deferred<void>();
+  const writer = prisma.$transaction(async tx => {
+    await tx.quickBooksItemMap.update({ where: { id: f.itemMap.id }, data: { reviewVersion: 2 } });
+    const [backend] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+    entered.resolve(backend.pid); await release.promise;
+  }, { timeout: 15_000 });
+  const pid = await entered.promise;
+  const confirmation = confirmInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id, body)
+    .then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
+  try {
+    await expect.poll(async () => {
+      const [row] = await prisma.$queryRaw<Array<{ blocked: boolean }>>(Prisma.sql`
+        SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE ${pid} = ANY(pg_blocking_pids(pid))) AS blocked`);
+      return row.blocked;
+    }).toBe(true);
+  } finally { release.resolve(); }
+  await writer; const result = await confirmation;
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.error).toMatchObject({ code: "QUICKBOOKS_TAX_CONTEXT_FORM_STALE" });
+  expect(await prisma.invoiceTaxContext.count({ where: { tenantId: f.tenant.id } })).toBe(0);
+ });
+ test("form source refuses more than 500 included lines", async () => {
+  const f = await fixture();
+  await prisma.invoiceLineItem.createMany({ data: Array.from({ length: 500 }, (_, index) => ({
+    tenantId: f.tenant.id, invoiceId: f.invoice.id, description: f.line.description,
+    quantity: 1, unitPrice: 0, lineTotal: 0, position: index + 1,
+  })) });
+  await expect(loadInvoiceTaxContextForm(runtimePrisma, f.actor, testRuntime(keys), f.invoice.id))
+    .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_INVOICE_CHANGED" });
+ });
+ test("form capture rejects extras, incomplete/reordered lines, revoked managers and cross-tenant invoices", async () => {
+  const f = await fixture(); const environment = testRuntime(keys);
+  const loaded = await loadInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id);
+  const body = { transactionDate: "2026-09-23", origin: f.source.origin, destination: f.source.destination,
+    lines: [{ invoiceLineItemId: f.line.id, taxIntent: "NON_TAXABLE" as const }], expectedContextRevision: 0,
+    commandKey: randomUUID(), sourceToken: loaded.sourceToken };
+  await expect(confirmInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id, { ...body, unitPrice: 1 }))
+    .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_CONTEXT_INPUT_INVALID", statusCode: 400 });
+  await expect(confirmInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id, { ...body, lines: [] }))
+    .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_CONTEXT_INPUT_INVALID", statusCode: 400 });
+  const foreign = await fixture();
+  await expect(loadInvoiceTaxContextForm(runtimePrisma, f.actor, environment, foreign.invoice.id))
+    .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_INVOICE_CHANGED", statusCode: 404 });
+  await prisma.tenantUser.update({ where: { tenantId_userId: { tenantId: f.tenant.id, userId: f.user.id } }, data: { deletedAtUtc: new Date() } });
+  await expect(confirmInvoiceTaxContextForm(runtimePrisma, f.actor, environment, f.invoice.id, body))
+    .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_MANAGER_REQUIRED", statusCode: 403 });
+  expect(await prisma.invoiceTaxContext.count({ where: { tenantId: f.tenant.id } })).toBe(0);
+ });
+ test("HTTP boundary is manager-only, fixed-shape, private/no-store and provider-free", async () => {
+  const f = await fixture();
+  await prisma.tenant.update({ where: { id: f.tenant.id }, data: {
+    subscriptionStatus: "trialing",
+    trialStartsAtUtc: new Date(Date.now() - 60_000), trialEndsAtUtc: new Date(Date.now() + 3_600_000),
+  } });
+  const token = app.jwt.sign({ tenantId: f.tenant.id, userId: f.user.id, email: f.user.email, role: "owner", authVersion: 0 });
+  const unauthenticated = await app.inject({ method: "GET",
+    url: `/v1/integrations/quickbooks/invoices/${f.invoice.id}/tax-context` });
+  expect(unauthenticated.statusCode).toBe(401);
+  expect(unauthenticated.headers["cache-control"]).toBe("private, no-store");
+  await prisma.tenantUser.update({ where: { tenantId_userId: { tenantId: f.tenant.id, userId: f.user.id } }, data: { role: "member" } });
+  const staff = await app.inject({ method: "GET", url: `/v1/integrations/quickbooks/invoices/${f.invoice.id}/tax-context`,
+    headers: { authorization: `Bearer ${token}` } });
+  expect(staff.statusCode).toBe(403); expect(staff.headers["cache-control"]).toBe("private, no-store");
+  await prisma.tenantUser.update({ where: { tenantId_userId: { tenantId: f.tenant.id, userId: f.user.id } }, data: { role: "owner" } });
+  const loaded = await app.inject({ method: "GET", url: `/v1/integrations/quickbooks/invoices/${f.invoice.id}/tax-context`,
+    headers: { authorization: `Bearer ${token}` } });
+  expect(loaded.statusCode).toBe(200); expect(loaded.headers["cache-control"]).toBe("private, no-store");
+  const form = loaded.json() as { sourceToken: string; expectedContextRevision: number };
+  const invalid = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${f.invoice.id}/tax-context`,
+    headers: { authorization: `Bearer ${token}` }, payload: { sourceToken: form.sourceToken, extraTrustedPrice: "1.00" } });
+  expect(invalid.statusCode).toBe(400); expect(invalid.headers["cache-control"]).toBe("private, no-store");
+  expect(invalid.json()).toEqual({ error: "The tax review form is invalid.", code: "QUICKBOOKS_TAX_CONTEXT_INPUT_INVALID" });
+  const saved = await app.inject({ method: "POST", url: `/v1/integrations/quickbooks/invoices/${f.invoice.id}/tax-context`,
+    headers: { authorization: `Bearer ${token}` }, payload: { transactionDate: "2026-09-23",
+      origin: f.source.origin, destination: f.source.destination,
+      lines: [{ invoiceLineItemId: f.line.id, taxIntent: "TAXABLE" }],
+      expectedContextRevision: form.expectedContextRevision, commandKey: randomUUID(), sourceToken: form.sourceToken } });
+  expect(saved.statusCode).toBe(200); expect(saved.headers["cache-control"]).toBe("private, no-store");
+  expect(saved.json()).toMatchObject({ context: { revision: 1, current: true }, replayed: false,
+    taxCalculationProven: false, publishingAuthorized: false });
+ });
  afterAll(async () => { try { expect(fetchSpy).not.toHaveBeenCalled(); } finally {
   fetchSpy.mockRestore();
+  await app.close();
   await prisma.quickBooksTaxEstimateOperation.deleteMany({ where: { tenantId: { in: tenantIds } } });
   await prisma.invoiceTaxContextLine.deleteMany({ where: { tenantId: { in: tenantIds } } });
   await prisma.invoiceTaxContext.deleteMany({ where: { tenantId: { in: tenantIds } } });
