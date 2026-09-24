@@ -205,14 +205,7 @@ export async function readInvoiceTaxContextAssessment(prisma: PrismaClient, acto
     await lockSource(tx, actor.tenantId, invoiceId);
     const row = await tx.invoiceTaxContext.findFirst({ where: { tenantId: actor.tenantId, invoiceId, supersededAtUtc: null }, include: { lines: { orderBy: { position: "asc" } } } });
     if (!row) return assessment(null, "QUICKBOOKS_TAX_CONTEXT_REQUIRED");
-    const input = invoiceTaxContextInputSchema.safeParse({ invoiceId, invoiceVersion: row.invoiceVersion, expectedRevision: row.revision,
-      idempotencyKey: "00000000-0000-4000-8000-000000000000", transactionDate: row.transactionDate.toISOString().slice(0, 10),
-      origin: row.origin, destination: row.destination,
-      connection: { id: row.quickBooksConnectionId, realmId: row.providerRealmId, environment: row.environment,
-        connectedAtUtc: row.connectionConnectedAtUtc.toISOString(), generation: row.connectionGeneration },
-      customerMapping: { id: row.customerMapId, reviewVersion: row.customerMapReviewVersion, reviewedAtUtc: row.customerMapReviewedAtUtc.toISOString(), providerId: row.providerCustomerId },
-      lines: row.lines.map((line) => ({ invoiceLineItemId: line.invoiceLineItemIdSnapshot, taxIntent: line.taxIntent,
-        itemMapping: { id: line.itemMapId, reviewVersion: line.itemMapReviewVersion, reviewedAtUtc: line.itemMapReviewedAtUtc.toISOString(), providerId: line.providerItemId } })) });
+    const input = parseStoredContext(row);
     if (!input.success) return assessment(row.revision, "QUICKBOOKS_TAX_CONTEXT_CHANGED");
     try {
       const source = await currentSource(tx, actor.tenantId, environment, input.data);
@@ -222,4 +215,33 @@ export async function readInvoiceTaxContextAssessment(prisma: PrismaClient, acto
       throw error;
     }
   }, transactionOptions);
+}
+
+function parseStoredContext(row: Prisma.InvoiceTaxContextGetPayload<{ include: { lines: true } }>) {
+  const invoiceId = row.invoiceId;
+  const input = invoiceTaxContextInputSchema.safeParse({ invoiceId, invoiceVersion: row.invoiceVersion, expectedRevision: row.revision,
+      idempotencyKey: "00000000-0000-4000-8000-000000000000", transactionDate: row.transactionDate.toISOString().slice(0, 10),
+      origin: row.origin, destination: row.destination,
+      connection: { id: row.quickBooksConnectionId, realmId: row.providerRealmId, environment: row.environment,
+        connectedAtUtc: row.connectionConnectedAtUtc.toISOString(), generation: row.connectionGeneration },
+      customerMapping: { id: row.customerMapId, reviewVersion: row.customerMapReviewVersion, reviewedAtUtc: row.customerMapReviewedAtUtc.toISOString(), providerId: row.providerCustomerId },
+      lines: row.lines.map((line) => ({ invoiceLineItemId: line.invoiceLineItemIdSnapshot, taxIntent: line.taxIntent,
+        itemMapping: { id: line.itemMapId, reviewVersion: line.itemMapReviewVersion, reviewedAtUtc: line.itemMapReviewedAtUtc.toISOString(), providerId: line.providerItemId } })) });
+  return input;
+}
+
+/** Internal transaction boundary. Caller must keep the returned source private. */
+export async function lockAndReadCurrentInvoiceTaxContext(tx: Transaction, actor: Actor, environment: Environment,
+  invoiceId: string, expectedRevision: number) {
+  const managerId = await lockManager(tx, actor);
+  await lockSource(tx, actor.tenantId, invoiceId);
+  const row = await tx.invoiceTaxContext.findFirst({ where: { tenantId: actor.tenantId, invoiceId, supersededAtUtc: null },
+    include: { lines: { orderBy: { position: "asc" } } } });
+  if (!row) reject("QUICKBOOKS_TAX_CONTEXT_REQUIRED");
+  if (row.revision !== expectedRevision) reject("QUICKBOOKS_TAX_CONTEXT_REVISION_CHANGED");
+  const input = parseStoredContext(row);
+  if (!input.success) reject("QUICKBOOKS_TAX_CONTEXT_CHANGED");
+  const source = await currentSource(tx, actor.tenantId, environment, input.data);
+  if (hash(canonical(source)) !== row.inputHash) reject("QUICKBOOKS_TAX_CONTEXT_CHANGED");
+  return { row, source, managerId };
 }

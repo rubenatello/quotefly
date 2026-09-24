@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { QuickBooksTaxCapabilityReport } from "./quickbooks-tax-capabilities";
 
 /** Internal, provider-free contract. No result from this module authorizes a write. */
-export const QUICKBOOKS_TAX_REVIEW_CONTRACT_VERSION = 1;
+export const QUICKBOOKS_TAX_REVIEW_CONTRACT_VERSION = 2;
 const MAX_CENTS = 9_999_999_999n; // Existing Decimal(10, 2) invoice fields.
 const states = new Set("AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC".split(" "));
 const text = (max: number) => z.string().max(max).refine((value) => !/[\p{Cc}\p{Cf}]/u.test(value))
@@ -39,7 +39,7 @@ const capabilitySchema = z.strictObject({
 export const taxCustomerFactsSchema = z.strictObject({
   providerCustomerId: id, providerSyncToken: text(64), observedAtUtc: timestamp,
   exemption: z.enum(["TAXABLE", "EXEMPT", "UNKNOWN"]),
-  exemptionReasonId: id.nullable(),
+  exemptionReasonId: id.nullable(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
 }).refine((facts) => facts.exemption !== "EXEMPT" || facts.exemptionReasonId !== null);
 
 const mappingSchema = z.strictObject({ id, reviewVersion: version, reviewedAtUtc: timestamp, providerId: id });
@@ -54,15 +54,17 @@ export const taxReviewLineSchema = z.strictObject({
 
 export const taxReviewSourceSchema = z.strictObject({
   contractVersion: z.literal(QUICKBOOKS_TAX_REVIEW_CONTRACT_VERSION),
-  tenantId: id, invoiceId: id, invoiceVersion: version, customerId: id, sourceQuoteId: id,
+  tenantId: id, invoiceId: id, invoiceVersion: version, customerId: id, sourceQuoteId: id, jobId: id,
+  invoiceTaxContext: z.strictObject({ id, revision: version, inputHash: z.string().regex(/^[a-f0-9]{64}$/),
+    confirmedByTenantUserId: id, confirmedAtUtc: timestamp }),
   transactionDate: z.iso.date(), currency: z.literal("USD"),
   subtotal: money, quotedTax: money, total: money,
   connection: z.strictObject({ id, realmId: z.string().regex(/^\d{1,64}$/),
-    connectedAtUtc: timestamp, environment: z.enum(["sandbox", "production"]) }),
+    connectedAtUtc: timestamp, generation: version, environment: z.enum(["sandbox", "production"]) }),
   customerMapping: mappingSchema, customerFacts: taxCustomerFactsSchema,
   origin: usTaxAddressSchema, destination: usTaxAddressSchema,
   preferences: z.strictObject({ observedAtUtc: timestamp, fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-    companyInfoFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    companyObservedAtUtc: timestamp, companyInfoFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
     capabilities: capabilitySchema }),
   lines: z.array(taxReviewLineSchema).min(1).max(500),
 });

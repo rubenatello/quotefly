@@ -1,17 +1,17 @@
 import { createHash, hkdfSync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { z } from "zod";
+import type { QuickBooksCredentialRuntimeEnv } from "../config/quickbooks-runtime-types";
+import { lockAndReadCurrentInvoiceTaxContext } from "./quickbooks-tax-context";
+import { readQuickBooksTaxProviderFacts } from "./quickbooks-tax-provider-facts";
 import type { JwtClaims } from "../lib/auth";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
 import { lockQuickBooksInvoicePublication } from "./quickbooks-locks";
-import { createQuickBooksTaxReview, verifyQuickBooksTaxReview, type TaxReviewSource } from "./quickbooks-tax-review-contract";
+import { createQuickBooksTaxReview, type TaxReviewSource } from "./quickbooks-tax-review-contract";
 
 type Transaction = Prisma.TransactionClient;
 type Actor = Pick<JwtClaims, "tenantId" | "userId" | "authVersion">;
-type KeyEnvironment = {
-  QUICKBOOKS_TOKEN_ENCRYPTION_KEY: string;
-  QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS?: string;
-};
 const CLAIM_MS = 120_000;
 const FACT_MAX_AGE_MS = 5 * 60_000;
 const REVIEW_TRANSACTION_OPTIONS = { maxWait: 10_000, timeout: 15_000 };
@@ -19,6 +19,21 @@ const UNCERTAIN_CODE = "QUICKBOOKS_ESTIMATE_RECONCILIATION_REQUIRED";
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 const normalizedText = (value: string) => value.normalize("NFC").trim();
 const itemKey = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 120);
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function sameHexDigest(left: string, right: string) {
+  if (!/^[a-f0-9]{64}$/.test(left) || !/^[a-f0-9]{64}$/.test(right)) return false;
+  return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
+}
 
 /** Fixed diagnostics only; never attach input, snapshots, provider errors or keys. */
 export class QuickBooksTaxLedgerError extends Error {
@@ -33,21 +48,11 @@ function keyFor(secret: string) {
   return { key, id: sha256(`quotefly/quickbooks/tax-review/key-id:${key}`).slice(0, 32) };
 }
 
-/** Internal trusted-reader boundary, not a route or a client-supplied-facts signer. */
-export function prepareQuickBooksTaxEstimateReview(source: unknown, environment: KeyEnvironment) {
-  return createQuickBooksTaxReview(source, keyFor(environment.QUICKBOOKS_TOKEN_ENCRYPTION_KEY).key);
-}
-
-function verifiedReview(source: unknown, binding: string, environment: KeyEnvironment) {
-  const candidates = [environment.QUICKBOOKS_TOKEN_ENCRYPTION_KEY, environment.QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS]
-    .filter((value): value is string => Boolean(value?.trim()));
-  for (const candidate of candidates) {
-    const derived = keyFor(candidate);
-    if (verifyQuickBooksTaxReview(source, derived.key, binding)) {
-      return { review: createQuickBooksTaxReview(source, derived.key), keyId: derived.id };
-    }
-  }
-  return reject("QUICKBOOKS_TAX_REVIEW_CHANGED");
+function reviewKeys(environment: QuickBooksCredentialRuntimeEnv) {
+  const current = keyFor(environment.QUICKBOOKS_TOKEN_ENCRYPTION_KEY);
+  const previousMaterial = environment.QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS?.trim();
+  const previous = previousMaterial ? keyFor(previousMaterial) : null;
+  return { current, previous };
 }
 
 async function lockManager(tx: Transaction, actor: Actor) {
@@ -85,7 +90,7 @@ async function lockInvoice(tx: Transaction, tenantId: string, invoiceId: string)
 }
 
 function requireFreshFacts(source: TaxReviewSource, now: Date) {
-  const observations = [source.preferences.observedAtUtc, source.customerFacts.observedAtUtc,
+  const observations = [source.preferences.companyObservedAtUtc, source.preferences.observedAtUtc, source.customerFacts.observedAtUtc,
     ...source.lines.map((line) => line.itemFacts.observedAtUtc)];
   if (observations.some((timestamp) => {
     const age = now.getTime() - Date.parse(timestamp);
@@ -96,6 +101,34 @@ function requireFreshFacts(source: TaxReviewSource, now: Date) {
 async function requireCurrentSource(tx: Transaction, actor: Actor, source: TaxReviewSource, now: Date) {
   if (source.tenantId !== actor.tenantId) reject("QUICKBOOKS_TAX_REVIEW_CHANGED");
   requireFreshFacts(source, now);
+  const currentContext = await lockAndReadCurrentInvoiceTaxContext(tx, actor, source.connection.environment,
+    source.invoiceId, source.invoiceTaxContext.revision);
+  const context = currentContext.row;
+  if (context.id !== source.invoiceTaxContext.id || context.inputHash !== source.invoiceTaxContext.inputHash
+    || context.confirmedByTenantUserId !== source.invoiceTaxContext.confirmedByTenantUserId
+    || context.confirmedAtUtc.toISOString() !== source.invoiceTaxContext.confirmedAtUtc
+    || context.connectionGeneration !== source.connection.generation || context.jobId !== source.jobId) {
+    reject("QUICKBOOKS_TAX_CONTEXT_CHANGED");
+  }
+  // Rebuild all local decisions from the immutable current context, carrying
+  // forward only its originally observed provider facts. Binding the context
+  // identity alone would not detect a source assembled with different addresses,
+  // transaction date or per-line tax intent by a future internal caller.
+  const rebuilt = sourceFromContext(currentContext, {
+    customer: { providerCustomerId: source.customerFacts.providerCustomerId, providerSyncToken: source.customerFacts.providerSyncToken,
+      observedAtUtc: source.customerFacts.observedAtUtc, classification: source.customerFacts.exemption === "TAXABLE" ? "TAXABLE" : "UNKNOWN",
+      fingerprint: source.customerFacts.fingerprint },
+    items: source.lines.map(line => ({ providerItemId: line.itemFacts.providerItemId, providerSyncToken: line.itemFacts.providerSyncToken,
+      observedAtUtc: line.itemFacts.observedAtUtc, classification: line.taxIntent, fingerprint: line.itemFacts.taxClassificationFingerprint })),
+    companyInfo: { observedAtUtc: source.preferences.companyObservedAtUtc, fingerprint: source.preferences.companyInfoFingerprint },
+    preferences: { observedAtUtc: source.preferences.observedAtUtc, fingerprint: source.preferences.fingerprint },
+    capabilities: source.preferences.capabilities, observedFromUtc: source.preferences.observedAtUtc, observedThroughUtc: source.preferences.observedAtUtc,
+    blockers: [], providerFactsSupported: true, automatedTaxCalculationProven: false, publishingAuthorized: false,
+  });
+  const parseOnlyKey = "internal-context-comparison-not-a-signing-authority";
+  if (createQuickBooksTaxReview(rebuilt, parseOnlyKey).sourceHash !== createQuickBooksTaxReview(source, parseOnlyKey).sourceHash) {
+    reject("QUICKBOOKS_TAX_CONTEXT_CHANGED");
+  }
   const [invoiceOperation, legacyInvoice] = await Promise.all([
     tx.quickBooksInvoiceOperation.findUnique({ where: {
       tenantId_invoiceId: { tenantId: actor.tenantId, invoiceId: source.invoiceId },
@@ -118,10 +151,10 @@ async function requireCurrentSource(tx: Transaction, actor: Actor, source: TaxRe
   if (!connection) reject("QUICKBOOKS_TAX_CONNECTION_CHANGED");
   const invoice = await tx.invoice.findFirst({ where: {
     id: source.invoiceId, tenantId: actor.tenantId, version: source.invoiceVersion,
-    customerId: source.customerId, sourceQuoteId: source.sourceQuoteId,
+    customerId: source.customerId, sourceQuoteId: source.sourceQuoteId, jobId: source.jobId,
     deletedAtUtc: null, archivedAtUtc: null, status: "DRAFT", paymentStatus: "PENDING", amountPaid: 0,
     customer: { deletedAtUtc: null, archivedAtUtc: null },
-    job: { deletedAtUtc: null, archivedAtUtc: null },
+    job: { deletedAtUtc: null, archivedAtUtc: null, status: { not: "CANCELED" } },
     sourceQuote: { deletedAtUtc: null, archivedAtUtc: null, status: "ACCEPTED" },
   }, select: { currency: true, subtotalAmount: true, taxAmount: true, totalAmount: true, balanceDue: true,
     lineItems: { where: { sectionType: "INCLUDED" }, orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
@@ -169,25 +202,14 @@ const summarySelect = {
   estimateRequestId: true, invoiceRequestId: true, providerEstimateId: true, reviewedAtUtc: true,
 } as const satisfies Prisma.QuickBooksTaxEstimateOperationSelect;
 
-/**
- * Append an exact, already signed internal review. No provider call or financial
- * total update occurs. Public routes must not pass untrusted provider facts here.
- */
-export async function persistReviewedTaxEstimate(prisma: PrismaClient, actor: Actor, environment: KeyEnvironment,
-  input: { source: unknown; binding: string }) {
-  const { review, keyId } = verifiedReview(input.source, input.binding, environment);
-  if (!review.assessment.providerPrerequisitesReady || !review.assessment.reviewSourceReady) {
-    reject("QUICKBOOKS_TAX_REVIEW_NOT_READY");
-  }
-  return withTenantRlsContext(prisma, actor.tenantId, async (tx) => {
-    const actorId = await lockManager(tx, actor);
-    await lockInvoice(tx, actor.tenantId, review.source.invoiceId);
-    const now = new Date();
-    await requireCurrentSource(tx, actor, review.source, now);
+/** Private persistence: only the server assembler below constructs and signs input. */
+async function persistReviewedTaxEstimate(tx: Transaction, actor: Actor, actorId: string,
+  review: ReturnType<typeof createQuickBooksTaxReview>, keyId: string, now: Date) {
     const previous = await tx.quickBooksTaxEstimateOperation.findFirst({ where: {
       tenantId: actor.tenantId, invoiceId: review.source.invoiceId, supersededAtUtc: null,
     } });
-    if (previous?.sourceHash === review.sourceHash && previous.estimateAstHash === review.estimateAstHash) {
+    if (previous?.sourceHash === review.sourceHash && previous.estimateAstHash === review.estimateAstHash
+      && previous.bindingKeyId === keyId) {
       return tx.quickBooksTaxEstimateOperation.findFirstOrThrow({ where: { id: previous.id, tenantId: actor.tenantId }, select: summarySelect });
     }
     if (previous) {
@@ -204,19 +226,98 @@ export async function persistReviewedTaxEstimate(prisma: PrismaClient, actor: Ac
       sourceQuoteId: review.source.sourceQuoteId, quickBooksConnectionId: review.source.connection.id,
       requestedByTenantUserId: actorId, reviewedByTenantUserId: actorId, status: "REVIEWED",
       reviewRevision: (last?.reviewRevision ?? 0) + 1, contractVersion: review.source.contractVersion,
+      invoiceTaxContextId: review.source.invoiceTaxContext.id, invoiceTaxContextRevision: review.source.invoiceTaxContext.revision,
+      invoiceTaxContextInputHash: review.source.invoiceTaxContext.inputHash, connectionGeneration: review.source.connection.generation,
       invoiceVersion: review.source.invoiceVersion, providerRealmId: review.source.connection.realmId,
       connectionGenerationAtUtc: new Date(review.source.connection.connectedAtUtc),
       sourceSnapshot: JSON.parse(review.sourceJson) as Prisma.InputJsonValue,
       estimateAstSnapshot: review.estimateAst as unknown as Prisma.InputJsonValue,
       sourceHash: review.sourceHash, estimateAstHash: review.estimateAstHash,
-      reviewBindingDigest: sha256(input.binding), bindingKeyId: keyId,
+      reviewBindingDigest: sha256(review.binding), bindingKeyId: keyId,
       estimateRequestId: randomUUID(), invoiceRequestId: randomUUID(), reviewedAtUtc: now,
     }, select: summarySelect });
+
+}
+
+type ContextSeed = Awaited<ReturnType<typeof lockAndReadCurrentInvoiceTaxContext>>;
+type ProviderFacts = Awaited<ReturnType<typeof readQuickBooksTaxProviderFacts>>;
+function sourceFromContext(seed: ContextSeed, facts: ProviderFacts): TaxReviewSource {
+  const { row, source } = seed;
+  return {
+    contractVersion: 2, tenantId: source.tenantId, invoiceId: source.invoiceId, invoiceVersion: source.invoiceVersion,
+    customerId: source.customerId, sourceQuoteId: source.sourceQuoteId, jobId: source.jobId,
+    invoiceTaxContext: { id: row.id, revision: row.revision, inputHash: row.inputHash,
+      confirmedByTenantUserId: row.confirmedByTenantUserId, confirmedAtUtc: row.confirmedAtUtc.toISOString() },
+    transactionDate: source.transactionDate, currency: "USD", subtotal: source.subtotalAmount,
+    quotedTax: source.quotedTaxAmount, total: source.totalAmount,
+    connection: { id: source.quickBooksConnectionId, realmId: source.providerRealmId,
+      environment: row.environment as "sandbox" | "production", connectedAtUtc: source.connectionConnectedAtUtc, generation: source.connectionGeneration },
+    customerMapping: { id: source.customerMapId, providerId: source.providerCustomerId,
+      reviewedAtUtc: source.customerMapReviewedAtUtc, reviewVersion: source.customerMapReviewVersion },
+    customerFacts: { providerCustomerId: facts.customer.providerCustomerId, providerSyncToken: facts.customer.providerSyncToken,
+      observedAtUtc: facts.customer.observedAtUtc, exemption: facts.customer.classification,
+      exemptionReasonId: null, fingerprint: facts.customer.fingerprint },
+    origin: source.origin, destination: source.destination,
+    preferences: { observedAtUtc: facts.preferences.observedAtUtc, fingerprint: facts.preferences.fingerprint,
+      companyObservedAtUtc: facts.companyInfo.observedAtUtc, companyInfoFingerprint: facts.companyInfo.fingerprint, capabilities: facts.capabilities },
+    lines: source.lines.map(line => {
+      const fact = facts.items.find(item => item.providerItemId === line.providerItemId);
+      if (!fact || fact.classification !== line.taxIntent) reject("QUICKBOOKS_TAX_FACTS_UNSUPPORTED");
+      return { invoiceLineItemId: line.invoiceLineItemIdSnapshot, position: line.position, description: line.description,
+        quantity: line.quantity, unitPrice: line.unitPrice, amount: line.amount, taxIntent: line.taxIntent,
+        itemMapping: { id: line.itemMapId, reviewVersion: line.itemMapReviewVersion, reviewedAtUtc: line.itemMapReviewedAtUtc, providerId: line.providerItemId },
+        itemFacts: { providerItemId: fact.providerItemId, providerSyncToken: fact.providerSyncToken, observedAtUtc: fact.observedAtUtc,
+          taxClassificationFingerprint: fact.fingerprint } };
+    }),
+  };
+}
+const assembleInput = z.strictObject({ invoiceId: z.string().min(1).max(191).regex(/^[A-Za-z0-9_-]+$/),
+  expectedContextRevision: z.number().int().min(1).max(2_147_483_647) });
+async function setupFence(tx: Transaction, tenantId: string) {
+  const row = await tx.quickBooksConnection.findFirstOrThrow({ where: { tenantId },
+    select: { setupConfirmedAtUtc: true, setupConfirmedByTenantUserId: true, setupChecklistVersion: true, scopes: true } });
+  return JSON.stringify([row.setupConfirmedAtUtc, row.setupConfirmedByTenantUserId, row.setupChecklistVersion, [...row.scopes].sort()]);
+}
+/**
+ * Manager-authorized, provider-GET-only review assembly. Caller supplies no prices,
+ * provider identities, addresses, tax facts or signed source. Network I/O occurs
+ * strictly between the two short transactions; final authorization/source checks
+ * and signing/persistence commit together. This never authorizes publishing.
+ */
+export async function assembleReviewedTaxEstimate(prisma: PrismaClient, actor: Actor,
+  environment: QuickBooksCredentialRuntimeEnv, input: { invoiceId: string; expectedContextRevision: number }) {
+  const parsed = assembleInput.safeParse(input);
+  if (!parsed.success) reject("QUICKBOOKS_TAX_REVIEW_INPUT_INVALID");
+  const command = parsed.data;
+  const seed = await withTenantRlsContext(prisma, actor.tenantId, async tx => ({
+    ...await lockAndReadCurrentInvoiceTaxContext(tx, actor, environment.QUICKBOOKS_ENVIRONMENT, command.invoiceId, command.expectedContextRevision),
+    setupFence: await setupFence(tx, actor.tenantId),
+  }), REVIEW_TRANSACTION_OPTIONS);
+  const facts = await readQuickBooksTaxProviderFacts(prisma, environment, {
+    tenantId: actor.tenantId, connection: { id: seed.row.quickBooksConnectionId, realmId: seed.row.providerRealmId,
+      environment: environment.QUICKBOOKS_ENVIRONMENT, connectedAtUtc: seed.row.connectionConnectedAtUtc.toISOString(), generation: seed.row.connectionGeneration },
+    providerCustomerId: seed.row.providerCustomerId,
+    lines: seed.source.lines.map(line => ({ providerItemId: line.providerItemId, taxIntent: line.taxIntent })),
+  });
+  if (!facts.providerFactsSupported || facts.blockers.length) reject("QUICKBOOKS_TAX_FACTS_UNSUPPORTED");
+  return withTenantRlsContext(prisma, actor.tenantId, async tx => {
+    const current = await lockAndReadCurrentInvoiceTaxContext(tx, actor, environment.QUICKBOOKS_ENVIRONMENT, command.invoiceId, command.expectedContextRevision);
+    if (current.row.id !== seed.row.id || current.row.inputHash !== seed.row.inputHash
+      || await setupFence(tx, actor.tenantId) !== seed.setupFence) reject("QUICKBOOKS_TAX_CONTEXT_CHANGED");
+    const source = sourceFromContext(current, facts);
+    const now = new Date();
+    requireFreshFacts(source, now);
+    const key = keyFor(environment.QUICKBOOKS_TOKEN_ENCRYPTION_KEY);
+    const review = createQuickBooksTaxReview(source, key.key);
+    if (!review.assessment.providerPrerequisitesReady || !review.assessment.reviewSourceReady) reject("QUICKBOOKS_TAX_REVIEW_NOT_READY");
+    return { ...await persistReviewedTaxEstimate(tx, actor, current.managerId, review, key.id, now),
+      taxCalculationProven: false as const, publishingAuthorized: false as const };
   }, REVIEW_TRANSACTION_OPTIONS);
 }
 
 /** A durable internal lease, explicitly not permission to issue a provider write. */
-export async function claimReviewedTaxEstimate(prisma: PrismaClient, actor: Actor, operationId: string) {
+export async function claimReviewedTaxEstimate(prisma: PrismaClient, actor: Actor,
+  environment: QuickBooksCredentialRuntimeEnv, operationId: string) {
   return withTenantRlsContext(prisma, actor.tenantId, async (tx) => {
     await lockManager(tx, actor);
     const operation = await tx.quickBooksTaxEstimateOperation.findFirst({ where: { id: operationId, tenantId: actor.tenantId } });
@@ -233,11 +334,29 @@ export async function claimReviewedTaxEstimate(prisma: PrismaClient, actor: Acto
     if (current.status !== "REVIEWED" || current.attemptCount !== 0 || current.attemptTokenHash || current.providerEstimateId) {
       return { outcome: "NOT_CLAIMED" as const, publishingAuthorized: false as const };
     }
-    // Persisted source is immutable; parsing does not require an old rotated key.
-    const snapshot = createQuickBooksTaxReview(current.sourceSnapshot, "internal-snapshot-validation-not-a-signing-authority");
-    if (snapshot.sourceHash !== current.sourceHash || snapshot.estimateAstHash !== current.estimateAstHash) {
+    if (current.contractVersion !== 2 || !current.invoiceTaxContextId || !current.invoiceTaxContextRevision
+      || !current.invoiceTaxContextInputHash || !current.connectionGeneration) reject("QUICKBOOKS_TAX_CONTEXT_BINDING_REQUIRED");
+    let snapshot: ReturnType<typeof createQuickBooksTaxReview>;
+    try {
+      const keys = reviewKeys(environment);
+      const signingKey = current.bindingKeyId === keys.current.id ? keys.current
+        : current.bindingKeyId === keys.previous?.id ? keys.previous : null;
+      if (!signingKey) return reject("QUICKBOOKS_TAX_STORED_REVIEW_INVALID");
+      snapshot = createQuickBooksTaxReview(current.sourceSnapshot, signingKey.key);
+      const storedAst = canonicalJson(current.estimateAstSnapshot);
+      const recomputedAst = canonicalJson(snapshot.estimateAst);
+      if (snapshot.sourceHash !== current.sourceHash || snapshot.estimateAstHash !== current.estimateAstHash
+        || sha256(storedAst) !== current.estimateAstHash || storedAst !== recomputedAst
+        || !sameHexDigest(sha256(snapshot.binding), current.reviewBindingDigest)) {
+        return reject("QUICKBOOKS_TAX_STORED_REVIEW_INVALID");
+      }
+    } catch {
       return reject("QUICKBOOKS_TAX_STORED_REVIEW_INVALID");
     }
+    if (current.invoiceTaxContextId !== snapshot.source.invoiceTaxContext.id
+      || current.invoiceTaxContextRevision !== snapshot.source.invoiceTaxContext.revision
+      || current.invoiceTaxContextInputHash !== snapshot.source.invoiceTaxContext.inputHash
+      || current.connectionGeneration !== snapshot.source.connection.generation) reject("QUICKBOOKS_TAX_STORED_REVIEW_INVALID");
     await requireCurrentSource(tx, actor, snapshot.source, now);
     const claimToken = randomBytes(32).toString("base64url");
     const tokenHash = sha256(claimToken);

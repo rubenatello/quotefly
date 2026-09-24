@@ -1118,6 +1118,11 @@ model QuickBooksTaxEstimateOperation {
   providerRealmId              String                               @db.VarChar(191)
   status                       QuickBooksTaxEstimateOperationStatus @default(REVIEWED)
   reviewRevision               Int
+  invoiceTaxContextId          String?
+  invoiceTaxContextRevision    Int?
+  invoiceTaxContextInputHash   String? @db.VarChar(64)
+  connectionGeneration        Int?
+  taxContext InvoiceTaxContext? @relation(fields: [invoiceTaxContextId, invoiceId, tenantId], references: [id, invoiceId, tenantId], onDelete: Restrict, map: "QbTaxEstimate_context_invoice_tenant_fkey")
   contractVersion              Int
   invoiceVersion               Int
   connectionGenerationAtUtc    DateTime                             @db.Timestamptz(3)
@@ -2161,6 +2166,8 @@ model InvoiceTaxContext {
   customerMap QuickBooksCustomerMap @relation(fields: [customerMapId, tenantId], references: [id, tenantId], onDelete: Restrict)
   confirmer TenantUser @relation(fields: [confirmedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
   lines InvoiceTaxContextLine[]
+  taxEstimateOperations QuickBooksTaxEstimateOperation[]
+  @@unique([id, invoiceId, tenantId], map: "InvoiceTaxContext_id_invoice_tenant_key")
   @@unique([id, tenantId])
   @@unique([tenantId, invoiceId, revision])
   @@unique([tenantId, invoiceId, idempotencyKeyHash], map: "InvoiceTaxContext_idempotency_key")

@@ -9,17 +9,17 @@ const key = "synthetic-tax-review-signing-key-for-tests-only";
 const observed = "2026-09-23T12:00:00.000Z";
 function fixture(): TaxReviewSource {
   return {
-    contractVersion: 1, tenantId: "tenant-a", invoiceId: "invoice-a", invoiceVersion: 1,
-    customerId: "customer-a", sourceQuoteId: "quote-a", transactionDate: "2026-09-23", currency: "USD",
+    contractVersion: 2, tenantId: "tenant-a", invoiceId: "invoice-a", invoiceVersion: 1,
+    customerId: "customer-a", sourceQuoteId: "quote-a", jobId: "job-a", invoiceTaxContext: { id: "context-a", revision: 1, inputHash: "d".repeat(64), confirmedByTenantUserId: "manager-a", confirmedAtUtc: observed }, transactionDate: "2026-09-23", currency: "USD",
     subtotal: "300.00", quotedTax: "24.00", total: "324.00",
-    connection: { id: "connection-a", realmId: "1234567890", connectedAtUtc: observed, environment: "sandbox" },
+    connection: { id: "connection-a", realmId: "1234567890", connectedAtUtc: observed, generation: 1, environment: "sandbox" },
     customerMapping: { id: "customer-map-a", reviewVersion: 1, reviewedAtUtc: observed, providerId: "42" },
     customerFacts: { providerCustomerId: "42", providerSyncToken: "0", observedAtUtc: observed,
-      exemption: "TAXABLE", exemptionReasonId: null },
+      exemption: "TAXABLE", exemptionReasonId: null, fingerprint: "e".repeat(64) },
     origin: { Line1: "123 Synthetic Origin", City: "San Francisco", CountrySubDivisionCode: "CA", PostalCode: "94105", Country: "US" },
     destination: { Line1: "456 Synthetic Destination", Line2: "Suite 2", City: "Los Angeles",
       CountrySubDivisionCode: "CA", PostalCode: "90001-1234", Country: "US" },
-    preferences: { observedAtUtc: observed, fingerprint: "a".repeat(64), companyInfoFingerprint: "b".repeat(64),
+    preferences: { observedAtUtc: observed, fingerprint: "a".repeat(64), companyInfoFingerprint: "b".repeat(64), companyObservedAtUtc: observed,
       capabilities: { companyPrerequisitesReady: true, automatedTaxCalculationProven: false, usCompany: true,
         companyAddressComplete: true, salesTaxEnabled: true, estimatesEnabled: true, usdHomeCurrency: true,
         progressInvoicingEnabled: false, reasons: [] } },
@@ -64,6 +64,10 @@ it("binds canonical input independently of object key order and harmless outer w
 it("invalidates the review for material identity, provider fact, mapping, address and content changes", async (t) => {
   const baseline = createQuickBooksTaxReview(fixture(), key);
   const changes: Array<[string, unknown]> = [
+    ["jobId", "job-b"], ["invoiceTaxContext.id", "context-b"], ["invoiceTaxContext.revision", 2],
+    ["invoiceTaxContext.inputHash", "f".repeat(64)], ["invoiceTaxContext.confirmedByTenantUserId", "manager-b"],
+    ["invoiceTaxContext.confirmedAtUtc", "2026-09-23T13:00:00.000Z"], ["connection.generation", 2],
+    ["customerFacts.fingerprint", "f".repeat(64)], ["preferences.companyObservedAtUtc", "2026-09-23T13:00:00.000Z"],
     ["tenantId", "tenant-b"], ["invoiceId", "invoice-b"], ["invoiceVersion", 2], ["customerId", "customer-b"],
     ["sourceQuoteId", "quote-b"], ["transactionDate", "2026-09-24"], ["connection.id", "connection-b"],
     ["connection.realmId", "9876543210"], ["connection.connectedAtUtc", "2026-09-23T13:00:00.000Z"],

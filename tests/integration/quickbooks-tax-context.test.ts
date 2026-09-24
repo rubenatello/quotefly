@@ -9,8 +9,11 @@ import { assertQuickBooksInvoiceCreateFence, bindCreatedQuickBooksInvoiceIdentit
 import { lockQuickBooksInvoicePublication } from "../../src/services/quickbooks-locks";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
 import { confirmInvoiceTaxContext, readInvoiceTaxContextAssessment, type InvoiceTaxContextInput } from "../../src/services/quickbooks-tax-context";
-import { persistReviewedTaxEstimate, prepareQuickBooksTaxEstimateReview, claimReviewedTaxEstimate } from "../../src/services/quickbooks-tax-estimate-ledger";
+import { assembleReviewedTaxEstimate, claimReviewedTaxEstimate } from "../../src/services/quickbooks-tax-estimate-ledger";
 import type { TaxReviewSource } from "../../src/services/quickbooks-tax-review-contract";
+import { readQuickBooksTaxProviderFacts } from "../../src/services/quickbooks-tax-provider-facts";
+import { syntheticFacts, testRuntime } from "../helpers/tax-review-fixture";
+vi.mock("../../src/services/quickbooks-tax-provider-facts", () => ({ readQuickBooksTaxProviderFacts: vi.fn() }));
 const tenantIds: string[] = []; const userIds: string[] = [];
 const keys = { QUICKBOOKS_TOKEN_ENCRYPTION_KEY: "synthetic-tax-context-tests-only-key-material" };
 const runtimePrisma = new Proxy(prisma, {
@@ -41,15 +44,15 @@ async function fixture() {
   const customerMap = await prisma.quickBooksCustomerMap.create({ data: { tenantId: tenant.id, quickBooksConnectionId: connection.id, customerId: customer.id, quickBooksCustomerId: "42", reviewVersion: 1, reviewedAtUtc: observed, reviewedByTenantUserId: member.id } });
   const itemMap = await prisma.quickBooksItemMap.create({ data: { tenantId: tenant.id, quickBooksConnectionId: connection.id, itemKey: "synthetic materials", quickBooksItemId: "51", quickBooksItemName: "Synthetic materials", reviewVersion: 1, reviewedAtUtc: observed, reviewedByTenantUserId: member.id } });
   const source: TaxReviewSource = {
-    contractVersion: 1, tenantId: tenant.id, invoiceId: invoice.id, invoiceVersion: invoice.version,
-    customerId: customer.id, sourceQuoteId: quote.id, transactionDate: observed.toISOString().slice(0, 10), currency: "USD",
+    contractVersion: 2, tenantId: tenant.id, invoiceId: invoice.id, invoiceVersion: invoice.version,
+    customerId: customer.id, sourceQuoteId: quote.id, jobId: job.id, invoiceTaxContext: { id: "pending-context", revision: 1, inputHash: "d".repeat(64), confirmedByTenantUserId: member.id, confirmedAtUtc: observed.toISOString() }, transactionDate: observed.toISOString().slice(0, 10), currency: "USD",
     subtotal: "100.00", quotedTax: "8.00", total: "108.00",
-    connection: { id: connection.id, realmId: connection.realmId, connectedAtUtc: observed.toISOString(), environment: "sandbox" },
+    connection: { id: connection.id, realmId: connection.realmId, connectedAtUtc: observed.toISOString(), generation: 1, environment: "sandbox" },
     customerMapping: { id: customerMap.id, reviewVersion: 1, reviewedAtUtc: observed.toISOString(), providerId: "42" },
-    customerFacts: { providerCustomerId: "42", providerSyncToken: "0", observedAtUtc: observed.toISOString(), exemption: "TAXABLE", exemptionReasonId: null },
+    customerFacts: { providerCustomerId: "42", providerSyncToken: "0", observedAtUtc: observed.toISOString(), exemption: "TAXABLE", exemptionReasonId: null, fingerprint: "e".repeat(64) },
     origin: { Line1: "123 Synthetic Origin", City: "San Francisco", CountrySubDivisionCode: "CA", PostalCode: "94105", Country: "US" },
     destination: { Line1: "456 Synthetic Destination", City: "Los Angeles", CountrySubDivisionCode: "CA", PostalCode: "90001", Country: "US" },
-    preferences: { observedAtUtc: observed.toISOString(), fingerprint: "a".repeat(64), companyInfoFingerprint: "b".repeat(64), capabilities: { companyPrerequisitesReady: true, automatedTaxCalculationProven: false, usCompany: true, companyAddressComplete: true, salesTaxEnabled: true, estimatesEnabled: true, usdHomeCurrency: true, progressInvoicingEnabled: false, reasons: [] } },
+    preferences: { observedAtUtc: observed.toISOString(), fingerprint: "a".repeat(64), companyInfoFingerprint: "b".repeat(64), companyObservedAtUtc: observed.toISOString(), capabilities: { companyPrerequisitesReady: true, automatedTaxCalculationProven: false, usCompany: true, companyAddressComplete: true, salesTaxEnabled: true, estimatesEnabled: true, usdHomeCurrency: true, progressInvoicingEnabled: false, reasons: [] } },
     lines: [{ invoiceLineItemId: line.id, position: 0, description: "Synthetic materials", quantity: "2.00", unitPrice: "50.00", amount: "100.00", taxIntent: "TAXABLE", itemMapping: { id: itemMap.id, reviewVersion: 1, reviewedAtUtc: observed.toISOString(), providerId: "51" }, itemFacts: { providerItemId: "51", providerSyncToken: "0", observedAtUtc: observed.toISOString(), taxClassificationFingerprint: "c".repeat(64) } }],
   };
   const actor = { tenantId: tenant.id, userId: user.id, authVersion: 0 };
@@ -69,8 +72,11 @@ async function current(f: Fixture) { return prisma.invoiceTaxContext.findFirstOr
 async function runtime<T>(tenantId: string | null, action: (tx: Prisma.TransactionClient) => Promise<T>) {
   return runtimePrisma.$transaction(async tx => { if (tenantId) await setTenantRlsContext(tx, tenantId); return action(tx); });
 }
-async function ledger(f: Fixture) { const prepared = prepareQuickBooksTaxEstimateReview(f.source, keys);
-  return persistReviewedTaxEstimate(runtimePrisma, f.actor, keys, { source: f.source, binding: prepared.binding }); }
+async function ledger(f: Fixture) {
+  vi.mocked(readQuickBooksTaxProviderFacts).mockResolvedValue(syntheticFacts(f.source));
+  const row = await current(f);
+  return assembleReviewedTaxEstimate(runtimePrisma, f.actor, testRuntime(keys), { invoiceId: f.invoice.id, expectedContextRevision: row.revision });
+}
 
 function access(f: Fixture): AccessContext { return { tenantId: f.tenant.id, userId: f.user.id, tenantUserId: f.member.id,
   role: "owner", capabilities: capabilitiesForRole("owner"), requestId: randomUUID() }; }
@@ -325,7 +331,7 @@ describe("manager-confirmed invoice tax context", () => {
  test.each(["attempted", "attemptedSuperseded", "legacy", "direct"])("retained %s provider-operation evidence blocks confirmation", async kind => {
   const f = await fixture(); const value = input(f); await confirm(f, value);
   if (kind.startsWith("attempted")) {
-    const row = await ledger(f); await claimReviewedTaxEstimate(runtimePrisma, f.actor, row.id);
+    const row = await ledger(f); await claimReviewedTaxEstimate(runtimePrisma, f.actor, testRuntime(keys), row.id);
     if (kind === "attemptedSuperseded") await prisma.quickBooksTaxEstimateOperation.update({ where: { id: row.id }, data: { status: "SUPERSEDED", supersededAtUtc: new Date(), claimTokenHash: null, claimExpiresAtUtc: null } });
   }
   if (kind === "legacy") await prisma.quickBooksInvoiceSync.create({ data: { tenantId: f.tenant.id, quoteId: f.quote.id, quickBooksConnectionId: f.connection.id, quickBooksInvoiceId: "retained-remote", status: "SYNCED", deletedAtUtc: new Date() } });
@@ -338,9 +344,9 @@ describe("manager-confirmed invoice tax context", () => {
  });
  afterAll(async () => { try { expect(fetchSpy).not.toHaveBeenCalled(); } finally {
   fetchSpy.mockRestore();
+  await prisma.quickBooksTaxEstimateOperation.deleteMany({ where: { tenantId: { in: tenantIds } } });
   await prisma.invoiceTaxContextLine.deleteMany({ where: { tenantId: { in: tenantIds } } });
   await prisma.invoiceTaxContext.deleteMany({ where: { tenantId: { in: tenantIds } } });
-  await prisma.quickBooksTaxEstimateOperation.deleteMany({ where: { tenantId: { in: tenantIds } } });
   await prisma.quickBooksInvoiceOperation.deleteMany({ where: { tenantId: { in: tenantIds } } });
   await prisma.tenant.deleteMany({ where: { id: { in: tenantIds } } });
   await prisma.user.deleteMany({ where: { id: { in: userIds } } }); await prisma.$disconnect();
