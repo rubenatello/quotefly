@@ -227,7 +227,7 @@ export function CrmShell({
       ) : null}
 
       <div
-        className={`qf-workspace-shell-grid mx-auto w-full max-w-[1920px] lg:grid ${
+        className={`qf-workspace-shell-grid w-full lg:grid ${
           sidebarCollapsed ? "lg:grid-cols-[74px_1fr]" : "lg:grid-cols-[228px_1fr]"
         }`}
       >

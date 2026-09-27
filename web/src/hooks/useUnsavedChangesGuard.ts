@@ -8,12 +8,14 @@ type PendingNavigation = (() => void) | null;
 interface UnsavedChangesGuardOptions {
   historyPrompt?: string;
   blockNavigation?: boolean;
+  coordinateWorkspaceNavigation?: boolean;
 }
 
 export function useUnsavedChangesGuard(when: boolean, options: UnsavedChangesGuardOptions = {}) {
   const navigate = useNavigate();
   const coordinator = useContext(NavigationGuardContext);
   const blockNavigation = options.blockNavigation ?? false;
+  const coordinateWorkspaceNavigation = options.coordinateWorkspaceNavigation ?? true;
   const historyPrompt =
     options.historyPrompt ?? "You have unsaved quote changes. Leave this page and keep the browser recovery draft?";
   const pendingNavigationRef = useRef<PendingNavigation>(null);
@@ -55,8 +57,8 @@ export function useUnsavedChangesGuard(when: boolean, options: UnsavedChangesGua
   );
 
   useLayoutEffect(() => {
-    if (when && coordinator) return coordinator.register(requestNavigation);
-  }, [when, coordinator, requestNavigation]);
+    if (when && coordinator && coordinateWorkspaceNavigation) return coordinator.register(requestNavigation);
+  }, [when, coordinator, coordinateWorkspaceNavigation, requestNavigation]);
 
   useEffect(() => {
     if (!when) return;

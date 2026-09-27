@@ -439,13 +439,72 @@ function sameAttempt(stored: string | null, token: string) {
   return timingSafeEqual(Buffer.from(stored, "hex"), Buffer.from(sha256(token), "hex"));
 }
 
+const providerEstimateIdSchema = z.string().min(1).max(191).regex(/^[A-Za-z0-9_-]+$/);
+const providerEstimateSyncTokenSchema = z.string().min(1).max(191).regex(/^(?:0|[1-9]\d*)$/);
+const millisecondUtcSchema = z.iso.datetime({ precision: 3 }).refine((value) => new Date(value).toISOString() === value);
+const retainedIdentitySchema = z.strictObject({
+  providerEstimateId: providerEstimateIdSchema,
+  providerEstimateSyncToken: providerEstimateSyncTokenSchema,
+  providerEstimateUpdatedAtUtc: millisecondUtcSchema,
+});
+export type RetainedTaxEstimateIdentity = z.infer<typeof retainedIdentitySchema>;
+
+const canonicalMoneySchema = z.number().finite().nonnegative().max(99_999_999.99).refine((value) =>
+  /^(?:0|[1-9]\d{0,7})(?:\.\d{1,2})?$/.test(String(value)));
+const canonicalAddressSchema = z.strictObject({
+  Line1: z.string().min(1).max(200), Line2: z.string().min(1).max(200).optional(),
+  City: z.string().min(1).max(100), CountrySubDivisionCode: z.string().regex(/^[A-Z]{2}$/),
+  PostalCode: z.string().regex(/^\d{5}(?:-\d{4})?$/), Country: z.literal("US"),
+});
+const canonicalEstimateProjectionSchema = z.strictObject({
+  Id: providerEstimateIdSchema,
+  SyncToken: providerEstimateSyncTokenSchema,
+  MetaData: z.strictObject({ LastUpdatedTime: millisecondUtcSchema }),
+  CustomerRef: z.strictObject({ value: z.string().min(1).max(191) }),
+  TxnDate: z.iso.date(),
+  CurrencyRef: z.strictObject({ value: z.literal("USD") }),
+  ShipFromAddr: canonicalAddressSchema,
+  ShipAddr: canonicalAddressSchema,
+  Line: z.array(z.strictObject({
+    Description: z.string().min(1).max(4000),
+    DetailType: z.literal("SalesItemLineDetail"),
+    Amount: canonicalMoneySchema,
+    SalesItemLineDetail: z.strictObject({
+      ItemRef: z.strictObject({ value: z.string().min(1).max(191) }),
+      Qty: canonicalMoneySchema,
+      UnitPrice: canonicalMoneySchema,
+      TaxCodeRef: z.strictObject({ value: z.enum(["TAX", "NON"]) }),
+    }),
+  })).min(1).max(500),
+  TxnTaxDetail: z.strictObject({ TotalTax: canonicalMoneySchema }),
+  TotalAmt: canonicalMoneySchema,
+});
+
+function moneyCents(value: number): bigint {
+  const [whole, fraction = ""] = String(value).split(".");
+  return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, "0"));
+}
+
+function retainedIdentity(value: string | RetainedTaxEstimateIdentity): { id: string; syncToken: string | null; updatedAtUtc: Date | null } {
+  if (typeof value === "string") {
+    const parsed = providerEstimateIdSchema.safeParse(value);
+    if (!parsed.success) reject("QUICKBOOKS_TAX_PROVIDER_ID_INVALID");
+    return { id: parsed.data, syncToken: null, updatedAtUtc: null };
+  }
+  const parsed = retainedIdentitySchema.safeParse(value);
+  if (!parsed.success) reject("QUICKBOOKS_TAX_PROVIDER_IDENTITY_INVALID");
+  return { id: parsed.data.providerEstimateId, syncToken: parsed.data.providerEstimateSyncToken,
+    updatedAtUtc: new Date(parsed.data.providerEstimateUpdatedAtUtc) };
+}
+
 /**
  * Retain a late response even after a lease expires or the manager disconnects.
  * The original high-entropy attempt token authorizes ONLY recording its result.
  * This function never resumes a write or makes the review canonical.
  */
-export async function retainTaxEstimateIdentity(prisma: PrismaClient, attempt: AttemptIdentity, providerEstimateId: string) {
-  if (!/^[A-Za-z0-9_-]{1,191}$/.test(providerEstimateId)) reject("QUICKBOOKS_TAX_PROVIDER_ID_INVALID");
+export async function retainTaxEstimateIdentity(prisma: PrismaClient, attempt: AttemptIdentity,
+  providerIdentity: string | RetainedTaxEstimateIdentity) {
+  const identity = retainedIdentity(providerIdentity);
   let attemptedConnectionId: string | undefined;
   return withTenantRlsContext(prisma, attempt.tenantId, async (tx) => {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "QuickBooksTaxEstimateOperation"
@@ -455,19 +514,37 @@ export async function retainTaxEstimateIdentity(prisma: PrismaClient, attempt: A
     } });
     if (!operation || !sameAttempt(operation.attemptTokenHash, attempt.claimToken)) reject("QUICKBOOKS_TAX_ATTEMPT_INVALID");
     if (operation.providerEstimateId) {
-      if (operation.providerEstimateId !== providerEstimateId) reject("QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT");
-      return { retained: true };
+      if (operation.providerEstimateId !== identity.id) reject("QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT");
+      if (!identity.syncToken) return { retained: true };
+      if (operation.providerEstimateSyncToken || operation.providerEstimateUpdatedAtUtc) {
+        if (operation.providerEstimateSyncToken !== identity.syncToken
+          || operation.providerEstimateUpdatedAtUtc?.toISOString() !== identity.updatedAtUtc?.toISOString()) {
+          reject("QUICKBOOKS_TAX_PROVIDER_IDENTITY_CONFLICT");
+        }
+        return { retained: true };
+      }
     }
     attemptedConnectionId = operation.quickBooksConnectionId;
     const now = new Date();
+    const identityData = { providerEstimateId: identity.id, ...(identity.syncToken ? {
+      providerEstimateSyncToken: identity.syncToken, providerEstimateUpdatedAtUtc: identity.updatedAtUtc,
+    } : {}) };
+    const data = operation.status === "SUPERSEDED" || operation.status === "ESTIMATE_RECONCILIATION_REQUIRED"
+      ? identityData : { ...identityData, status: "ESTIMATE_RECONCILIATION_REQUIRED" as const,
+        claimTokenHash: null, claimExpiresAtUtc: null, uncertainAtUtc: now, lastFailureCode: UNCERTAIN_CODE };
     const updated = await tx.quickBooksTaxEstimateOperation.updateMany({ where: {
-      id: operation.id, tenantId: attempt.tenantId, providerEstimateId: null, attemptTokenHash: operation.attemptTokenHash,
-    }, data: operation.status === "SUPERSEDED" ? { providerEstimateId } : {
-      providerEstimateId, status: "ESTIMATE_RECONCILIATION_REQUIRED", claimTokenHash: null,
-      claimExpiresAtUtc: null, uncertainAtUtc: now, lastFailureCode: UNCERTAIN_CODE } });
+      id: operation.id, tenantId: attempt.tenantId, providerEstimateId: operation.providerEstimateId,
+      providerEstimateSyncToken: null, providerEstimateUpdatedAtUtc: null,
+      attemptTokenHash: operation.attemptTokenHash,
+    }, data });
     if (updated.count !== 1) {
-      const latest = await tx.quickBooksTaxEstimateOperation.findFirst({ where: { id: operation.id, tenantId: attempt.tenantId }, select: { providerEstimateId: true } });
-      if (latest?.providerEstimateId !== providerEstimateId) reject("QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT");
+      const latest = await tx.quickBooksTaxEstimateOperation.findFirst({ where: { id: operation.id, tenantId: attempt.tenantId },
+        select: { providerEstimateId: true, providerEstimateSyncToken: true, providerEstimateUpdatedAtUtc: true } });
+      if (latest?.providerEstimateId !== identity.id) reject("QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT");
+      if (identity.syncToken && (latest.providerEstimateSyncToken !== identity.syncToken
+        || latest.providerEstimateUpdatedAtUtc?.toISOString() !== identity.updatedAtUtc?.toISOString())) {
+        reject("QUICKBOOKS_TAX_PROVIDER_IDENTITY_CONFLICT");
+      }
     }
     return { retained: true };
   }).catch(async (error: unknown) => {
@@ -484,12 +561,91 @@ export async function retainTaxEstimateIdentity(prisma: PrismaClient, attempt: A
         const conflicting = await withTenantRlsContext(prisma, attempt.tenantId, (tx) =>
           tx.quickBooksTaxEstimateOperation.findFirst({ where: {
             tenantId: attempt.tenantId, quickBooksConnectionId: attemptedConnectionId,
-            providerEstimateId, id: { not: attempt.operationId },
+            providerEstimateId: identity.id, id: { not: attempt.operationId },
           }, select: { id: true } }));
         if (conflicting) reject("QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT");
       }
     }
     throw error;
+  });
+}
+
+/**
+ * Record a bounded positive-tax Estimate proof for the original sandbox
+ * attempt. This validates retained evidence only and never authorizes an
+ * Invoice or another provider request.
+ */
+export async function finalizeTaxEstimateSandboxProof(prisma: PrismaClient,
+  environment: QuickBooksCredentialRuntimeEnv, attempt: AttemptIdentity, rawProjection: unknown) {
+  if (environment.QUICKBOOKS_ENVIRONMENT !== "sandbox") reject("QUICKBOOKS_TAX_SANDBOX_REQUIRED");
+  const parsed = canonicalEstimateProjectionSchema.safeParse(rawProjection);
+  if (!parsed.success) reject("QUICKBOOKS_TAX_CANONICAL_INVALID");
+  const projection = parsed.data;
+  const canonicalHash = sha256(canonicalJson(projection));
+  return withTenantRlsContext(prisma, attempt.tenantId, async (tx) => {
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "QuickBooksTaxEstimateOperation"
+      WHERE "id" = ${attempt.operationId} AND "tenantId" = ${attempt.tenantId} FOR UPDATE`);
+    const operation = await tx.quickBooksTaxEstimateOperation.findFirst({ where: {
+      id: attempt.operationId, tenantId: attempt.tenantId,
+      estimateRequestId: attempt.estimateRequestId, sourceHash: attempt.sourceHash,
+    } });
+    if (!operation || !sameAttempt(operation.attemptTokenHash, attempt.claimToken)) {
+      reject("QUICKBOOKS_TAX_ATTEMPT_INVALID");
+    }
+    const snapshot = verifiedStoredReview(operation, environment);
+    if (snapshot.source.connection.environment !== "sandbox") reject("QUICKBOOKS_TAX_SANDBOX_REQUIRED");
+    const hasCanonicalProof = operation.canonicalEstimateHash !== null || operation.providerSubtotal !== null
+      || operation.providerTax !== null || operation.providerTotal !== null || operation.canonicalAtUtc !== null;
+    if (hasCanonicalProof && operation.canonicalEstimateHash !== canonicalHash) {
+      reject("QUICKBOOKS_TAX_CANONICAL_CONFLICT");
+    }
+    if (operation.providerEstimateId !== projection.Id
+      || operation.providerEstimateSyncToken !== projection.SyncToken
+      || operation.providerEstimateUpdatedAtUtc?.toISOString() !== projection.MetaData.LastUpdatedTime) {
+      reject("QUICKBOOKS_TAX_PROVIDER_IDENTITY_CONFLICT");
+    }
+    const projectedAst = {
+      CustomerRef: projection.CustomerRef, TxnDate: projection.TxnDate, CurrencyRef: projection.CurrencyRef,
+      ShipFromAddr: projection.ShipFromAddr, ShipAddr: projection.ShipAddr, Line: projection.Line,
+    };
+    if (canonicalJson(projectedAst) !== canonicalJson(snapshot.estimateAst)) {
+      reject("QUICKBOOKS_TAX_CANONICAL_MISMATCH");
+    }
+    const subtotalCents = projection.Line.reduce((total, line) => total + moneyCents(line.Amount), 0n);
+    const sourceSubtotalCents = BigInt(snapshot.source.subtotal.replace(".", ""));
+    const taxCents = moneyCents(projection.TxnTaxDetail.TotalTax);
+    const totalCents = moneyCents(projection.TotalAmt);
+    if (subtotalCents !== sourceSubtotalCents || subtotalCents > 9_999_999_999n
+      || taxCents <= 0n || totalCents > 9_999_999_999n || totalCents !== subtotalCents + taxCents) {
+      reject("QUICKBOOKS_TAX_CANONICAL_TOTALS_INVALID");
+    }
+    const amounts = { subtotal: (Number(subtotalCents) / 100).toFixed(2),
+      tax: (Number(taxCents) / 100).toFixed(2), total: (Number(totalCents) / 100).toFixed(2) };
+    const proofMatches = operation.canonicalEstimateHash === canonicalHash
+      && operation.providerSubtotal?.toFixed(2) === amounts.subtotal
+      && operation.providerTax?.toFixed(2) === amounts.tax
+      && operation.providerTotal?.toFixed(2) === amounts.total
+      && operation.canonicalAtUtc !== null;
+    if (hasCanonicalProof) {
+      if (!proofMatches) reject("QUICKBOOKS_TAX_CANONICAL_CONFLICT");
+      return { outcome: "ALREADY_FINALIZED" as const, taxCalculationProven: true as const,
+        estimateInvoiceParityProven: false as const, publishingAuthorized: false as const };
+    }
+    if (!["ESTIMATE_RECONCILIATION_REQUIRED", "SUPERSEDED"].includes(operation.status)) {
+      reject("QUICKBOOKS_TAX_CANONICAL_STATE_INVALID");
+    }
+    const canonicalAtUtc = new Date();
+    const status = operation.status === "SUPERSEDED" ? "SUPERSEDED" as const : "ESTIMATE_CANONICAL" as const;
+    const updated = await tx.quickBooksTaxEstimateOperation.updateMany({ where: {
+      id: operation.id, tenantId: attempt.tenantId, status: operation.status,
+      attemptTokenHash: operation.attemptTokenHash, providerEstimateId: projection.Id,
+      providerEstimateSyncToken: projection.SyncToken,
+      providerEstimateUpdatedAtUtc: new Date(projection.MetaData.LastUpdatedTime), canonicalEstimateHash: null,
+    }, data: { status, canonicalEstimateHash: canonicalHash, providerSubtotal: amounts.subtotal,
+      providerTax: amounts.tax, providerTotal: amounts.total, canonicalAtUtc } });
+    if (updated.count !== 1) reject("QUICKBOOKS_TAX_CANONICAL_CONFLICT");
+    return { outcome: "FINALIZED" as const, taxCalculationProven: true as const,
+      estimateInvoiceParityProven: false as const, publishingAuthorized: false as const };
   });
 }
 

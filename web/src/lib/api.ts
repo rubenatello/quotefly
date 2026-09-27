@@ -2393,7 +2393,10 @@ export const api = {
         body: JSON.stringify(body),
       }),
 
-    logout: () => request<void>("/v1/auth/logout", { method: "POST" }),
+    logout: (options?: { keepalive?: boolean }) => request<void>("/v1/auth/logout", {
+      method: "POST",
+      keepalive: options?.keepalive,
+    }),
 
     me: () => request<AuthSessionPayload>("/v1/auth/me"),
 

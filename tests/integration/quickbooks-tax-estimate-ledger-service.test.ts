@@ -9,7 +9,7 @@ import { claimQuickBooksInvoicePublish, getQuickBooksInvoiceSyncPreview } from "
 import { lockQuickBooksInvoicePublication } from "../../src/services/quickbooks-locks";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbooks-setup";
 import {
-  claimReviewedTaxEstimate, markTaxEstimateUncertain, assembleReviewedTaxEstimate,
+  claimReviewedTaxEstimate, finalizeTaxEstimateSandboxProof, markTaxEstimateUncertain, assembleReviewedTaxEstimate,
   readTaxEstimateCredentialTarget, retainTaxEstimateIdentity,
 } from "../../src/services/quickbooks-tax-estimate-ledger";
 import type { TaxReviewSource } from "../../src/services/quickbooks-tax-review-contract";
@@ -96,6 +96,17 @@ async function claimed(f: Fixture) {
   const claim = await claimReviewedTaxEstimate(runtimePrisma, f.actor, testRuntime(keys), row.id);
   if (claim.outcome !== "CLAIMED") throw new Error("Expected synthetic ledger claim");
   return { row, claim, attempt: { tenantId: f.tenant.id, operationId: row.id, estimateRequestId: claim.estimateRequestId, sourceHash: claim.sourceHash, claimToken: claim.claimToken } };
+}
+
+function retainedTuple(id = `estimate-${randomUUID()}`) {
+  return { providerEstimateId: id, providerEstimateSyncToken: "0",
+    providerEstimateUpdatedAtUtc: "2026-09-23T20:00:00.000Z" };
+}
+function canonicalProjection(f: Fixture, identity: ReturnType<typeof retainedTuple>) {
+  const ast = structuredClone(syntheticReview(f.source, keys).estimateAst);
+  return { Id: identity.providerEstimateId, SyncToken: identity.providerEstimateSyncToken,
+    MetaData: { LastUpdatedTime: identity.providerEstimateUpdatedAtUtc }, ...ast,
+    TxnTaxDetail: { TotalTax: 8 }, TotalAmt: 108 };
 }
 
 function access(f: Fixture): AccessContext {
@@ -479,6 +490,156 @@ describe("QuickBooks tax Estimate ledger services", () => {
     expect(competing.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     const failure = competing.find((result) => result.status === "rejected");
     expect(failure?.status === "rejected" && failure.reason).toMatchObject({ code: "QUICKBOOKS_TAX_PROVIDER_ID_CONFLICT" });
+  });
+
+  test("strict provider identity tuple is retained atomically, idempotently and write-once", async () => {
+    const f = await fixture(); const { row, attempt } = await claimed(f); const identity = retainedTuple();
+    expect(await retainTaxEstimateIdentity(runtimePrisma, attempt, identity.providerEstimateId)).toEqual({ retained: true });
+    expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } }))
+      .toMatchObject({ status: "ESTIMATE_RECONCILIATION_REQUIRED", providerEstimateId: identity.providerEstimateId,
+        providerEstimateSyncToken: null, providerEstimateUpdatedAtUtc: null, canonicalEstimateHash: null });
+    expect(await retainTaxEstimateIdentity(runtimePrisma, attempt, identity)).toEqual({ retained: true });
+    expect(await retainTaxEstimateIdentity(runtimePrisma, attempt, identity)).toEqual({ retained: true });
+    const retained = await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } });
+    expect(retained).toMatchObject({ status: "ESTIMATE_RECONCILIATION_REQUIRED",
+      providerEstimateId: identity.providerEstimateId, providerEstimateSyncToken: identity.providerEstimateSyncToken,
+      providerEstimateUpdatedAtUtc: new Date(identity.providerEstimateUpdatedAtUtc), canonicalEstimateHash: null,
+      canonicalAtUtc: null, providerSubtotal: null, providerTax: null, providerTotal: null });
+    for (const conflicting of [
+      { ...identity, providerEstimateId: "different-estimate" },
+      { ...identity, providerEstimateSyncToken: "1" },
+      { ...identity, providerEstimateUpdatedAtUtc: "2026-09-23T20:00:00.001Z" },
+    ]) await expect(retainTaxEstimateIdentity(runtimePrisma, attempt, conflicting)).rejects.toMatchObject({
+      code: expect.stringMatching(/^QUICKBOOKS_TAX_PROVIDER_(?:ID|IDENTITY)_CONFLICT$/),
+    });
+    for (const data of [{ providerEstimateSyncToken: "1" },
+      { providerEstimateUpdatedAtUtc: new Date("2026-09-23T20:00:00.001Z") }]) {
+      await expect(prisma.quickBooksTaxEstimateOperation.update({ where: { id: row.id }, data })).rejects.toThrow(/write-once/);
+    }
+  });
+
+  test("partial tuple, malformed tuple and canonical-without-proof states fail closed", async () => {
+    for (const invalid of [
+      { providerEstimateId: "estimate-valid", providerEstimateSyncToken: "-1", providerEstimateUpdatedAtUtc: "2026-09-23T20:00:00.000Z" },
+      { providerEstimateId: "estimate-valid", providerEstimateSyncToken: "01", providerEstimateUpdatedAtUtc: "2026-09-23T20:00:00.000Z" },
+      { providerEstimateId: "estimate-valid", providerEstimateSyncToken: "0", providerEstimateUpdatedAtUtc: "2026-09-23T20:00:00Z" },
+    ]) {
+      const f = await fixture(); const { row, attempt } = await claimed(f);
+      await expect(retainTaxEstimateIdentity(runtimePrisma, attempt, invalid)).rejects.toMatchObject({ code: "QUICKBOOKS_TAX_PROVIDER_IDENTITY_INVALID" });
+      expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } }))
+        .toMatchObject({ status: "ESTIMATE_PROCESSING", providerEstimateId: null, providerEstimateSyncToken: null,
+          providerEstimateUpdatedAtUtc: null });
+    }
+    const partial = await fixture(); const claimedPartial = await claimed(partial); const identity = retainedTuple();
+    for (const data of [
+      { providerEstimateId: identity.providerEstimateId, providerEstimateSyncToken: identity.providerEstimateSyncToken },
+      { providerEstimateId: identity.providerEstimateId, providerEstimateUpdatedAtUtc: new Date(identity.providerEstimateUpdatedAtUtc) },
+      { providerEstimateId: identity.providerEstimateId, providerEstimateSyncToken: identity.providerEstimateSyncToken,
+        providerEstimateUpdatedAtUtc: new Date(identity.providerEstimateUpdatedAtUtc) },
+    ]) await expect(prisma.quickBooksTaxEstimateOperation.update({ where: { id: claimedPartial.row.id }, data })).rejects.toThrow(/QbTaxEstimate_proof_check/);
+    await markTaxEstimateUncertain(runtimePrisma, claimedPartial.attempt);
+    await expect(prisma.quickBooksTaxEstimateOperation.update({ where: { id: claimedPartial.row.id }, data: { status: "ESTIMATE_CANONICAL" } }))
+      .rejects.toThrow(/QbTaxEstimate_(proof|canonical)_check/);
+  });
+
+  test("exact positive-tax canonical proof writes once and exact replay is idempotent", async () => {
+    const f = await fixture(); const { row, attempt } = await claimed(f); const identity = retainedTuple();
+    await retainTaxEstimateIdentity(runtimePrisma, attempt, identity);
+    const projection = canonicalProjection(f, identity);
+    expect(await finalizeTaxEstimateSandboxProof(runtimePrisma, testRuntime(rotatedKeys), attempt, projection)).toEqual({
+      outcome: "FINALIZED", taxCalculationProven: true, estimateInvoiceParityProven: false, publishingAuthorized: false,
+    });
+    const canonical = await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } });
+    expect(canonical).toMatchObject({ status: "ESTIMATE_CANONICAL", providerEstimateId: identity.providerEstimateId,
+      providerEstimateSyncToken: "0", providerEstimateUpdatedAtUtc: new Date(identity.providerEstimateUpdatedAtUtc),
+      canonicalEstimateHash: expect.stringMatching(/^[a-f0-9]{64}$/), providerSubtotal: new Prisma.Decimal("100.00"),
+      providerTax: new Prisma.Decimal("8.00"), providerTotal: new Prisma.Decimal("108.00") });
+    expect(canonical.canonicalAtUtc).not.toBeNull();
+    expect(await finalizeTaxEstimateSandboxProof(runtimePrisma, testRuntime(rotatedKeys), attempt, structuredClone(projection))).toEqual({
+      outcome: "ALREADY_FINALIZED", taxCalculationProven: true, estimateInvoiceParityProven: false, publishingAuthorized: false,
+    });
+    const changed = structuredClone(projection); changed.TxnTaxDetail.TotalTax = 9; changed.TotalAmt = 109;
+    await expect(finalizeTaxEstimateSandboxProof(runtimePrisma, testRuntime(rotatedKeys), attempt, changed))
+      .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_CANONICAL_CONFLICT" });
+    expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } })).toEqual(canonical);
+    await expect(prisma.quickBooksTaxEstimateOperation.update({ where: { id: row.id }, data: { providerTax: "9.00", providerTotal: "109.00" } }))
+      .rejects.toThrow(/write-once/);
+  });
+
+  test("canonical proof rejects every request, identity, line, address and total mismatch without mutation", async () => {
+    const f = await fixture();
+    const secondLine = await prisma.invoiceLineItem.create({ data: { tenantId: f.tenant.id, invoiceId: f.invoice.id,
+      description: "Synthetic labor", quantity: 1, unitPrice: 50, lineTotal: 50, position: 1 } });
+    const secondMap = await prisma.quickBooksItemMap.create({ data: { tenantId: f.tenant.id,
+      quickBooksConnectionId: f.connection.id, itemKey: "synthetic labor", quickBooksItemId: "52",
+      quickBooksItemName: "Synthetic labor", reviewVersion: 1, reviewedAtUtc: f.connection.connectedAtUtc,
+      reviewedByTenantUserId: f.member.id } });
+    await prisma.invoice.update({ where: { id: f.invoice.id }, data: { subtotalAmount: 150, totalAmount: 158, balanceDue: 158 } });
+    f.source.subtotal = "150.00"; f.source.total = "158.00";
+    f.source.lines.push({ invoiceLineItemId: secondLine.id, position: 1, description: "Synthetic labor",
+      quantity: "1.00", unitPrice: "50.00", amount: "50.00", taxIntent: "TAXABLE",
+      itemMapping: { id: secondMap.id, reviewVersion: 1, reviewedAtUtc: secondMap.reviewedAtUtc!.toISOString(), providerId: "52" },
+      itemFacts: { providerItemId: "52", providerSyncToken: "0", observedAtUtc: f.source.preferences.observedAtUtc,
+        taxClassificationFingerprint: "f".repeat(64) } });
+    const { row, attempt } = await claimed(f); const identity = retainedTuple();
+    await retainTaxEstimateIdentity(runtimePrisma, attempt, identity);
+    const exact = canonicalProjection(f, identity); exact.TotalAmt = 158;
+    const cases: Array<(value: typeof exact) => void> = [
+      value => { value.CustomerRef.value = "different"; }, value => { value.TxnDate = "2026-09-22"; },
+      value => { value.ShipFromAddr.Line1 = "Different origin"; }, value => { value.ShipAddr.Line1 = "Different destination"; },
+      value => { value.Line.reverse(); }, value => { value.Line.pop(); },
+      value => { value.Line[0].SalesItemLineDetail.ItemRef.value = "different"; },
+      value => { value.Line[0].SalesItemLineDetail.Qty = 3; }, value => { value.Line[0].SalesItemLineDetail.UnitPrice = 49; },
+      value => { value.Line[0].Amount = 99; }, value => { value.Line[0].SalesItemLineDetail.TaxCodeRef.value = "NON"; },
+      value => { value.Line[0].Description = "Different description"; }, value => { value.TotalAmt = 158.01; },
+      value => { value.TxnTaxDetail.TotalTax = 0; value.TotalAmt = 150; },
+      value => { value.TxnTaxDetail.TotalTax = -1; }, value => { value.TxnTaxDetail.TotalTax = Number.NaN; },
+      value => { value.TotalAmt = 100_000_000; }, value => { value.Line[0].Amount = 100.001; },
+    ];
+    for (const change of cases) {
+      const invalid = structuredClone(exact); change(invalid);
+      await expect(finalizeTaxEstimateSandboxProof(runtimePrisma, testRuntime(keys), attempt, invalid)).rejects.toMatchObject({
+        code: expect.stringMatching(/^QUICKBOOKS_TAX_CANONICAL_(?:INVALID|MISMATCH|TOTALS_INVALID)$/),
+      });
+    }
+    expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } }))
+      .toMatchObject({ status: "ESTIMATE_RECONCILIATION_REQUIRED", canonicalEstimateHash: null,
+        canonicalAtUtc: null, providerSubtotal: null, providerTax: null, providerTotal: null });
+  });
+
+  test("sandbox proof rejects production, foreign attempts, bad attempt bindings and retired review keys", async () => {
+    const f = await fixture(); const { row, attempt } = await claimed(f); const identity = retainedTuple();
+    await retainTaxEstimateIdentity(runtimePrisma, attempt, identity); const projection = canonicalProjection(f, identity);
+    const production = { ...testRuntime(keys), QUICKBOOKS_ENVIRONMENT: "production" as const };
+    await expect(finalizeTaxEstimateSandboxProof(runtimePrisma, production, attempt, projection))
+      .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_SANDBOX_REQUIRED" });
+    const foreign = await fixture();
+    for (const invalidAttempt of [{ ...attempt, tenantId: foreign.tenant.id }, { ...attempt, claimToken: "A".repeat(43) },
+      { ...attempt, sourceHash: "f".repeat(64) }, { ...attempt, estimateRequestId: randomUUID() }]) {
+      await expect(finalizeTaxEstimateSandboxProof(runtimePrisma, testRuntime(keys), invalidAttempt, projection))
+        .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_ATTEMPT_INVALID" });
+    }
+    for (const changedIdentity of [
+      { ...projection, Id: "different-estimate" }, { ...projection, SyncToken: "1" },
+      { ...projection, MetaData: { LastUpdatedTime: "2026-09-23T20:00:00.001Z" } },
+    ]) await expect(finalizeTaxEstimateSandboxProof(runtimePrisma, testRuntime(keys), attempt, changedIdentity))
+      .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_PROVIDER_IDENTITY_CONFLICT" });
+    await expect(finalizeTaxEstimateSandboxProof(runtimePrisma,
+      testRuntime({ QUICKBOOKS_TOKEN_ENCRYPTION_KEY: rotatedKeys.QUICKBOOKS_TOKEN_ENCRYPTION_KEY }), attempt, projection))
+      .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_STORED_REVIEW_INVALID" });
+    expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } }))
+      .toMatchObject({ status: "ESTIMATE_RECONCILIATION_REQUIRED", canonicalEstimateHash: null, canonicalAtUtc: null });
+  });
+
+  test("superseded retained evidence can finalize proof without reviving active status", async () => {
+    const f = await fixture(); const { row, attempt } = await claimed(f); const identity = retainedTuple();
+    await retainTaxEstimateIdentity(runtimePrisma, attempt, identity);
+    const supersededAtUtc = new Date();
+    await prisma.quickBooksTaxEstimateOperation.update({ where: { id: row.id }, data: { status: "SUPERSEDED", supersededAtUtc } });
+    expect(await finalizeTaxEstimateSandboxProof(runtimePrisma, testRuntime(keys), attempt, canonicalProjection(f, identity)))
+      .toMatchObject({ outcome: "FINALIZED", taxCalculationProven: true, publishingAuthorized: false });
+    expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: row.id } }))
+      .toMatchObject({ status: "SUPERSEDED", supersededAtUtc, providerTax: new Prisma.Decimal("8.00") });
   });
 
   test("only the original tenant-bound attempt token can record uncertainty or retain a result", async () => {

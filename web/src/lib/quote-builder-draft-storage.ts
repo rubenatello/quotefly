@@ -7,6 +7,12 @@ export const QUOTE_DRAFT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
 let writesEnabled = true;
 let activeIdentity: { tenantId: string; userId: string } | null = null;
+type DraftIdentity = { tenantId: string; userId: string };
+type DraftLogoutFlushRegistration = {
+  identity: DraftIdentity;
+  flush: (isCurrent: () => boolean) => Promise<void>;
+};
+let logoutFlushRegistration: DraftLogoutFlushRegistration | null = null;
 
 export type QuoteDraftReadResult =
   | { status: "found"; raw: string }
@@ -148,7 +154,60 @@ export function prepareQuoteBuilderDraftStorage(tenantId: string, userId: string
 export function purgeQuoteBuilderDraftStorage() {
   writesEnabled = false;
   activeIdentity = null;
+  logoutFlushRegistration = null;
   purgeLegacyBrowserDrafts();
+}
+
+function identitiesMatch(left: DraftIdentity | null, right: DraftIdentity) {
+  return Boolean(left && left.tenantId === right.tenantId && left.userId === right.userId);
+}
+
+/**
+ * The builder registers only while it owns the currently authenticated draft
+ * identity. The registration is memory-only; quote contents remain solely in
+ * the authenticated server recovery API.
+ */
+export function registerQuoteBuilderDraftLogoutFlush(
+  tenantId: string,
+  userId: string,
+  flush: (isCurrent: () => boolean) => Promise<void>,
+) {
+  const registration: DraftLogoutFlushRegistration = {
+    identity: { tenantId, userId },
+    flush,
+  };
+  if (!identitiesMatch(activeIdentity, registration.identity)) return () => undefined;
+  logoutFlushRegistration = registration;
+  return () => {
+    if (logoutFlushRegistration === registration) logoutFlushRegistration = null;
+  };
+}
+
+/**
+ * This must run before logout disables draft writes. An identity mismatch is a
+ * safe no-op, preventing a prior workspace from writing through a new session.
+ */
+export async function flushQuoteBuilderDraftBeforeLogout(tenantId: string, userId: string) {
+  const requestedIdentity = { tenantId, userId };
+  const registration = logoutFlushRegistration;
+  if (
+    !registration
+    || !identitiesMatch(activeIdentity, requestedIdentity)
+    || !identitiesMatch(registration.identity, requestedIdentity)
+  ) {
+    return false;
+  }
+
+  try {
+    await registration.flush(() => (
+      writesEnabled
+      && logoutFlushRegistration === registration
+      && identitiesMatch(activeIdentity, requestedIdentity)
+    ));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function readQuoteBuilderDraft(storageKey: string): Promise<QuoteDraftReadResult> {

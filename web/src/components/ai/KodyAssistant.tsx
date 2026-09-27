@@ -1165,8 +1165,11 @@ export function KodyAssistant({
   const originFocusRef = useRef<HTMLElement | null>(null);
   const navigate = useCallback((to: Parameters<typeof guardedNavigate>[0], options?: Parameters<typeof guardedNavigate>[1], closePanel = false) => {
     const follow = () => guardedNavigate(to, options);
-    if (closePanel || window.matchMedia("(max-width: 1023px)").matches) {
-      // On narrow pages the contextual entry replaces the generic launcher.
+    const guardedMobileHandoff = window.matchMedia("(max-width: 1023px)").matches
+      && navigationGuard?.isActive();
+    if (closePanel || guardedMobileHandoff) {
+      // A guarded narrow-screen handoff must expose the page confirmation.
+      // Ordinary workspace navigation keeps the conversation available.
       const origin = originFocusRef.current;
       const returnTarget = origin?.isConnected && origin.getClientRects().length ? origin : launcherRef.current;
       setOpen(false);
