@@ -1,5 +1,40 @@
 # QuickBooks checkpoint - September 27, 2026 (UTC)
 
+## Overnight pause — September 26 evening Pacific / September 27 04:02 UTC
+
+The owner requested that all work be saved and the goal paused until tomorrow. This section supersedes the historical status below. No further implementation, deployment, migration or provider testing is authorized during this pause.
+
+Source is committed and pushed on `feature/quickbooks-staging-acceptance-20260913` through `550b7f9bec1c4ad982f1dde4ed319ef4f8c2b1a6`. Main remains `1d987c16ec07804a9404c47648d28e0f5ca3be11`; PR 9 remains draft/unmerged. The checkpoint documentation is saved in a subsequent documentation-only commit. Production remains unchanged and unapproved.
+
+### Completed and deployed
+
+- Candidate `e977894f468a2299bef57045b5acc0c5ea605486` passed independent source/artifact review, full local launch verification and GitHub CI 129 (`36288154877`). Browser verification passed 196 cases with one existing optional screenshot skip; database verification passed 583 cases across 37 files. The earlier unit total of 408 below includes one skipped test: 407 passed and one skipped.
+- The reviewed partial-tax-identity migration completed on isolated staging through Railway deployment `0c784dbd-44eb-4e2b-97ef-8332db716197`. Actual standard-Prisma runner and independent postcheck passed. Hosted history is 98 total / 97 completed / one historical rollback / zero unresolved. Prior history and unrelated state were preserved.
+- Staging API deployment `547f5867-ed38-4d9e-b3fa-451fa197e2a3` runs E977 on Node 22.23.2 with all 734 source files matched. Health/readiness passed. Sandbox and OAuth-only mode remain enabled; reconciliation, CDC and hosted payments remain disabled. No sandbox accounting write occurred.
+- Staging web deployment `dpl_GZUo6MZPyvpG7SqYKcTUaNYqPAE7` is READY, derived from reviewed preview `dpl_2dVDEfbrzdwM9tR2jTyCUdu7GcYs`. All 241 uploaded source files match E977. Only isolated staging aliases were promoted. Staging is noindex and uses the staging API.
+- The requested ultrawide fix is live: the 3,397 px viewport uses approximately 97% of available content width with no horizontal overflow. The 390 px mobile viewport also has no overflow; the 44 px menu, Escape dismissal and settled focus return passed. This remains browser-emulation evidence, not physical-device testing.
+
+Primary ignored receipts: `.codex_tmp/qbo-e977-staging-rollout-complete-20260927.json`, `qbo-e977-migration-terminal-receipt-20260927.json`, `qbo-e977-stage-postmigration-observation-20260927.json`, `qbo-e977-api-live-proof-20260927.json`, `qbo-e977-web-promoted-source-proof-20260927.json`, `qbo-e977-promoted-web-runtime-proof-20260927.json`, and `qbo-e977-live-responsive-proof-20260927.json`.
+
+### Saved work not deployed
+
+Commit 550 adds migration `20260927030000_restrict_runtime_migration_history` and database privilege tests. Source received independent Sentinel/Opera approval and local `verify:ci` passed (585 database tests across 38 files). GitHub CI 130, run `36292168423`, job `108544223925`, was still running its launch-verification step at checkpoint; initial steps including migration application succeeded. It runs remotely and does not require this workstation to remain on. Check its actual terminal result tomorrow; do not assume success or restart it automatically. No 550 migration/API/web deployment occurred.
+
+The migration-only preparation is saved in `.codex_tmp/qbo-history-hardening-release-20260927`. Current 14-file package digest is `0819788bcb9e5be4bc338d2786c9b0045d485c5196ce1852e28783a53a0fe75d`; earlier digest `3855e7604d4aa7cf461eb3a3443392bf083a2a2bbaeede25e0d2e23b8187e760` is superseded. Its local rehearsal and self-tests passed, but Sentinel returned **CHANGES_REQUIRED**: `migration-runner-template.cjs` accepts a non-public Prisma `schema` URL parameter while its evidence checks only public migration history. Reject every non-public schema and normalize the URL to `schema=public` before any connection or Prisma spawn; add missing/public/other-schema guard tests. Rebuild the inventory and obtain new exact-package Sentinel/Opera review. No artifact was materialized and no hosted action occurred. Runtime migration-history write privileges therefore remain a known hosted issue until this migration is safely applied.
+
+The one-shot harness remains local-only in `.codex_tmp/qbo-tax-estimate-one-shot/` (approved manifest `9ccc724242bb6fe51008db9ed75ee0dc47b6204e971ab5b0e2ceba47b0673f6f`, 36 mocked cases). Its Node 22 parity receipt is `.codex_tmp/qbo-one-shot-runtime-parity-20260927.json`. The executable-window core/successor aggregate in `.codex_tmp/qbo-tax-sandbox-proof-transport/` passed 20 mocks and independent design review, with live authority disabled. The new adapter preparation passed eight mocks but is deliberately non-executable: `HARNESS_DEADLINE_HOOKS_REQUIRED`. Its README documents the required four-file harness patch for immediate in-process deadline guards before claim and POST. Adapter manifest: `0f11f6af4b53d799f1a962f2986b1443f0d5de968c26c315f6c0c258c5728957`. No provider Estimate or Invoice was created.
+
+### Resume in this order
+
+1. Read this section, confirm branch/worktree and CI 130's terminal result. Retain E977 as the deployed API/web identity; 550 is only the newer source identity.
+2. Fix the migration-package schema validation, rerun local guards, obtain independent package approval, then materialize and independently review the exact artifact. Fresh hosted history/config evidence is required before any migration upload. Keep E977 API/web running. The migration service ignores artifact `railway.json`; only the reviewed start-command setting may be changed. Never restart old migration jobs or automatically retry an upload.
+3. Implement and independently review the harness deadline hooks and actual adapter. Preserve old approved manifests as historical evidence; do not imply they approve changed bytes.
+4. Obtain a fresh owner-exclusive staging-use confirmation before opening a bounded sandbox capture window. The prior question remains unanswered, and the window was never opened. A 03:44 UTC read-only aggregate passed, with zero mappings, tax context, invoice/tax operations, provider IDs and webhook records; it must be refreshed. Never migrate during a capture window. Use the reviewed E977 GET-only plan at `.codex_tmp/qbo-tax-capture-release/capture-window-plan-e977894f-20260927.md` and restore OAuth-only mode with verified evidence on every exit.
+5. Repair and test operational-alert delivery. The staging monitor's Resend key returned `API_KEY_INVALID`; owner replacement is still unconfirmed. Do not retrieve or expose values. Intuit sign-in subsequently succeeded, but the app remains IN DEVELOPMENT and production approval/attestations remain unproved.
+6. Gather actual positive-tax Estimate/Invoice parity, signed webhook, recovery, payment and remaining release evidence before any production enablement or availability claim. Keep public claims limited to demonstrated capabilities.
+
+Ignored tools/evidence remain on this workstation under `.codex_tmp`; they are not uploaded to Git because they include operational tooling requiring separate review. An additional persistent local copy of the immutable E977 release artifact is saved under `.codex_tmp/overnight-checkpoint-20260927/`. Its preservation receipt records hashes and excluded transient directories. Secrets and env files remain private in their existing locations. All specialist tasks have stopped. Resume only after the owner asks to continue.
+
 ## Saved baseline and failed browser gates
 
 The feature branch baseline is `582e6dfa8e75126c798d85178a82f1630f7eef05`. Remote main remains `1d987c16ec07804a9404c47648d28e0f5ca3be11`; draft PR 9 is unmerged. No production deployment is approved by this checkpoint.
