@@ -11,6 +11,8 @@ import { processQuickBooksWebhookClaim, processQuickBooksWebhookForTenant } from
 const pendingKey = "quoteflyPendingInvoiceIds";
 const providerKey = "quoteflyPendingProviderInvoiceIds";
 const terminalKey = "quoteflyInvoiceTerminalFailures";
+const deferredTaxKey = "quoteflyDeferredTaxInvoiceIds";
+const taxUnavailable = "QUICKBOOKS_TAX_INVOICE_WORKFLOW_UNAVAILABLE";
 
 async function fixture(localIds: string[], providerIds: string[] = []) {
   const stamp = randomUUID();
@@ -62,6 +64,40 @@ async function addMappedInvoice(f: Awaited<ReturnType<typeof fixture>>, provider
 
 describe("QuickBooks webhook invoice fanout checkpoints", () => {
   afterAll(async () => { await prisma.$disconnect(); });
+
+  test("tax-only work dead-letters once with its linked invoice IDs retained", async () => {
+    const f = await fixture(["tax-invoice"]);
+    const reconcile = vi.fn(async () => {
+      throw new QuickBooksReconciliationError(taxUnavailable, "private tax details", false);
+    });
+    const context = { prisma, runtimeEnv: env, tenantId: f.tenant.id, reconcile };
+    expect(await processQuickBooksWebhookForTenant(context)).toEqual({ status: "dead", failureCode: taxUnavailable });
+    expect(await f.read()).toMatchObject({ status: "DEAD", lastError: taxUnavailable, payload: {
+      [pendingKey]: [], [deferredTaxKey]: ["tax-invoice"], [terminalKey]: [[taxUnavailable, 1]],
+    } });
+    expect(await processQuickBooksWebhookForTenant(context)).toEqual({ status: "idle" });
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify((await f.read()).payload)).not.toContain("private tax details");
+  });
+
+  test("tax deferral survives page continuation while direct siblings drain exactly once", async () => {
+    const ids = Array.from({ length: 11 }, (_, i) => `invoice-${i}`);
+    const f = await fixture(ids);
+    const reconcile = vi.fn(async ({ invoiceId }: { invoiceId: string }) => {
+      if (invoiceId === ids[1]) throw new QuickBooksReconciliationError(taxUnavailable, "deferred", false);
+      return success(invoiceId);
+    });
+    const context = { prisma, runtimeEnv: env, tenantId: f.tenant.id, reconcile };
+    expect(await processQuickBooksWebhookForTenant(context)).toEqual({ status: "processed" });
+    expect(await f.read()).toMatchObject({ status: "RECEIVED", payload: {
+      [pendingKey]: [ids[10]], [deferredTaxKey]: [ids[1]],
+    } });
+    expect(await processQuickBooksWebhookForTenant(context)).toEqual({ status: "dead", failureCode: taxUnavailable });
+    expect(reconcile.mock.calls.map(([args]) => args.invoiceId)).toEqual(ids);
+    expect(await f.read()).toMatchObject({ status: "DEAD", payload: {
+      [pendingKey]: [], [deferredTaxKey]: [ids[1]], [terminalKey]: [[taxUnavailable, 1]],
+    } });
+  });
 
   test("a terminal middle invoice does not skip siblings and dead-letters only after draining", async () => {
     const f = await fixture(["first", "middle", "third"]);

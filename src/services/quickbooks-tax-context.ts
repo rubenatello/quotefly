@@ -75,7 +75,13 @@ async function lockSource(tx: Tx, tenantId: string, invoiceId: string) {
   await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Invoice" WHERE "tenantId"=${tenantId} AND "id"=${invoiceId} FOR SHARE`);
 }
 
-async function loadBinding(tx: Tx, tenantId: string, environment: Environment, invoiceId: string) {
+type ExpectedCanonicalTaxInvoiceLifecycle = Readonly<{
+  expectedTaxEstimateOperationId: string;
+  allowedInvoiceOperationId?: string;
+}>;
+
+async function loadBinding(tx: Tx, tenantId: string, environment: Environment, invoiceId: string,
+  expectedLifecycle?: ExpectedCanonicalTaxInvoiceLifecycle) {
   const connection = await tx.quickBooksConnection.findFirst({ where: {
     tenantId, environment, status: "CONNECTED", deletedAtUtc: null, disconnectRequestedAtUtc: null,
     scopes: { has: "com.intuit.quickbooks.accounting" }, setupConfirmedAtUtc: { not: null },
@@ -110,16 +116,45 @@ async function loadBinding(tx: Tx, tenantId: string, environment: Environment, i
       || !line.quantity.mul(line.unitPrice).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).equals(line.lineTotal))) {
     reject("QUICKBOOKS_TAX_INVOICE_CHANGED");
   }
-  const [direct, legacy, attempted] = await Promise.all([
-    tx.quickBooksInvoiceOperation.findFirst({ where: { tenantId, invoiceId }, select: { id: true } }),
+  const [direct, legacy, attempted, expectedParent] = await Promise.all([
+    tx.quickBooksInvoiceOperation.findFirst({ where: { tenantId, invoiceId },
+      select: { id: true, quickBooksConnectionId: true, providerRequestId: true,
+        taxEstimateOperationId: true, status: true, archivedAtUtc: true } }),
     tx.quickBooksInvoiceSync.findFirst({ where: { tenantId, quoteId: invoice.sourceQuoteId, quickBooksInvoiceId: { not: null } }, select: { id: true } }),
-    tx.quickBooksTaxEstimateOperation.findFirst({ where: { tenantId, invoiceId, OR: [
+    tx.quickBooksTaxEstimateOperation.findFirst({ where: { tenantId, invoiceId,
+      ...(expectedLifecycle ? { id: { not: expectedLifecycle.expectedTaxEstimateOperationId } } : {}), OR: [
       { attemptCount: { gt: 0 } }, { attemptTokenHash: { not: null } }, { lastAttemptAtUtc: { not: null } },
       { providerEstimateId: { not: null } }, { status: { notIn: ["REVIEWED", "FAILED", "SUPERSEDED"] } },
     ] }, select: { id: true } }),
+    expectedLifecycle ? tx.quickBooksTaxEstimateOperation.findFirst({ where: {
+      id: expectedLifecycle.expectedTaxEstimateOperationId, tenantId, invoiceId,
+      quickBooksConnectionId: connection.id, providerRealmId: connection.realmId,
+      status: "ESTIMATE_CANONICAL", supersededAtUtc: null,
+      invoiceVersion: invoice.version, connectionGeneration: generation,
+      invoiceTaxContextId: { not: null }, invoiceTaxContextRevision: { not: null },
+      invoiceTaxContextInputHash: { not: null }, taxContext: { is: { tenantId, invoiceId, supersededAtUtc: null } },
+      providerEstimateId: { not: null }, providerEstimateSyncToken: { not: null },
+      providerEstimateUpdatedAtUtc: { not: null }, canonicalEstimateHash: { not: null },
+      canonicalAtUtc: { not: null }, providerSubtotal: invoice.subtotalAmount,
+      providerTax: invoice.taxAmount, providerTotal: invoice.totalAmount,
+    }, select: { id: true, invoiceRequestId: true } }) : Promise.resolve(null),
   ]);
-  if (direct || legacy) reject("QUICKBOOKS_TAX_COMPETING_INVOICE_OPERATION");
-  if (attempted) reject("QUICKBOOKS_TAX_RECONCILIATION_REQUIRED");
+  if (legacy) reject("QUICKBOOKS_TAX_COMPETING_INVOICE_OPERATION");
+  if (!expectedLifecycle) {
+    if (direct) reject("QUICKBOOKS_TAX_COMPETING_INVOICE_OPERATION");
+    if (attempted) reject("QUICKBOOKS_TAX_RECONCILIATION_REQUIRED");
+  } else {
+    if (!expectedParent || attempted) reject("QUICKBOOKS_TAX_RECONCILIATION_REQUIRED");
+    if (expectedLifecycle.allowedInvoiceOperationId) {
+      if (!direct || direct.id !== expectedLifecycle.allowedInvoiceOperationId
+        || direct.quickBooksConnectionId !== connection.id
+        || direct.taxEstimateOperationId !== expectedParent.id
+        || direct.providerRequestId !== expectedParent.invoiceRequestId
+        || direct.status === "SUCCEEDED" || direct.archivedAtUtc) {
+        reject("QUICKBOOKS_TAX_COMPETING_INVOICE_OPERATION");
+      }
+    } else if (direct) reject("QUICKBOOKS_TAX_COMPETING_INVOICE_OPERATION");
+  }
   await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "QuickBooksCustomerMap"
     WHERE "tenantId"=${tenantId} AND "quickBooksConnectionId"=${connection.id}
       AND "customerId"=${invoice.customerId} AND "deletedAtUtc" IS NULL ORDER BY "id" FOR SHARE`);
@@ -272,9 +307,9 @@ export async function readInvoiceTaxContextAssessment(prisma: PrismaClient, acto
   }, txOptions);
 }
 export async function lockAndReadCurrentInvoiceTaxContext(tx: Tx, actor: Actor, environment: Environment,
-  invoiceId: string, expectedRevision: number) {
+  invoiceId: string, expectedRevision: number, expectedLifecycle?: ExpectedCanonicalTaxInvoiceLifecycle) {
   const managerId = await lockManager(tx, actor); await lockSource(tx, actor.tenantId, invoiceId);
-  const binding = await loadBinding(tx, actor.tenantId, environment, invoiceId);
+  const binding = await loadBinding(tx, actor.tenantId, environment, invoiceId, expectedLifecycle);
   const row = await tx.invoiceTaxContext.findFirst({ where: { tenantId: actor.tenantId, invoiceId, supersededAtUtc: null },
     include: { lines: { orderBy: { position: "asc" } } } });
   if (!row) reject("QUICKBOOKS_TAX_CONTEXT_REQUIRED");

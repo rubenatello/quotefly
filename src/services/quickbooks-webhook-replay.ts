@@ -19,9 +19,16 @@ const failureCodes = new Set([
   "QUICKBOOKS_WEBHOOK_INVOICE_FAILURES", "QUICKBOOKS_WORKER_FAILURE", "QUICKBOOKS_TEMPORARY",
   "QUICKBOOKS_INVOICE_INVALID", "QUICKBOOKS_REAUTH_REQUIRED", "QUICKBOOKS_WEBHOOK_OPERATION_UNSUPPORTED",
   "QUICKBOOKS_INVOICE_DELETED_REVIEW_REQUIRED", "QUICKBOOKS_REFUND_RECEIPT_DELETED_REVIEW_REQUIRED",
+  "QUICKBOOKS_TAX_INVOICE_WORKFLOW_UNAVAILABLE",
 ]);
 function safeFailure(value: string | null) { return value && failureCodes.has(value) ? value : "QUICKBOOKS_REVIEW_REQUIRED"; }
-function supported(event: { eventType: string; operation: string | null; entityId: string | null }) {
+function supported(event: { eventType: string; operation: string | null; entityId: string | null;
+  lastError: string | null; payload: Prisma.JsonValue }) {
+  if (event.lastError === "QUICKBOOKS_TAX_INVOICE_WORKFLOW_UNAVAILABLE") return false;
+  if (event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)) {
+    const deferred = event.payload.quoteflyDeferredTaxInvoiceIds;
+    if (deferred !== undefined && (!Array.isArray(deferred) || deferred.length > 0)) return false;
+  }
   if (!event.entityId) return false;
   const operations = event.eventType === "Invoice" ? ["Create", "Update", "Void"]
     : event.eventType === "Payment" ? ["Create", "Update", "Void", "Delete"]
@@ -94,7 +101,7 @@ export async function listQuickBooksDeadLetters(prisma: PrismaClient, actor: Act
       where: { ...baseWhere, ...seek }, take: pageSize + 1,
       orderBy: [{ deadAtUtc: { sort: "desc", nulls: "last" } }, { id: "desc" }],
       select: { id: true, eventType: true, operation: true, entityId: true, status: true, lastError: true,
-        attemptCount: true, receivedAtUtc: true, deadAtUtc: true },
+        attemptCount: true, receivedAtUtc: true, deadAtUtc: true, payload: true },
     });
     const events = rows.slice(0, pageSize);
     const hasMore = rows.length > pageSize;

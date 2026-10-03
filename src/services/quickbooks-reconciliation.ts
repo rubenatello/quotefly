@@ -330,6 +330,7 @@ async function loadContext(prisma: PrismaClient, tenantId: string, invoiceId: st
       where: { tenantId, invoiceId, archivedAtUtc: null, providerInvoiceId: { not: null } },
       select: {
         id: true,
+        taxEstimateOperationId: true,
         providerInvoiceId: true,
         payloadHash: true,
         allowOnlineAchPayment: true,
@@ -355,6 +356,10 @@ async function loadContext(prisma: PrismaClient, tenantId: string, invoiceId: st
     });
     if (!operation?.providerInvoiceId) {
       throw new QuickBooksReconciliationError("QUICKBOOKS_OPERATION_NOT_READY", "The invoice has no provider identity to reconcile.", false);
+    }
+    if (operation.taxEstimateOperationId) {
+      throw new QuickBooksReconciliationError("QUICKBOOKS_TAX_INVOICE_WORKFLOW_UNAVAILABLE",
+        "Taxable QuickBooks invoice processing is not available yet.", false);
     }
     if (operation.lastFailureCode && MISSING_PROVIDER_INVOICE_REVIEW_CODES.includes(operation.lastFailureCode)) {
       throw new QuickBooksReconciliationError(
@@ -432,6 +437,7 @@ async function quarantineQuickBooksReconciliationTransaction(
     where: {
       id: params.operationId,
       tenantId: params.tenantId,
+      taxEstimateOperationId: null,
       ...(params.expectedGeneration ?? {}),
       OR: [
         { lastFailureCode: null },
@@ -836,7 +842,8 @@ export async function reconcileQuickBooksInvoice(params: {
     });
     const [currentOperation, existingPayments] = await Promise.all([
       transaction.quickBooksInvoiceOperation.findFirstOrThrow({
-        where: { id: context.operation.id, tenantId: params.tenantId, invoiceId: params.invoiceId, archivedAtUtc: null },
+        where: { id: context.operation.id, tenantId: params.tenantId, invoiceId: params.invoiceId, archivedAtUtc: null,
+          taxEstimateOperationId: null },
         select: {
           id: true,
           providerSyncToken: true,
@@ -957,6 +964,7 @@ export async function reconcileQuickBooksInvoice(params: {
       where: {
         id: currentOperation.id,
         tenantId: params.tenantId,
+        taxEstimateOperationId: null,
         providerSyncToken: currentOperation.providerSyncToken,
         providerUpdatedAtUtc: currentOperation.providerUpdatedAtUtc,
         lastReconciledAtUtc: currentOperation.lastReconciledAtUtc,

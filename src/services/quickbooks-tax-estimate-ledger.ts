@@ -106,11 +106,12 @@ function requireFreshFacts(source: TaxReviewSource, now: Date) {
   })) reject("QUICKBOOKS_TAX_FACTS_STALE");
 }
 
-async function requireCurrentSource(tx: Transaction, actor: Actor, source: TaxReviewSource, now: Date) {
+async function requireCurrentSource(tx: Transaction, actor: Actor, source: TaxReviewSource, now: Date,
+  expectedLifecycle?: { expectedTaxEstimateOperationId: string; allowedInvoiceOperationId?: string }) {
   if (source.tenantId !== actor.tenantId) reject("QUICKBOOKS_TAX_REVIEW_CHANGED");
   requireFreshFacts(source, now);
   const currentContext = await lockAndReadCurrentInvoiceTaxContext(tx, actor, source.connection.environment,
-    source.invoiceId, source.invoiceTaxContext.revision);
+    source.invoiceId, source.invoiceTaxContext.revision, expectedLifecycle);
   const context = currentContext.row;
   if (context.id !== source.invoiceTaxContext.id || context.inputHash !== source.invoiceTaxContext.inputHash
     || context.confirmedByTenantUserId !== source.invoiceTaxContext.confirmedByTenantUserId
@@ -147,7 +148,9 @@ async function requireCurrentSource(tx: Transaction, actor: Actor, source: TaxRe
       quickBooksInvoiceId: { not: null },
     }, select: { id: true } }),
   ]);
-  if (invoiceOperation || legacyInvoice) reject("QUICKBOOKS_TAX_COMPETING_INVOICE_OPERATION");
+  if ((invoiceOperation && invoiceOperation.id !== expectedLifecycle?.allowedInvoiceOperationId) || legacyInvoice) {
+    reject("QUICKBOOKS_TAX_COMPETING_INVOICE_OPERATION");
+  }
   const connection = await tx.quickBooksConnection.findFirst({ where: {
     id: source.connection.id, tenantId: actor.tenantId, realmId: source.connection.realmId,
     connectedAtUtc: new Date(source.connection.connectedAtUtc), environment: source.connection.environment,
@@ -251,6 +254,53 @@ function connectionTarget(actor: Actor, source: TaxReviewSource) {
     environment: source.connection.environment,
     generation: source.connection.generation,
   });
+}
+
+/**
+ * Internal taxable-Invoice claim fence. This returns restricted financial
+ * evidence and must stay inside backend services; never serialize or log it.
+ * Provider-free and transaction-scoped: the caller owns the surrounding commit.
+ */
+export async function lockAndReadCurrentCanonicalTaxEstimate(tx: Transaction, actor: Actor,
+  environment: QuickBooksCredentialRuntimeEnv, operationId: string,
+  options?: { allowedInvoiceOperationId?: string; discoverBoundInvoiceOperation?: boolean }) {
+  const preliminary = await tx.quickBooksTaxEstimateOperation.findFirst({
+    where: { id: operationId, tenantId: actor.tenantId }, select: { invoiceId: true },
+  });
+  if (!preliminary) reject("QUICKBOOKS_TAX_OPERATION_NOT_FOUND");
+  const managerId = await lockManager(tx, actor);
+  await lockInvoice(tx, actor.tenantId, preliminary.invoiceId);
+  await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "QuickBooksTaxEstimateOperation"
+    WHERE "id" = ${operationId} AND "tenantId" = ${actor.tenantId} FOR UPDATE`);
+  const current = await tx.quickBooksTaxEstimateOperation.findFirst({
+    where: { id: operationId, tenantId: actor.tenantId },
+  });
+  if (!current) reject("QUICKBOOKS_TAX_OPERATION_NOT_FOUND");
+  if (current.status !== "ESTIMATE_CANONICAL" || current.supersededAtUtc
+    || !current.providerEstimateId || !current.providerEstimateSyncToken
+    || !current.providerEstimateUpdatedAtUtc || !current.canonicalEstimateHash
+    || current.providerSubtotal === null || current.providerTax === null
+    || current.providerTotal === null || !current.canonicalAtUtc) {
+    reject("QUICKBOOKS_TAX_CANONICAL_STATE_INVALID");
+  }
+  const discoveredChild = options?.discoverBoundInvoiceOperation
+    ? await tx.quickBooksInvoiceOperation.findFirst({ where: {
+      tenantId: actor.tenantId, invoiceId: current.invoiceId,
+      quickBooksConnectionId: current.quickBooksConnectionId,
+      providerRequestId: current.invoiceRequestId, taxEstimateOperationId: current.id,
+    }, select: { id: true } }) : null;
+  const allowedInvoiceOperationId = options?.allowedInvoiceOperationId ?? discoveredChild?.id;
+  const review = verifiedStoredReview(current, environment);
+  await requireCurrentSource(tx, actor, review.source, new Date(), {
+    expectedTaxEstimateOperationId: current.id,
+    ...(allowedInvoiceOperationId ? { allowedInvoiceOperationId } : {}),
+  });
+  if (current.providerSubtotal.toFixed(2) !== review.source.subtotal
+    || current.providerTax.toFixed(2) !== review.source.quotedTax
+    || current.providerTotal.toFixed(2) !== review.source.total) {
+    reject("QUICKBOOKS_TAX_QUOTED_TOTAL_MISMATCH");
+  }
+  return freeze({ current, review, managerId, existingTaxInvoiceOperationId: discoveredChild?.id ?? null });
 }
 
 const summarySelect = {

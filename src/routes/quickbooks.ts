@@ -2505,6 +2505,7 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
             invoiceId,
             archivedAtUtc: null,
             status: "SUCCEEDED",
+            taxEstimateOperationId: null,
             providerInvoiceLink: { not: null },
             providerInvoiceId: { not: null },
             invoiceLinkFetchedAtUtc: { not: null },

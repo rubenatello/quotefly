@@ -1161,8 +1161,10 @@ model QuickBooksTaxEstimateOperation {
   connection                   QuickBooksConnection                 @relation(fields: [quickBooksConnectionId, tenantId], references: [id, tenantId], onDelete: Restrict, map: "QbTaxEstimate_connection_tenant_fkey")
   requestedByTenantUser        TenantUser                           @relation("QuickBooksTaxEstimateRequester", fields: [requestedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict, map: "QbTaxEstimate_requester_tenant_fkey")
   reviewedByTenantUser         TenantUser                           @relation("QuickBooksTaxEstimateReviewer", fields: [reviewedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict, map: "QbTaxEstimate_reviewer_tenant_fkey")
+  taxInvoiceOperation          QuickBooksInvoiceOperation?          @relation("QuickBooksTaxInvoiceEstimate")
 
   @@unique([id, tenantId])
+  @@unique([id, invoiceRequestId, invoiceId, quickBooksConnectionId, tenantId], map: "QbTaxEstimate_invoice_request_binding_key")
   @@unique([tenantId, invoiceId, reviewRevision], map: "QbTaxEstimate_tenant_invoice_revision_key")
   @@unique([tenantId, estimateRequestId], map: "QbTaxEstimate_tenant_estimate_request_key")
   @@unique([tenantId, invoiceRequestId], map: "QbTaxEstimate_tenant_invoice_request_key")
@@ -1205,14 +1207,22 @@ model QuickBooksInvoiceOperation {
   createdAt               DateTime                         @default(now()) @db.Timestamptz(3)
   updatedAt               DateTime                         @default(now()) @updatedAt @db.Timestamptz(3)
   archivedAtUtc           DateTime?                        @db.Timestamptz(3)
+  taxEstimateOperationId  String?
+  taxAttemptTokenHash     String?                          @db.VarChar(64)
+  taxCanonicalInvoiceHash String?                          @db.VarChar(64)
+  taxProjectionMatchedAtUtc DateTime?                      @db.Timestamptz(3)
+  taxParityContractVersion Int?
   tenant                  Tenant                           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   invoice                 Invoice                          @relation(fields: [invoiceId, tenantId], references: [id, tenantId], onDelete: Restrict)
   connection              QuickBooksConnection             @relation(fields: [quickBooksConnectionId, tenantId], references: [id, tenantId], onDelete: Restrict)
   requestedByTenantUser   TenantUser                       @relation(fields: [requestedByTenantUserId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  taxEstimateOperation    QuickBooksTaxEstimateOperation?  @relation("QuickBooksTaxInvoiceEstimate", fields: [taxEstimateOperationId, providerRequestId, invoiceId, quickBooksConnectionId, tenantId], references: [id, invoiceRequestId, invoiceId, quickBooksConnectionId, tenantId], onDelete: Restrict, onUpdate: Restrict, map: "QbInvoiceOperation_tax_estimate_binding_fkey")
 
   @@unique([id, tenantId])
   @@unique([tenantId, invoiceId])
   @@unique([tenantId, providerRequestId])
+  @@unique([taxEstimateOperationId], map: "QbInvoiceOperation_tax_estimate_key")
+  @@unique([taxEstimateOperationId, providerRequestId, invoiceId, quickBooksConnectionId, tenantId], map: "QbInvoiceOperation_tax_binding_key")
   @@unique([quickBooksConnectionId, providerInvoiceId])
   @@index([tenantId, status, archivedAtUtc, updatedAt(sort: Desc), id(sort: Desc)], map: "QuickBooksInvoiceOperation_status_updated_idx")
   @@index([tenantId, claimExpiresAtUtc, status], map: "QuickBooksInvoiceOperation_claim_expiry_idx")

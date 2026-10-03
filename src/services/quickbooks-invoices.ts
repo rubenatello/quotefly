@@ -37,6 +37,7 @@ export class QuickBooksInvoiceOperationError extends Error {
 
 export const QuickBooksInvoiceOperationPublicSelect = {
   id: true,
+  taxEstimateOperationId: true,
   invoiceId: true,
   quickBooksConnectionId: true,
   providerRealmId: true,
@@ -334,6 +335,13 @@ function toPublicOperation(
   return operation;
 }
 
+function requireDirectInvoiceOperation(operation: QuickBooksInvoiceOperationPublic | null) {
+  if (operation?.taxEstimateOperationId) {
+    throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_TAX_INVOICE_WORKFLOW_UNAVAILABLE",
+      "Taxable QuickBooks invoice processing is not available yet.");
+  }
+}
+
 /**
  * Canonical reconciliation is the proof that the provider identity,
  * immutable invoice fingerprint, and provider generation were reviewed as
@@ -342,6 +350,7 @@ function toPublicOperation(
 export function quickBooksInvoiceHasCanonicalReconciliation(
   operation: QuickBooksInvoiceOperationPublic,
 ): boolean {
+  if (operation.taxEstimateOperationId) return false;
   const hasProviderGeneration = Boolean(
     operation.providerSyncToken
     && /^(0|[1-9][0-9]*)$/.test(operation.providerSyncToken)
@@ -376,6 +385,7 @@ export function quickBooksInvoiceReconciliationAvailable(
   operation: QuickBooksInvoiceOperationPublic,
   nowMs = Date.now(),
 ): boolean {
+  if (operation.taxEstimateOperationId) return false;
   if (operation.status === "RECONCILIATION_REQUIRED") return true;
   if (operation.status === "SUCCEEDED") {
     return !quickBooksInvoiceHasCanonicalReconciliation(operation);
@@ -736,6 +746,7 @@ export async function getQuickBooksInvoiceSyncPreview(
  * eligible. Timeouts, unknown outcomes, and any retained provider identity must
  * stay in reconciliation, even if an inconsistent row is marked FAILED. */
 export function quickBooksInvoiceRetryAvailable(operation: QuickBooksInvoiceOperationPublic): boolean {
+  if (operation.taxEstimateOperationId) return false;
   return operation.status === "FAILED"
     && !operation.providerInvoiceId
     && !operation.providerSyncToken
@@ -766,6 +777,7 @@ export async function claimQuickBooksInvoicePublish(
   await lockCommandKey(transaction, access, commandKeyHash);
   await lockInvoiceOperation(transaction, access, params.invoiceId);
   const context = await loadSyncContext(transaction, access, params.invoiceId, params.paymentReview);
+  requireDirectInvoiceOperation(context.operation);
 
   const reusedCommand = await transaction.invoiceEvent.findFirst({
     where: { tenantId: access.tenantId, commandKeyHash },
@@ -963,6 +975,7 @@ export async function assertQuickBooksInvoiceCreateFence(
       id: claim.operation.id, tenantId: access.tenantId, invoiceId: claim.operation.invoiceId,
       quickBooksConnectionId: claim.connection.id, providerRealmId: claim.operation.providerRealmId,
       providerRequestId: claim.providerRequestId, payloadHash: claim.operation.payloadHash,
+      taxEstimateOperationId: null,
       status: "PROCESSING", claimTokenHash: sha256(claim.claimToken), archivedAtUtc: null,
       providerInvoiceId: null,
       claimExpiresAtUtc: { gt: new Date(Date.now() + requiredRemainingMs) },
@@ -1019,6 +1032,7 @@ export async function bindCreatedQuickBooksInvoiceIdentity(
       id: claim.operation.id, tenantId: access.tenantId, invoiceId: claim.operation.invoiceId,
       quickBooksConnectionId: claim.connection.id, providerRealmId: claim.operation.providerRealmId,
       providerRequestId: claim.providerRequestId, payloadHash: claim.operation.payloadHash, archivedAtUtc: null,
+      taxEstimateOperationId: null,
     },
     select: { ...QuickBooksInvoiceOperationPublicSelect, claimTokenHash: true },
   });
@@ -1072,6 +1086,7 @@ async function finishOperation(
       tenantId: access.tenantId,
       invoiceId: params.invoiceId,
       status: params.expectedStatus,
+      taxEstimateOperationId: null,
       claimTokenHash: sha256(params.claimToken),
       archivedAtUtc: null,
     },
@@ -1198,6 +1213,7 @@ export async function markQuickBooksInitialReconciliationRequired(
       tenantId: access.tenantId,
       invoiceId: params.invoiceId,
       archivedAtUtc: null,
+      taxEstimateOperationId: null,
     },
     select: QuickBooksInvoiceOperationPublicSelect,
   });
@@ -1275,6 +1291,7 @@ export async function claimQuickBooksInvoiceReconciliation(
   await setTenantRlsContext(transaction, access.tenantId);
   await lockInvoiceOperation(transaction, access, invoiceId);
   const context = await loadSyncContext(transaction, access, invoiceId);
+  requireDirectInvoiceOperation(context.operation);
   if (!context.operation) {
     throw new QuickBooksInvoiceOperationError(404, "QUICKBOOKS_OPERATION_NOT_FOUND", "No QuickBooks invoice operation exists for this invoice.");
   }
@@ -1392,6 +1409,7 @@ export async function bindQuickBooksInvoiceReconciliationIdentity(
       status: "RECONCILING",
       claimTokenHash: sha256(params.claimToken),
       archivedAtUtc: null,
+      taxEstimateOperationId: null,
     },
     select: { id: true, providerInvoiceId: true },
   });

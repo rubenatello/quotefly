@@ -17,6 +17,8 @@ type ProcessingContext = {
 
 const RETRY_COUNTS_KEY = "quoteflyInvoiceRetryCounts";
 const TERMINAL_FAILURES_KEY = "quoteflyInvoiceTerminalFailures";
+const DEFERRED_TAX_INVOICES_KEY = "quoteflyDeferredTaxInvoiceIds";
+const TAX_WORKFLOW_UNAVAILABLE = "QUICKBOOKS_TAX_INVOICE_WORKFLOW_UNAVAILABLE";
 const MAX_INVOICE_ATTEMPTS = 8;
 const MAX_FAILURE_CODES = 20;
 
@@ -59,6 +61,7 @@ export async function processQuickBooksWebhookClaim(
     );
     const retries = boundedCounts(payload, RETRY_COUNTS_KEY);
     const terminal = boundedCounts(payload, TERMINAL_FAILURES_KEY);
+    const deferredTaxInvoices = new Set(webhookPayloadStringArray(payload, DEFERRED_TAX_INVOICES_KEY) ?? []);
     const retryFailures = new Map<string, string>();
     for (const invoiceId of work.invoiceIds) {
       let retryCode: string | undefined;
@@ -87,6 +90,12 @@ export async function processQuickBooksWebhookClaim(
         retries.delete(invoiceId);
       }
       if (terminalCode) {
+        // Keep the linked local Invoice identity for later reviewed recovery,
+        // particularly when the notification itself identifies a Payment or RefundReceipt.
+        if (terminalCode === TAX_WORKFLOW_UNAVAILABLE) {
+          deferredTaxInvoices.add(invoiceId);
+          if (deferredTaxInvoices.size > 1_000) throw new Error("QUICKBOOKS_WEBHOOK_WORKLIST_INVALID");
+        }
         // Only sanitized, bounded codes/counts are retained, never provider error text.
         const code = terminal.has(terminalCode) || terminal.size < MAX_FAILURE_CODES - 1
           ? terminalCode : "QUICKBOOKS_OTHER_INVOICE_FAILURES";
@@ -96,6 +105,7 @@ export async function processQuickBooksWebhookClaim(
         ...payload,
         [RETRY_COUNTS_KEY]: [...retries],
         [TERMINAL_FAILURES_KEY]: [...terminal],
+        [DEFERRED_TAX_INVOICES_KEY]: [...deferredTaxInvoices],
       }, work.remainingProviderInvoiceIds, pending);
     }
     if (work.remainingProviderInvoiceIds.length > 0 || pending.some((id) => !retryFailures.has(id))) {
@@ -111,7 +121,8 @@ export async function processQuickBooksWebhookClaim(
       return { status: outcome === "DEAD" ? "dead" : "failed", failureCode };
     }
     if (terminal.size > 0) {
-      const failureCode = "QUICKBOOKS_WEBHOOK_INVOICE_FAILURES";
+      const failureCode = terminal.size === 1 && terminal.has(TAX_WORKFLOW_UNAVAILABLE)
+        ? TAX_WORKFLOW_UNAVAILABLE : "QUICKBOOKS_WEBHOOK_INVOICE_FAILURES";
       const outcome = await failQuickBooksWebhookEvent(prisma, claim, failureCode, { retryable: false });
       return { status: outcome === "DEAD" ? "dead" : "failed", failureCode };
     }

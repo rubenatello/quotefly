@@ -88,6 +88,11 @@ test("restricted fields are excluded from RAG while reviewed content fields are 
     "QuickBooksConnection.accessTokenEncrypted",
     "QuickBooksConnection.refreshTokenEncrypted",
     "QuickBooksInvoiceOperation.providerInvoiceLink",
+    "QuickBooksInvoiceOperation.taxAttemptTokenHash",
+    "QuickBooksInvoiceOperation.taxEstimateOperationId",
+    "QuickBooksInvoiceOperation.taxCanonicalInvoiceHash",
+    "QuickBooksInvoiceOperation.taxProjectionMatchedAtUtc",
+    "QuickBooksInvoiceOperation.taxParityContractVersion",
   ]) {
     assert.equal(fields.get(fieldName)?.classification, "C4_RESTRICTED", fieldName);
     assert.equal(fields.get(fieldName)?.ragStatus, "EXCLUDED", fieldName);

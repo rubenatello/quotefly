@@ -45,6 +45,26 @@ describe("authorized QuickBooks dead-letter replay", () => {
     await prisma.$disconnect();
   });
 
+  test("tax-deferred events remain preserved and non-replayable until a tax reconciler exists", async () => {
+    for (const { lastError, deferred } of [
+      { lastError: "QUICKBOOKS_TAX_INVOICE_WORKFLOW_UNAVAILABLE", deferred: [] },
+      { lastError: "QUICKBOOKS_TAX_INVOICE_WORKFLOW_UNAVAILABLE", deferred: ["private-tax-invoice"] },
+      { lastError: "QUICKBOOKS_WEBHOOK_INVOICE_FAILURES", deferred: ["private-tax-invoice"] },
+      { lastError: "QUICKBOOKS_WEBHOOK_INVOICE_FAILURES", deferred: "malformed-private-tax-invoice" },
+      { lastError: "QUICKBOOKS_WEBHOOK_INVOICE_FAILURES", deferred: null },
+    ]) {
+      const f = await fixture();
+      const payload = { ...f.payload, quoteflyDeferredTaxInvoiceIds: deferred };
+      const before = await prisma.quickBooksWebhookEvent.update({ where: { id: f.event.id }, data: { lastError, payload } });
+      const list = await listQuickBooksDeadLetters(prisma, f.actor, env, 10);
+      expect(list.events).toEqual([expect.objectContaining({ id: f.event.id, replaySupported: false })]);
+      expect(JSON.stringify(list)).not.toMatch(/private-tax|private-provider|payload|entityId/);
+      await expect(f.replay()).rejects.toMatchObject({ status: 409, code: "QUICKBOOKS_EVENT_NOT_REPLAYABLE" });
+      expect(await prisma.quickBooksWebhookEvent.findUniqueOrThrow({ where: { id: f.event.id } })).toEqual(before);
+      expect(await prisma.quickBooksWebhookReplay.count({ where: { tenantId: f.tenant.id } })).toBe(0);
+    }
+  });
+
   test("queues once, strips only checkpoints, preserves provider facts and audits without content", async () => {
     const f = await fixture();
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("No provider call permitted"));
