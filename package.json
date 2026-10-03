@@ -64,7 +64,7 @@
     "@types/pdfkit": "^0.17.5",
     "bcryptjs": "^3.0.3",
     "dotenv": "^17.4.1",
-    "fastify": "^5.12.1",
+    "fastify": "^5.12.5",
     "fastify-raw-body": "^5.0.0",
     "ioredis": "^5.11.1",
     "js-tiktoken": "^1.0.21",

@@ -15,6 +15,15 @@ const CLAIM_TTL_MS = 2 * 60 * 1000;
 // taxable catalog item cannot cause Intuit to calculate tax for this release.
 const QUICKBOOKS_NON_TAX_CODE = "NON";
 
+const INVOICE_DRAFT_FENCE_MESSAGES: Readonly<Record<string, string>> = {
+  INVOICE_DUE_DATE_ELAPSED: "This invoice’s due date has passed. Review its due date before publishing.",
+  QUICKBOOKS_INVOICE_CHANGED: "The invoice changed. Review its current details before publishing.",
+};
+
+export function quickBooksInvoiceDraftFenceFailureMessage(code: string): string | null {
+  return Object.hasOwn(INVOICE_DRAFT_FENCE_MESSAGES, code) ? INVOICE_DRAFT_FENCE_MESSAGES[code]! : null;
+}
+
 export class QuickBooksInvoiceOperationError extends Error {
   constructor(
     readonly statusCode: number,
@@ -200,6 +209,8 @@ export type QuickBooksInvoicePublishClaim =
       connection: NonNullable<SyncContext["connection"]>;
       providerPayload: Record<string, unknown>;
       providerRequestId: string;
+      invoiceVersion: number;
+      invoiceDueAtMs: number;
     };
 
 export type QuickBooksInvoiceReconciliationClaim =
@@ -432,6 +443,11 @@ async function loadSyncContext(
           status: true,
         },
       },
+      job: {
+        select: {
+          status: true,
+        },
+      },
     },
   });
 
@@ -545,10 +561,14 @@ async function loadSyncContext(
   if (taxEstimateOperation) blockers.push("QUICKBOOKS_TAX_ESTIMATE_OPERATION_EXISTS");
   if (!connection) blockers.push("QUICKBOOKS_NOT_CONNECTED");
   if (invoice.sourceQuote.status !== "ACCEPTED") blockers.push("INVOICE_SOURCE_NOT_ACCEPTED");
+  if (invoice.job.status === "CANCELED") blockers.push("INVOICE_JOB_CANCELED");
   if (invoice.status === "VOID" || invoice.status === "UNCOLLECTIBLE") blockers.push("INVOICE_STATUS_UNSUPPORTED");
   if (invoice.currency !== "USD") blockers.push("QUICKBOOKS_CURRENCY_UNSUPPORTED");
   if (Number(invoice.taxAmount) > 0) blockers.push("QUICKBOOKS_TAX_SYNC_UNSUPPORTED");
   if (!invoice.dueAtUtc) blockers.push("INVOICE_DUE_DATE_REQUIRED");
+  if (invoice.status === "DRAFT" && invoice.dueAtUtc && invoice.dueAtUtc.getTime() < Date.now()) {
+    blockers.push("INVOICE_DUE_DATE_ELAPSED");
+  }
   if (connection && !customerMap) blockers.push("QUICKBOOKS_CUSTOMER_MAPPING_REQUIRED");
   if (connection && customerMap && !customerMap.reviewedAtUtc) blockers.push("QUICKBOOKS_CUSTOMER_MAPPING_REVIEW_REQUIRED");
   if (connection && lineItems.some((line) => !line.quickBooksItemId)) {
@@ -724,7 +744,7 @@ export function quickBooksInvoiceRetryAvailable(operation: QuickBooksInvoiceOper
     && !operation.succeededAtUtc
     && !operation.lastReconciledAtUtc
     && !operation.claimExpiresAtUtc
-    && ["AUTHORIZATION_CHANGED", "QUICKBOOKS_HTTP_400", "QUICKBOOKS_HTTP_401", "QUICKBOOKS_HTTP_403", "QUICKBOOKS_HTTP_404", "QUICKBOOKS_HTTP_422", ...QUICKBOOKS_INVOICE_PRECREATE_FAILURE_CODES].includes(operation.lastFailureCode ?? "");
+    && ["AUTHORIZATION_CHANGED", "QUICKBOOKS_HTTP_400", "QUICKBOOKS_HTTP_401", "QUICKBOOKS_HTTP_403", "QUICKBOOKS_HTTP_404", "QUICKBOOKS_HTTP_422", ...QUICKBOOKS_INVOICE_PRECREATE_FAILURE_CODES, ...Object.keys(INVOICE_DRAFT_FENCE_MESSAGES)].includes(operation.lastFailureCode ?? "");
 }
 
 export async function claimQuickBooksInvoicePublish(
@@ -829,6 +849,14 @@ export async function claimQuickBooksInvoicePublish(
     );
   }
 
+  // Freeze the local issue instant once, before validating the reviewed claim.
+  // Provider latency must not later move issuance beyond the agreed due date.
+  const dispatchStartedAtUtc = new Date(Date.now());
+  if (context.invoice.status === "DRAFT" && context.invoice.dueAtUtc
+    && context.invoice.dueAtUtc.getTime() < dispatchStartedAtUtc.getTime()) {
+    throw new QuickBooksInvoiceOperationError(409, "INVOICE_DUE_DATE_ELAPSED",
+      INVOICE_DRAFT_FENCE_MESSAGES.INVOICE_DUE_DATE_ELAPSED!);
+  }
   if (context.invoice.version !== params.invoiceVersion) {
     throw new QuickBooksInvoiceOperationError(
       409,
@@ -856,10 +884,9 @@ export async function claimQuickBooksInvoicePublish(
     );
   }
 
-  const now = new Date();
   const claimToken = randomBytes(32).toString("hex");
   const providerRequestId = randomUUID();
-  const claimExpiresAtUtc = new Date(now.getTime() + CLAIM_TTL_MS);
+  const claimExpiresAtUtc = new Date(dispatchStartedAtUtc.getTime() + CLAIM_TTL_MS);
   const operationData = {
       tenantId: access.tenantId,
       invoiceId: params.invoiceId,
@@ -876,9 +903,9 @@ export async function claimQuickBooksInvoicePublish(
       allowOnlineCardPayment: context.paymentReview.allowOnlineCardPayment,
       attemptCount: (context.operation?.attemptCount ?? 0) + 1,
       reconciliationCount: 0,
-      processingStartedAtUtc: now,
+      processingStartedAtUtc: dispatchStartedAtUtc,
       claimExpiresAtUtc,
-      lastAttemptAtUtc: now,
+      lastAttemptAtUtc: dispatchStartedAtUtc,
   };
   const operation = retryFailed && context.operation
     ? await transaction.quickBooksInvoiceOperation.update({
@@ -915,6 +942,8 @@ export async function claimQuickBooksInvoicePublish(
     connection: context.connection,
     providerPayload: context.providerPayload,
     providerRequestId,
+    invoiceVersion: context.invoice.version,
+    invoiceDueAtMs: context.invoice.dueAtUtc!.getTime(),
   };
 }
 
@@ -944,11 +973,33 @@ export async function assertQuickBooksInvoiceCreateFence(
         setupConfirmedByTenantUserId: { not: null }, setupChecklistVersion: QUICKBOOKS_SETUP_CHECKLIST_VERSION,
       },
     },
-    select: { id: true },
+    select: { id: true, processingStartedAtUtc: true },
   });
   if (!current || await hasActiveTaxableContext(transaction, access.tenantId, claim.operation.invoiceId)) {
     throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_OPERATION_STALE",
     "The QuickBooks operation or connection changed. Refresh its status before continuing.");
+  }
+  const invoice = await transaction.invoice.findFirst({
+    where: { id: claim.operation.invoiceId, tenantId: access.tenantId,
+      archivedAtUtc: null, deletedAtUtc: null,
+      customer: { archivedAtUtc: null, deletedAtUtc: null },
+      job: { archivedAtUtc: null, deletedAtUtc: null, status: { not: "CANCELED" } },
+      sourceQuote: { status: "ACCEPTED", archivedAtUtc: null, deletedAtUtc: null } },
+    select: { status: true, version: true, dueAtUtc: true },
+  });
+  if (!invoice || invoice.status !== "DRAFT" || invoice.version !== claim.invoiceVersion
+    || !invoice.dueAtUtc || invoice.dueAtUtc.getTime() !== claim.invoiceDueAtMs) {
+    throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_INVOICE_CHANGED",
+      INVOICE_DRAFT_FENCE_MESSAGES.QUICKBOOKS_INVOICE_CHANGED!);
+  }
+  if (!current.processingStartedAtUtc || !Number.isFinite(current.processingStartedAtUtc.getTime())
+    || current.processingStartedAtUtc.getTime() !== claim.operation.processingStartedAtUtc?.getTime()) {
+    throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_OPERATION_STALE",
+      "The QuickBooks operation claim is no longer current.");
+  }
+  if (invoice.dueAtUtc.getTime() < current.processingStartedAtUtc.getTime()) {
+    throw new QuickBooksInvoiceOperationError(409, "INVOICE_DUE_DATE_ELAPSED",
+      INVOICE_DRAFT_FENCE_MESSAGES.INVOICE_DUE_DATE_ELAPSED!);
   }
 }
 
@@ -1024,7 +1075,7 @@ async function finishOperation(
       claimTokenHash: sha256(params.claimToken),
       archivedAtUtc: null,
     },
-    select: { id: true, providerRequestId: true },
+    select: { id: true, providerRequestId: true, processingStartedAtUtc: true },
   });
   if (!current) {
     throw new QuickBooksInvoiceOperationError(
@@ -1036,6 +1087,11 @@ async function finishOperation(
 
   const now = new Date();
   const succeeded = params.nextStatus === "SUCCEEDED";
+  if (succeeded && params.eventType === "PROVIDER_SYNC_SUCCEEDED"
+    && (!current.processingStartedAtUtc || !Number.isFinite(current.processingStartedAtUtc.getTime()))) {
+    throw new QuickBooksInvoiceOperationError(409, "QUICKBOOKS_OPERATION_STALE",
+      "The QuickBooks operation claim is no longer current.");
+  }
   const failed = params.nextStatus === "FAILED" || params.nextStatus === "RECONCILIATION_REQUIRED";
   const operation = await transaction.quickBooksInvoiceOperation.update({
     where: { id: current.id },
@@ -1070,10 +1126,10 @@ async function finishOperation(
   });
   if (succeeded && params.eventType === "PROVIDER_SYNC_SUCCEEDED") {
     await transaction.invoice.update({
-      where: { id: params.invoiceId },
+      where: { id: params.invoiceId, tenantId: access.tenantId },
       data: {
         status: "OPEN",
-        issuedAtUtc: now,
+        issuedAtUtc: current.processingStartedAtUtc,
         version: { increment: 1 },
       },
     });

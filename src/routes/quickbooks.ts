@@ -61,6 +61,7 @@ import {
   quickBooksInvoiceLinkAvailable,
   quickBooksInvoiceReconciliationAvailable,
   quickBooksInvoiceRetryAvailable,
+  quickBooksInvoiceDraftFenceFailureMessage,
   QuickBooksInvoiceOperationError,
   QuickBooksInvoiceOperationPublicSelect,
   retainCreatedQuickBooksInvoiceForReconciliation,
@@ -1981,8 +1982,10 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       } catch (error) {
         const fenceDenied = error instanceof QuickBooksInvoiceOperationError
           || (error instanceof QuickBooksProviderError && error.code === "QUICKBOOKS_PUBLISH_DEADLINE");
+        const draftFenceCode = error instanceof QuickBooksInvoiceOperationError
+          && quickBooksInvoiceDraftFenceFailureMessage(error.code) ? error.code : null;
         const failure = fenceDenied && !writeControl.postAttempted
-          ? { code: "QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE", ambiguous: false }
+          ? { code: draftFenceCode ?? "QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE", ambiguous: false }
           : classifyQuickBooksInvoiceWriteFailure(error, writeControl);
         let stale = false;
         // A stale worker must never overwrite a reconciliation claim or a
@@ -2014,7 +2017,8 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
           operation: serializeQuickBooksInvoiceOperation(operation),
         });
         if (!writeControl.postAttempted && sendQuickBooksReauthRequired(reply, error)) return;
-        const precreateMessage = quickBooksInvoicePrecreateFailureMessage(failure.code);
+        const precreateMessage = quickBooksInvoiceDraftFenceFailureMessage(failure.code)
+          ?? quickBooksInvoicePrecreateFailureMessage(failure.code);
         return reply.code(precreateMessage ? 409 : failure.ambiguous ? 202 : 502).send({
           error: precreateMessage ?? (failure.ambiguous
             ? "The QuickBooks result is uncertain. Reconcile it before trying again."

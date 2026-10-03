@@ -181,6 +181,16 @@ async function getQuickBooksReviewBinding(owner: Session, invoiceId: string): Pr
   return reviewBinding as string;
 }
 
+async function expectIssuedInvoiceDueDate(owner: Session, invoice: { id: string; dueAtUtc: string }) {
+  const persisted = await prisma.invoice.findFirstOrThrow({
+    where: { tenantId: owner.tenant.id, id: invoice.id },
+    select: { issuedAtUtc: true, dueAtUtc: true },
+  });
+  expect(persisted.issuedAtUtc).toBeInstanceOf(Date);
+  expect(persisted.dueAtUtc?.toISOString()).toBe(invoice.dueAtUtc);
+  expect(persisted.dueAtUtc!.getTime()).toBeGreaterThanOrEqual(persisted.issuedAtUtc!.getTime());
+}
+
 async function createQuickBooksReadyInvoice(
   owner: Session,
   label: string,
@@ -200,10 +210,10 @@ async function createQuickBooksReadyInvoice(
       cookie: owner.cookie,
       "idempotency-key": `invoice-qb-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     },
-    payload: { sourceQuoteId: quote.id, dueAtUtc: "2026-10-01T17:00:00.000Z" },
+    payload: { sourceQuoteId: quote.id, dueAtUtc: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString() },
   });
   expect(created.statusCode).toBe(201);
-  const invoice = (created.json() as { invoice: { id: string; version: number } }).invoice;
+  const invoice = (created.json() as { invoice: { id: string; version: number; dueAtUtc: string } }).invoice;
   const reviewer = await prisma.tenantUser.findFirstOrThrow({
     where: { tenantId: owner.tenant.id, userId: owner.user.id, deletedAtUtc: null },
     select: { id: true },
@@ -1128,10 +1138,10 @@ describe("invoice ledger API", () => {
         cookie: owner.cookie,
         "idempotency-key": `invoice-qb-snapshot-${Date.now()}`,
       },
-      payload: { sourceQuoteId: quote.id, dueAtUtc: "2026-10-01T17:00:00.000Z" },
+      payload: { sourceQuoteId: quote.id, dueAtUtc: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString() },
     });
     expect(created.statusCode).toBe(201);
-    const invoice = (created.json() as { invoice: { id: string; version: number; invoiceNumber: number } }).invoice;
+    const invoice = (created.json() as { invoice: { id: string; version: number; invoiceNumber: number; dueAtUtc: string } }).invoice;
     const reviewer = await prisma.tenantUser.findFirstOrThrow({
       where: { tenantId: owner.tenant.id, userId: owner.user.id, deletedAtUtc: null },
       select: { id: true },
@@ -1227,7 +1237,7 @@ describe("invoice ledger API", () => {
       Id: "qb-invoice-snapshot",
       DocNumber: `QF-${String(invoice.invoiceNumber).padStart(6, "0")}`,
       TxnDate: "2026-08-25",
-      DueDate: "2026-10-01",
+      DueDate: invoice.dueAtUtc.slice(0, 10),
       TotalAmt: 300,
       Balance: 300,
       CurrencyRef: { value: "USD", name: "USD" },
@@ -1243,14 +1253,17 @@ describe("invoice ledger API", () => {
       payload: { invoiceVersion: invoice.version, reviewBinding: firstPreview.reviewBinding },
     });
     expect(publish.statusCode).toBe(201);
+    await expectIssuedInvoiceDueDate(owner, invoice);
     expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
     const providerPayload = quickBooksProviderMocks.createInvoice.mock.calls[0]?.[3] as {
+      DueDate: string;
       Line: Array<{
         Description: string;
         Amount: number;
         SalesItemLineDetail: { ItemRef: { value: string }; TaxCodeRef: { value: string } };
       }>;
     };
+    expect(providerPayload.DueDate).toBe(invoice.dueAtUtc.slice(0, 10));
     expect(providerPayload.Line).toEqual([
       expect.objectContaining({
         Description: "Snapshot labor",
@@ -1426,11 +1439,11 @@ describe("invoice ledger API", () => {
         cookie: owner.cookie,
         "idempotency-key": `invoice-fractional-${Date.now()}`,
       },
-      payload: { sourceQuoteId: quote.id, dueAtUtc: "2026-10-01T17:00:00.000Z" },
+      payload: { sourceQuoteId: quote.id, dueAtUtc: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString() },
     });
     expect(created.statusCode).toBe(201);
     const invoice = (created.json() as {
-      invoice: { id: string; version: number; invoiceNumber: number; subtotalAmount: number };
+      invoice: { id: string; version: number; invoiceNumber: number; subtotalAmount: number; dueAtUtc: string };
     }).invoice;
     expect(invoice.subtotalAmount).toBe(0.05);
 
@@ -1507,7 +1520,7 @@ describe("invoice ledger API", () => {
       Id: "qb-invoice-fractional",
       DocNumber: `QF-${String(invoice.invoiceNumber).padStart(6, "0")}`,
       TxnDate: "2026-08-25",
-      DueDate: "2026-10-01",
+      DueDate: invoice.dueAtUtc.slice(0, 10),
       TotalAmt: 0.05,
       Balance: 0.05,
       CurrencyRef: { name: "USD" },
@@ -1523,12 +1536,15 @@ describe("invoice ledger API", () => {
       payload: { invoiceVersion: invoice.version, reviewBinding: preview.reviewBinding },
     });
     expect(publish.statusCode).toBe(201);
+    await expectIssuedInvoiceDueDate(owner, invoice);
     const providerPayload = quickBooksProviderMocks.createInvoice.mock.calls[0]?.[3] as {
+      DueDate: string;
       Line: Array<{
         Amount: number;
         SalesItemLineDetail: { Qty: number; UnitPrice: number };
       }>;
     };
+    expect(providerPayload.DueDate).toBe(invoice.dueAtUtc.slice(0, 10));
     expect(providerPayload.Line.reduce((sum, line) => sum + line.Amount, 0)).toBeCloseTo(0.05, 8);
     for (const line of providerPayload.Line) {
       expect(Number((line.SalesItemLineDetail.Qty * line.SalesItemLineDetail.UnitPrice).toFixed(2))).toBe(line.Amount);
@@ -1638,6 +1654,163 @@ describe("invoice ledger API", () => {
       expect((await publish("numbering-reviewed-retry", freshReview, true)).json().duplicate).toBe(true);
       expect(invoicePosts).toBe(1);
     } finally { fetchMock.mockRestore(); }
+  });
+
+  test("overdue draft preview blocks publishing before any provider request", async () => {
+    const owner = await signUp("invoice-qb-overdue-preview");
+    const fixture = await createQuickBooksReadyInvoice(owner, "overdue-preview");
+    await prisma.invoice.update({ where: { id: fixture.invoice.id },
+      data: { dueAtUtc: new Date(Date.now() - 1_000) } });
+    const preview = await app.inject({ method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/sync-preview`,
+      headers: { cookie: owner.cookie }, payload: {} });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().preview).toMatchObject({ ready: false, reviewBinding: null });
+    expect(preview.json().preview.blockers).toContain("INVOICE_DUE_DATE_ELAPSED");
+    expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
+    expect(await prisma.quickBooksInvoiceOperation.count({ where: {
+      tenantId: owner.tenant.id, invoiceId: fixture.invoice.id } })).toBe(0);
+  });
+
+  test("canceled job preview invalidates an old review before any QuickBooks claim", async () => {
+    const owner = await signUp("invoice-qb-canceled-job-preview");
+    const fixture = await createQuickBooksReadyInvoice(owner, "canceled-job-preview");
+    const job = await jobForQuote(owner.tenant.id, fixture.quote.id);
+    await prisma.job.update({ where: { id: job.id }, data: { status: "CANCELED", canceledAtUtc: new Date() } });
+
+    const preview = await app.inject({ method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/sync-preview`,
+      headers: { cookie: owner.cookie }, payload: {} });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().preview).toMatchObject({ ready: false, reviewBinding: null });
+    expect(preview.json().preview.blockers).toContain("INVOICE_JOB_CANCELED");
+
+    const publish = await app.inject({ method: "POST",
+      url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+      headers: { cookie: owner.cookie, "idempotency-key": "canceled-job-old-review" },
+      payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding } });
+    expect(publish.statusCode).toBe(409);
+    expect(publish.json()).toMatchObject({ code: "QUICKBOOKS_REVIEW_STALE" });
+    expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
+    expect(await prisma.quickBooksInvoiceOperation.count({ where: {
+      tenantId: owner.tenant.id, invoiceId: fixture.invoice.id } })).toBe(0);
+    expect(await prisma.invoice.findUniqueOrThrow({ where: { id: fixture.invoice.id } })).toMatchObject({
+      status: "DRAFT", issuedAtUtc: null,
+    });
+  });
+
+  test("due date expiring after preview rejects the old review without a claim or provider call", async () => {
+    const owner = await signUp("invoice-qb-overdue-review");
+    const fixture = await createQuickBooksReadyInvoice(owner, "overdue-review");
+    const now = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    try {
+      await prisma.invoice.update({ where: { id: fixture.invoice.id }, data: { dueAtUtc: new Date(now + 1_000) } });
+      const reviewBinding = await getQuickBooksReviewBinding(owner, fixture.invoice.id);
+      vi.setSystemTime(now + 2_000);
+      const response = await app.inject({ method: "POST",
+        url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": "overdue-reviewed-publish" },
+        payload: { invoiceVersion: fixture.invoice.version, reviewBinding } });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ code: "INVOICE_DUE_DATE_ELAPSED",
+        error: "This invoice’s due date has passed. Review its due date before publishing." });
+      expect(quickBooksProviderMocks.createInvoice).not.toHaveBeenCalled();
+      expect(await prisma.quickBooksInvoiceOperation.count({ where: {
+        tenantId: owner.tenant.id, invoiceId: fixture.invoice.id } })).toBe(0);
+      expect(await prisma.invoiceEvent.count({ where: { tenantId: owner.tenant.id,
+        invoiceId: fixture.invoice.id, type: "PROVIDER_SYNC_STARTED" } })).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  test.each(["due", "version", "void", "deleted", "archived", "canceledJob"])(
+    "final invoice fence blocks %s changes after provider reads with zero CREATEs", async (change) => {
+      const owner = await signUp(`invoice-qb-live-${change}`);
+      const fixture = await createQuickBooksReadyInvoice(owner, `live-${change}`);
+      const actual = await vi.importActual<typeof import("../../src/services/quickbooks")>("../../src/services/quickbooks");
+      quickBooksProviderMocks.createInvoice.mockImplementation(actual.createQuickBooksInvoice);
+      let posts = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/preferences")) return new Response(JSON.stringify({ Preferences: { SalesFormsPrefs: { CustomTxnNumbers: true } } }));
+        if (url.pathname.endsWith("/query")) {
+          if (change === "canceledJob") {
+            const job = await jobForQuote(owner.tenant.id, fixture.quote.id);
+            await prisma.job.update({ where: { id: job.id }, data: { status: "CANCELED", canceledAtUtc: new Date() } });
+          } else {
+            const data = change === "due" ? { dueAtUtc: new Date(new Date(fixture.invoice.dueAtUtc).getTime() + 86_400_000) }
+              : change === "version" ? { version: { increment: 1 } }
+                : change === "void" ? { status: "VOID" as const, balanceDue: 0, voidedAtUtc: new Date() }
+                  : change === "deleted" ? { deletedAtUtc: new Date() } : { archivedAtUtc: new Date() };
+            await prisma.invoice.update({ where: { id: fixture.invoice.id }, data });
+          }
+          return new Response(JSON.stringify({ QueryResponse: {} }));
+        }
+        if (init?.method === "POST") posts += 1;
+        throw new Error("Unexpected invoice CREATE");
+      });
+      try {
+        const response = await app.inject({ method: "POST",
+          url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+          headers: { cookie: owner.cookie, "idempotency-key": `live-invoice-${change}` },
+          payload: { invoiceVersion: fixture.invoice.version, reviewBinding: fixture.reviewBinding } });
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toMatchObject({ code: "QUICKBOOKS_INVOICE_CHANGED", reconciliationRequired: false,
+          operation: { status: "FAILED", retryAvailable: true } });
+        expect(posts).toBe(0);
+        const operation = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: {
+          tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: fixture.invoice.id } } });
+        expect(operation).toMatchObject({ status: "FAILED", providerInvoiceId: null,
+          lastFailureCode: "QUICKBOOKS_INVOICE_CHANGED", claimTokenHash: null, claimExpiresAtUtc: null });
+        const invoice = await prisma.invoice.findUniqueOrThrow({ where: { id: fixture.invoice.id } });
+        expect(invoice.issuedAtUtc).toBeNull();
+      } finally { fetchMock.mockRestore(); }
+    });
+
+  test("provider latency crossing the due date preserves issuance at the durable claim instant", async () => {
+    const owner = await signUp("invoice-qb-due-crossing");
+    const fixture = await createQuickBooksReadyInvoice(owner, "due-crossing");
+    const actual = await vi.importActual<typeof import("../../src/services/quickbooks")>("../../src/services/quickbooks");
+    quickBooksProviderMocks.createInvoice.mockImplementation(actual.createQuickBooksInvoice);
+    const now = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    let posts = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/preferences")) return new Response(JSON.stringify({ Preferences: { SalesFormsPrefs: { CustomTxnNumbers: true } } }));
+      if (url.pathname.endsWith("/query")) return new Response(JSON.stringify({ QueryResponse: {} }));
+      expect(init?.method).toBe("POST");
+      posts += 1;
+      vi.setSystemTime(now + 2_000);
+      return new Response(JSON.stringify({ Invoice: { Id: "due-crossing-created", TotalAmt: 150, Balance: 150 } }));
+    });
+    try {
+      await prisma.invoice.update({ where: { id: fixture.invoice.id }, data: { dueAtUtc: new Date(now + 1_000) } });
+      const reviewBinding = await getQuickBooksReviewBinding(owner, fixture.invoice.id);
+      const response = await app.inject({ method: "POST",
+        url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": "due-crossing-create" },
+        payload: { invoiceVersion: fixture.invoice.version, reviewBinding } });
+      expect(response.statusCode).toBe(201);
+      expect(posts).toBe(1);
+      const operation = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: {
+        tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: fixture.invoice.id } } });
+      const invoice = await prisma.invoice.findUniqueOrThrow({ where: { id: fixture.invoice.id } });
+      expect(invoice.status).toBe("OPEN");
+      expect(invoice.issuedAtUtc?.getTime()).toBe(now);
+      expect(invoice.issuedAtUtc).toEqual(operation.processingStartedAtUtc);
+      expect(invoice.dueAtUtc!.getTime()).toBeGreaterThanOrEqual(invoice.issuedAtUtc!.getTime());
+      expect(operation.succeededAtUtc!.getTime()).toBeGreaterThan(invoice.dueAtUtc!.getTime());
+      const duplicate = await app.inject({ method: "POST",
+        url: `/v1/integrations/quickbooks/invoices/${fixture.invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": "due-crossing-replay" },
+        payload: { invoiceVersion: fixture.invoice.version, reviewBinding } });
+      expect(duplicate.statusCode).toBe(200);
+      expect(duplicate.json().duplicate).toBe(true);
+      expect(posts).toBe(1);
+    } finally { fetchMock.mockRestore(); vi.useRealTimers(); }
   });
 
   test.each(["expired", "transitioned", "disconnected", "disconnect-intent", "realm", "generation", "setup", "deleted"])(
@@ -1952,7 +2125,7 @@ describe("invoice ledger API", () => {
       Id: "qb-invoice-publish",
       DocNumber: "QF-000001",
       TxnDate: "2026-08-24",
-      DueDate: "2026-10-01",
+      DueDate: invoice.dueAtUtc.slice(0, 10),
       TotalAmt: 150,
       Balance: 150,
       CurrencyRef: { value: "USD", name: "USD" },
@@ -1967,6 +2140,7 @@ describe("invoice ledger API", () => {
     });
     const first = await publish(`qb-publish-first-${Date.now()}`);
     expect(first.statusCode).toBe(201);
+    await expectIssuedInvoiceDueDate(owner, invoice);
     expect(first.json()).toMatchObject({
       duplicate: false,
       reconciliationRequired: false,
@@ -1991,6 +2165,7 @@ describe("invoice ledger API", () => {
       "test-access-token",
       expect.objectContaining({
         DocNumber: "QF-000001",
+        DueDate: invoice.dueAtUtc.slice(0, 10),
         CustomerRef: expect.any(Object),
         PrivateNote: expect.stringMatching(/^QuoteFly:[0-9a-f]{24}$/),
       }),
@@ -2125,6 +2300,8 @@ describe("invoice ledger API", () => {
       sentAtUtc: null,
     });
     expect(persistedInvoice.issuedAtUtc).toBeInstanceOf(Date);
+    expect(persistedInvoice.dueAtUtc?.toISOString()).toBe(invoice.dueAtUtc);
+    expect(persistedInvoice.dueAtUtc!.getTime()).toBeGreaterThanOrEqual(persistedInvoice.issuedAtUtc!.getTime());
 
     const paymentLink = await app.inject({
       method: "GET",

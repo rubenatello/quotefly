@@ -121,9 +121,15 @@ export function InvoicePanel({
   const [taxContextPending, setTaxContextPending] = useState(false);
   const [taxContextSaving, setTaxContextSaving] = useState(false);
   const [taxContextOpen, setTaxContextOpen] = useState(false);
+  const [dueEditorOpen, setDueEditorOpen] = useState(false);
+  const [dueEditorDate, setDueEditorDate] = useState("");
+  const [dueEditorSaving, setDueEditorSaving] = useState(false);
+  const [dueEditorError, setDueEditorError] = useState<string | null>(null);
+  const dueEditorTriggerRef = useRef<HTMLButtonElement>(null);
+  const dueEditorCommandRef = useRef<{ fingerprint: string; key: string } | null>(null);
   useEffect(() => {
-    onTaxContextActivityChange?.({ open: taxContextOpen, pending: taxContextPending, saving: taxContextSaving });
-  }, [taxContextOpen, taxContextPending, taxContextSaving, onTaxContextActivityChange]);
+    onTaxContextActivityChange?.({ open: taxContextOpen || dueEditorOpen, pending: taxContextPending || dueEditorOpen, saving: taxContextSaving || dueEditorSaving });
+  }, [taxContextOpen, taxContextPending, taxContextSaving, dueEditorOpen, dueEditorSaving, onTaxContextActivityChange]);
   useEffect(() => () => {
     onTaxContextActivityChange?.({ open: false, pending: false, saving: false });
   }, [onTaxContextActivityChange]);
@@ -358,6 +364,10 @@ export function InvoicePanel({
 
   useEffect(() => {
     setDueDate(defaultDueDate(timeZone));
+    setDueEditorOpen(false);
+    setDueEditorSaving(false);
+    setDueEditorError(null);
+    dueEditorCommandRef.current = null;
     setTaxContextPending(false);
     setTaxContextSaving(false);
     setTaxContextOpen(false);
@@ -452,6 +462,77 @@ export function InvoicePanel({
     previewInvoiceVersion: quickBooksPreview?.invoice.version,
   });
 
+  const dueEditorBlocked = saving || quickBooksSaving || quickBooksLoading || Boolean(quickBooksMappingSaving)
+    || quickBooksReviewDirty || taxContextPending || taxContextSaving || taxContextOpen || quickBooksConfirmOpen;
+  const canEditDueDate = canCreate && invoice?.status === "DRAFT" && invoice.paymentStatus === "PENDING"
+    && Number(invoice.amountPaid) === 0 && !invoice.issuedAtUtc && !invoice.sentAtUtc && !invoice.paidAtUtc && !invoice.voidedAtUtc
+    && invoice.job.status !== "CANCELED"
+    && (!quickBooksPreview?.operation || quickBooksPreview.operation.retryAvailable);
+  const editedDueAtUtc = dueEditorDate ? tenantWallTimeToIso(`${dueEditorDate}T12:00`, timeZone) : null;
+  const dueEditorUnchanged = Boolean(invoice?.dueAtUtc
+    && dueEditorDate === toTenantDateTimeInput(new Date(invoice.dueAtUtc), timeZone).slice(0, 10));
+  const closeDueEditor = () => {
+    if (dueEditorSaving) return;
+    setDueEditorOpen(false);
+    if (invoice && !quickBooksPreview && !quickBooksLoading) void loadQuickBooksPreview(invoice);
+    requestAnimationFrame(() => dueEditorTriggerRef.current?.focus());
+  };
+  const handleDueDateSave = async () => {
+    if (!invoice || !canEditDueDate || dueEditorBlocked || dueEditorSaving || dueEditorUnchanged) return;
+    if (!editedDueAtUtc || new Date(editedDueAtUtc).getTime() <= Date.now()) {
+      setDueEditorError(t("invoices.dueEditor.invalid"));
+      return;
+    }
+    const requestedInvoice = invoice;
+    const operationSource = sourceKey;
+    const generation = ++operationGenerationRef.current;
+    const isCurrent = () => operationIsCurrent(operationSource, generation)
+      && activeInvoiceRef.current?.id === requestedInvoice.id
+      && activeInvoiceRef.current?.version === requestedInvoice.version;
+    const payload = { invoiceVersion: invoice.version, dueAtUtc: editedDueAtUtc };
+    const fingerprint = JSON.stringify([invoice.id, payload]);
+    if (dueEditorCommandRef.current?.fingerprint !== fingerprint) {
+      dueEditorCommandRef.current = { fingerprint, key: `qf-invoice-due-${crypto.randomUUID()}` };
+    }
+    setDueEditorSaving(true);
+    setDueEditorError(null);
+    setNotice(null);
+    // Invalidate every outstanding provider review before the local mutation.
+    quickBooksGenerationRef.current += 1;
+    quickBooksOperationGenerationRef.current += 1;
+    quickBooksMappingMutationGenerationRef.current += 1;
+    quickBooksLookupGenerationRef.current += 1;
+    quickBooksPaymentLinkGenerationRef.current += 1;
+    setQuickBooksPreview(null);
+    setQuickBooksPaymentLink(null);
+    setQuickBooksConfirmOpen(false);
+    quickBooksCommandRef.current = null;
+    try {
+      const response = await api.invoices.updateDueDate(invoice.id, payload, dueEditorCommandRef.current.key);
+      if (!isCurrent() || response.invoice.id !== requestedInvoice.id) return;
+      activeInvoiceRef.current = response.invoice;
+      setInvoice(response.invoice);
+      setDueEditorOpen(false);
+      setDueEditorSaving(false);
+      dueEditorCommandRef.current = null;
+      setNotice({ message: t("invoices.dueEditor.saved"), tone: "success" });
+      requestAnimationFrame(() => dueEditorTriggerRef.current?.focus());
+      void loadQuickBooksPreview(response.invoice);
+    } catch (err) {
+      if (!isCurrent()) return;
+      setDueEditorError(localizedApiError(err, t, { fallbackKey: "invoices.dueEditor.error", codeKeys: {
+        INVOICE_DUE_DATE_INVALID: "invoices.dueEditor.invalid",
+        INVOICE_DUE_DATE_UNCHANGED: "invoices.dueEditor.unchanged",
+        INVOICE_VERSION_CHANGED: "invoices.dueEditor.stale",
+        INVOICE_DUE_DATE_LOCKED: "invoices.dueEditor.locked",
+        INVOICE_DUE_DATE_PROVIDER_LOCKED: "invoices.dueEditor.locked",
+        INVOICE_MANAGER_REQUIRED: "apiErrors.permissionDenied",
+      } }));
+    } finally {
+      if (operationIsCurrent(operationSource, generation)) setDueEditorSaving(false);
+    }
+  };
+
   const handleCreate = async () => {
     if (saving || !canCreate || createBlockedReason || (!jobId && !sourceQuoteId)) return;
     if (!dueAtUtc) {
@@ -499,6 +580,8 @@ export function InvoicePanel({
       || !quickBooksPreview.reviewBinding
       || !quickBooksEnabled
       || quickBooksSaving
+      || dueEditorOpen
+      || dueEditorSaving
       || taxContextPending
       || quickBooksLoading
     ) return;
@@ -896,6 +979,12 @@ export function InvoicePanel({
               <p className="mt-1 text-sm font-semibold text-[var(--qf-text)]">
                 {invoice.dueAtUtc ? formatInvoiceDate(invoice.dueAtUtc, locale, timeZone) : t("invoices.noDueDate")}
               </p>
+              {canEditDueDate ? <Button ref={dueEditorTriggerRef} type="button" variant="ghost" className="mt-1 min-h-11"
+                disabled={dueEditorBlocked || dueEditorSaving} onClick={() => {
+                  setDueEditorDate(invoice.dueAtUtc ? toTenantDateTimeInput(new Date(invoice.dueAtUtc), timeZone).slice(0, 10) : defaultDueDate(timeZone));
+                  setDueEditorError(null);
+                  setDueEditorOpen(true);
+                }}>{t("invoices.dueEditor.edit")}</Button> : null}
             </div>
           </div>
           <div className="flex flex-col gap-3 border-t border-[var(--qf-border)] pt-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1236,11 +1325,11 @@ export function InvoicePanel({
 
                       {invoice.status === "DRAFT" && quickBooksReviewDirty ? <Alert tone="info">{t("invoices.quickBooks.taxReviewPending")}</Alert> : null}
                       {invoice.status === "DRAFT" ? <InvoiceTaxContextForm
-                        key={`${session?.tenantId}:${invoice.id}`}
+                        key={`${session?.tenantId}:${invoice.id}:${invoice.version}`}
                         invoiceId={invoice.id}
                         invoiceVersion={invoice.version}
                         reviewFingerprint={JSON.stringify([quickBooksPreview.customerMapping, quickBooksPreview.lineItems.map(line => [line.itemKey, line.quickBooksItemId, line.reviewedAtUtc])])}
-                        disabled={quickBooksReviewDirty || !quickBooksEnabled || quickBooksLoading || quickBooksSaving || Boolean(quickBooksMappingSaving) || !quickBooksPreview.customerMapping?.reviewedAtUtc || quickBooksPreview.lineItems.some(line => !line.reviewedAtUtc)}
+                        disabled={dueEditorOpen || dueEditorSaving || quickBooksReviewDirty || !quickBooksEnabled || quickBooksLoading || quickBooksSaving || Boolean(quickBooksMappingSaving) || !quickBooksPreview.customerMapping?.reviewedAtUtc || quickBooksPreview.lineItems.some(line => !line.reviewedAtUtc)}
                         onPendingChange={setTaxContextPending}
                         onSavingChange={setTaxContextSaving}
                         onOpenChange={setTaxContextOpen}
@@ -1420,6 +1509,22 @@ export function InvoicePanel({
           )}
         </div>
       )}
+
+      <ConfirmModal
+        open={dueEditorOpen} onClose={closeDueEditor} onConfirm={() => void handleDueDateSave()}
+        title={t("invoices.dueEditor.edit")} description={t("invoices.dueEditor.help", { timezone: timeZone })}
+        confirmLabel={t("invoices.dueEditor.save")} confirmVariant="primary" loading={dueEditorSaving}
+        confirmDisabled={dueEditorBlocked || !editedDueAtUtc || dueEditorUnchanged}
+      >
+        <Input type="date" label={t("invoices.dueDate")} value={dueEditorDate} disabled={dueEditorSaving}
+          min={toTenantDateTimeInput(new Date(), timeZone).slice(0, 10)}
+          onChange={event => { setDueEditorDate(event.target.value); setDueEditorError(null); }} />
+        {dueEditorError ? <Alert tone="error">{dueEditorError}</Alert> : null}
+        {dueEditorError ? <Button type="button" variant="outline" className="min-h-11" disabled={dueEditorSaving} onClick={() => {
+          closeDueEditor();
+          void loadInvoice();
+        }}>{t("invoices.dueEditor.reload")}</Button> : null}
+      </ConfirmModal>
 
       <ConfirmModal
         open={confirmOpen}

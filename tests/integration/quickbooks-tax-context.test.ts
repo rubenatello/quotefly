@@ -86,7 +86,7 @@ function access(f: Fixture): AccessContext { return { tenantId: f.tenant.id, use
   role: "owner", capabilities: capabilitiesForRole("owner"), requestId: randomUUID() }; }
 async function zeroTaxFixture() {
   const f = await fixture();
-  await prisma.invoice.update({ where: { id: f.invoice.id }, data: { taxAmount: 0, totalAmount: 100, balanceDue: 100, dueAtUtc: new Date("2026-10-01T00:00:00.000Z") } });
+  await prisma.invoice.update({ where: { id: f.invoice.id }, data: { taxAmount: 0, totalAmount: 100, balanceDue: 100, dueAtUtc: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000) } });
   return f;
 }
 const directPreview = (f: Fixture) => runtimePrisma.$transaction(tx => getQuickBooksInvoiceSyncPreview(tx, access(f), f.invoice.id, keys.QUICKBOOKS_TOKEN_ENCRYPTION_KEY));

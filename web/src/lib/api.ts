@@ -3078,6 +3078,13 @@ export const api = {
 
     get: (invoiceId: string) => request<{ invoice: Invoice }>(`/v1/invoices/${invoiceId}`),
 
+    updateDueDate: (invoiceId: string, body: { invoiceVersion: number; dueAtUtc: string }, idempotencyKey: string) =>
+      request<{ invoice: Invoice; duplicate: boolean }>(`/v1/invoices/${invoiceId}/due-date`, {
+        method: "PATCH",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify(body),
+      }),
+
     create: (
       body: { jobId?: string; sourceQuoteId?: string; dueAtUtc?: string | null },
       idempotencyKey: string,

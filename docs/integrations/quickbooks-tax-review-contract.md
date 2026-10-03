@@ -1,6 +1,6 @@
 # QuickBooks tax review contract
 
-The internal tax review contract and preparatory operation ledger are prerequisites for taxable invoice support. The current source candidate assembles signed reviews using an internal provider-read path, but exposes no tax-review route or provider writer. The existing invoice publisher still blocks positive QuoteFly tax and explicitly publishes non-taxable lines.
+The internal tax review contract and preparatory operation ledger are prerequisites for taxable invoice support. The current source candidate includes manager-confirmed tax-context capture routes and UI, and assembles signed reviews using an internal provider-read path. Taxable Invoice publishing remains unavailable. The separately reviewed sandbox Estimate harness gathers provider evidence only; it does not authorize invoice publishing. The existing direct invoice publisher still blocks positive QuoteFly tax and explicitly publishes non-taxable lines.
 
 `src/services/quickbooks-tax-review-contract.ts` validates a deliberately supplied snapshot of the invoice, customer, mappings, provider facts, and distinct origin/destination addresses. The initial address scope is the 50 US states and DC, with USD amounts. Territories, military addresses, exemptions, and unknown customer tax status need separate provider evidence before support is expanded.
 
