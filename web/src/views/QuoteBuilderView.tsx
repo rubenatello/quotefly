@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -59,6 +59,7 @@ import { aiUsageUpdateFromApiError, formatAiPaidUsagePause, formatAiUsageNotice,
 import {
   applyKodyQuoteAiProvenance,
   clearQuoteAiProvenanceForAudit,
+  registerQuoteBuilderDraftLogoutFlush,
   quoteBuilderDraftStorageKey,
   hashQuoteCreateCommand,
   isQuoteDraftTimestampFresh,
@@ -643,11 +644,11 @@ export function QuoteBuilderView() {
   const [aiDraftReview, setAiDraftReview] = useState<BuilderKodyReview | null>(null);
   const [aiClarification, setAiClarification] = useState<BuilderKodyClarification | null>(null);
 
-  async function waitForPendingDraftAutosaves() {
+  const waitForPendingDraftAutosaves = useCallback(async () => {
     while (pendingDraftAutosavesRef.current.size > 0) {
       await Promise.allSettled([...pendingDraftAutosavesRef.current]);
     }
-  }
+  }, []);
   const [aiSubmitting, setAiSubmitting] = useState(false);
   const [aiProgressEvent, setAiProgressEvent] = useState<AiProgressEvent | null>(null);
   const [aiErrorMessage, setAiErrorMessage] = useState<string | null>(null);
@@ -763,9 +764,46 @@ export function QuoteBuilderView() {
     continueNavigation,
   } = useUnsavedChangesGuard(
     hasMeaningfulDraft && hydratedDraftStorageKey === draftStorageKey && !saving && !quoteCreationCompletedRef.current,
+    // Builder drafts autosave securely and may leave through workspace chrome.
+    // Keep confirmation for explicit builder actions, links, Back, and unload.
+    { coordinateWorkspaceNavigation: false },
   );
   latestDraftRef.current = currentBuilderDraft;
   selectedCustomerIdRef.current = quoteForm.customerId;
+
+  const flushCurrentDraftBeforeLogout = useCallback(async (isCurrent: () => boolean) => {
+    if (
+      !draftStorageKey
+      || hydratedDraftStorageKey !== draftStorageKey
+      || quoteCreationCompletedRef.current
+      || !latestDraftRef.current
+    ) {
+      return;
+    }
+
+    // Cancel a queued debounce, then serialize after any active save. This
+    // keeps the logout write from being replaced by an earlier request.
+    draftAutosaveEpochRef.current += 1;
+    await waitForPendingDraftAutosaves();
+    if (!isCurrent() || quoteCreationCompletedRef.current || !latestDraftRef.current) return;
+
+    const writePromise = writeStoredBuilderDraft(draftStorageKey, latestDraftRef.current);
+    pendingDraftAutosavesRef.current.add(writePromise);
+    try {
+      await writePromise;
+    } finally {
+      pendingDraftAutosavesRef.current.delete(writePromise);
+    }
+  }, [draftStorageKey, hydratedDraftStorageKey, waitForPendingDraftAutosaves]);
+
+  useEffect(() => {
+    if (!session || !draftStorageKey || hydratedDraftStorageKey !== draftStorageKey) return;
+    return registerQuoteBuilderDraftLogoutFlush(
+      session.tenantId,
+      session.userId,
+      flushCurrentDraftBeforeLogout,
+    );
+  }, [draftStorageKey, flushCurrentDraftBeforeLogout, hydratedDraftStorageKey, session]);
 
   useEffect(() => {
     setLastAppliedAiProvenance((current) => reconcileQuoteAiProvenanceCustomer(current, quoteForm.customerId));

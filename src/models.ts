@@ -563,6 +563,11 @@ export interface QuickBooksConnectionEventRow {
 
 export interface QuickBooksInvoiceOperationRow {
   id: string;
+  taxEstimateOperationId: string | null;
+  taxAttemptTokenHash: string | null;
+  taxCanonicalInvoiceHash: string | null;
+  taxProjectionMatchedAtUtc: UtcDate | null;
+  taxParityContractVersion: number | null;
   tenantId: string;
   invoiceId: string;
   quickBooksConnectionId: string;
@@ -716,7 +721,11 @@ export const TABLE_RELATION_MAP = {
     belongsTo: ["Tenant", "QuickBooksConnection", "Quote"],
   },
   QuickBooksInvoiceOperation: {
-    belongsTo: ["Tenant", "Invoice", "QuickBooksConnection", "TenantUser"],
+    belongsTo: ["Tenant", "Invoice", "QuickBooksConnection", "TenantUser", "QuickBooksTaxEstimateOperation"],
+  },
+  QuickBooksTaxEstimateOperation: {
+    belongsTo: ["Tenant", "Invoice", "Customer", "Quote", "QuickBooksConnection", "TenantUser", "InvoiceTaxContext"],
+    hasOne: ["QuickBooksInvoiceOperation"],
   },
   QuickBooksWebhookEvent: {
     belongsTo: ["Tenant", "QuickBooksConnection"],

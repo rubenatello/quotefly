@@ -1,6 +1,9 @@
+import { alertMessageSchema, type AlertMessage } from "./quickbooks-monitor-contract";
+import type { QuickBooksMonitorEnv } from "../config/quickbooks-monitor-env";
 import type { env as runtimeEnv } from "../config/env";
 
 type RuntimeEnv = typeof runtimeEnv;
+export type TransactionalEmailEnv = Pick<RuntimeEnv, "RESEND_API_KEY" | "PASSWORD_RESET_EMAIL_FROM">;
 
 type ResendEmailInput = {
   to: string;
@@ -40,11 +43,11 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#039;");
 }
 
-export function isTransactionalEmailConfigured(env: RuntimeEnv): boolean {
+export function isTransactionalEmailConfigured(env: TransactionalEmailEnv): boolean {
   return Boolean(env.RESEND_API_KEY && env.PASSWORD_RESET_EMAIL_FROM.trim());
 }
 
-async function sendTransactionalEmail(env: RuntimeEnv, input: ResendEmailInput): Promise<void> {
+async function sendTransactionalEmail(env: TransactionalEmailEnv, input: ResendEmailInput): Promise<void> {
   if (!isTransactionalEmailConfigured(env)) {
     throw new Error("Transactional email is not configured.");
   }
@@ -205,5 +208,36 @@ export async function sendFeatureRequestEmail(
         </div>
       </div>
     `,
+  });
+}
+
+/** Only fixed operational content and the deployment-configured recipient are accepted. */
+export async function sendQuickBooksOperationalAlert(
+  env: Pick<QuickBooksMonitorEnv, "RESEND_API_KEY" | "PASSWORD_RESET_EMAIL_FROM" | "QUICKBOOKS_ALERT_EMAIL" | "QUICKBOOKS_MONITOR_ENVIRONMENT_LABEL">,
+  message: AlertMessage,
+  dedupeKeyHash: string,
+): Promise<void> {
+  const parsed = alertMessageSchema.safeParse(message);
+  if (!parsed.success || !/^[0-9a-f]{64}$/.test(dedupeKeyHash)) throw new Error("QUICKBOOKS_ALERT_INVALID_PAYLOAD");
+  const value = parsed.data;
+  const text = [
+    "QuoteFly QuickBooks operational monitor",
+    `Environment: ${env.QUICKBOOKS_MONITOR_ENVIRONMENT_LABEL}`,
+    `Alert: ${value.alertCode}`,
+    `Transition: ${value.transition}`,
+    `Severity: ${value.severity}`,
+    `Incident: ${value.incidentGeneration}`,
+    `Observed at UTC: ${value.observedAtUtc.toISOString()}`,
+    `Affected count: ${value.metrics.count}`,
+    `Oldest age (ms): ${value.metrics.ageMs ?? "unavailable"}`,
+    "Inspect the private control plane and the QuickBooks worker operations runbook.",
+    "This notification contains no customer, invoice, tenant, or provider identifiers.",
+  ].join("\n");
+  await sendTransactionalEmail(env, {
+    to: env.QUICKBOOKS_ALERT_EMAIL,
+    subject: `[QuoteFly ${env.QUICKBOOKS_MONITOR_ENVIRONMENT_LABEL}] ${value.severity} ${value.alertCode} ${value.transition}`,
+    text,
+    html: `<pre>${escapeHtml(text)}</pre>`,
+    idempotencyKey: `quickbooks-monitor-${dedupeKeyHash}`,
   });
 }

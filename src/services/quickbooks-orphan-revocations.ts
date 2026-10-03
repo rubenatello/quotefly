@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
-import type { env } from "../config/env";
+import type { QuickBooksCredentialRuntimeEnv } from "../config/quickbooks-runtime-types";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
   decryptQuickBooksSecret,
@@ -9,7 +9,7 @@ import {
   revokeQuickBooksToken,
 } from "./quickbooks";
 
-type RuntimeEnv = typeof env;
+type RuntimeEnv = QuickBooksCredentialRuntimeEnv;
 
 export const QUICKBOOKS_ORPHAN_REVOCATION_MAX_ATTEMPTS = 8;
 const QUICKBOOKS_ORPHAN_REVOCATION_CLAIM_MINIMUM_MS = 120_000;

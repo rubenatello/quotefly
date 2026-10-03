@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Prisma, PrismaClient } from "@prisma/client";
-import { afterAll, beforeEach, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { capabilitiesForRole, type AccessContext } from "../../src/lib/access-policy";
 import { prisma } from "../../src/lib/prisma";
 import { withTenantRlsContext } from "../../src/lib/tenant-rls";
@@ -8,6 +8,9 @@ import { listNotifications, summarizeNotifications } from "../../src/services/no
 import { runNotificationRetentionForTenant } from "../../src/services/notification-retention";
 
 const NOW = new Date("2026-08-23T12:00:00.000Z");
+const tenantIds: string[] = [];
+const userIds: string[] = [];
+let unownedWebhookEvents: Array<{ id: string; tenantId: string | null; quickBooksConnectionId: string | null }> = [];
 
 function daysBefore(days: number): Date {
   return new Date(NOW.getTime() - days * 24 * 60 * 60 * 1_000);
@@ -49,7 +52,7 @@ async function holdTenantRetentionLock(tenantId: string) {
 }
 
 async function createFixture(label: string) {
-  return prisma.$transaction(async (transaction) => {
+  const fixture = await prisma.$transaction(async (transaction) => {
     const phoneDigits = Math.random().toString().slice(2, 12).padEnd(10, "0").slice(0, 10);
     const tenant = await transaction.tenant.create({
       data: { name: `${label} Services`, slug: `${label.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2)}` },
@@ -128,8 +131,16 @@ async function createFixture(label: string) {
         commandPayloadHash: hash(`${label}:payload`),
       },
     });
-    return { tenant, owner, tech, techUser, job, appointment, event };
+    return { tenant, ownerUser, owner, tech, techUser, job, appointment, event };
   });
+  tenantIds.push(fixture.tenant.id);
+  userIds.push(fixture.ownerUser.id, fixture.techUser.id);
+  return fixture;
+}
+
+async function cleanupFixtures() {
+  await prisma.tenant.deleteMany({ where: { id: { in: tenantIds } } });
+  await prisma.user.deleteMany({ where: { id: { in: userIds } } });
 }
 
 async function createNotification(
@@ -162,13 +173,27 @@ async function createNotification(
 }
 
 describe("notification soft-archive retention", () => {
+  beforeAll(async () => {
+    unownedWebhookEvents = await prisma.quickBooksWebhookEvent.findMany({
+      select: { id: true, tenantId: true, quickBooksConnectionId: true },
+      orderBy: { id: "asc" },
+    });
+  });
+
   beforeEach(async () => {
-    await prisma.tenant.deleteMany();
-    await prisma.user.deleteMany();
+    await cleanupFixtures();
   });
 
   afterAll(async () => {
-    await prisma.$disconnect();
+    try {
+      await cleanupFixtures();
+      expect(await prisma.quickBooksWebhookEvent.findMany({
+        select: { id: true, tenantId: true, quickBooksConnectionId: true },
+        orderBy: { id: "asc" },
+      })).toEqual(unownedWebhookEvents);
+    } finally {
+      await prisma.$disconnect();
+    }
   });
 
   test("dry-runs, archives only expired read and never-read rows, and is idempotent", async () => {
@@ -188,7 +213,7 @@ describe("notification soft-archive retention", () => {
       archivedUnreadCount: 0,
       hasMore: false,
     });
-    expect(await prisma.notificationOutbox.count({ where: { archivedAtUtc: { not: null } } })).toBe(0);
+    expect(await prisma.notificationOutbox.count({ where: { tenantId: fixture.tenant.id, archivedAtUtc: { not: null } } })).toBe(0);
 
     const applied = await runNotificationRetentionForTenant(prisma, { tenantId: fixture.tenant.id, now: NOW, apply: true });
     expect(applied).toMatchObject({ archivedReadCount: 1, archivedUnreadCount: 1, hasMore: false });

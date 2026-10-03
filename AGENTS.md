@@ -22,8 +22,10 @@ Prioritize the core workflow: customer lookup or creation, quote draft, line-ite
 
 ## Non-Negotiable Rules
 
-- BCP means Build, Commit, and Push. Only run BCP when explicitly asked to "run BCP."
-- Do not commit, push, deploy, run destructive database commands, or make irreversible changes unless explicitly requested.
+- BCP means Build, Commit, and Push; `RUNBCP` means the same thing. The owner grants standing authorization to run BCP and deploy QuoteFly production changes when the independent final Opera review is `APPROVED` for the exact release candidate and all required verification and release evidence are green. This includes the reviewed, non-destructive migration steps needed for that release. Do not ask for the same authorization again once these conditions are met.
+- The owner separately authorized BCP, deployment and migration of isolated QuickBooks staging, and all necessary QuickBooks sandbox testing on September 13, 2026. Proceed with that staging work while consumer-release evidence is being gathered. Use the isolated staging environment and dedicated Intuit sandbox with synthetic test records; preserve production data and configuration until the production gate is green.
+- A `CHANGES_REQUIRED`, `BLOCKED`, or `BLOCKED_MISSING_EVIDENCE` final verdict is not green. Local tests or a source-only staging review do not substitute for required real-provider, migration/recovery, security, and operational evidence. Prevent branch pushes or deployment integrations from triggering production before this gate passes.
+- Destructive database operations and irreversible actions outside the authorized release or sandbox scope still require explicit authorization. All authorized work must serve QuoteFly's security and a reliable contractor quoting/accounting workflow; do not weaken gates or make unsupported marketing claims to obtain approval.
 - Keep secrets out of Git. Never commit `.env`, API keys, JWT secrets, Stripe secrets, Twilio credentials, QuickBooks secrets, database URLs, or generated private tokens.
 - Treat tenant isolation as a hard security boundary. Every customer, quote, billing, AI usage, activity, and integration query must be scoped by `tenantId` unless it is an intentional superuser path.
 - Preserve soft-delete and archive semantics. Most destructive user actions should set `deletedAtUtc` or `archivedAtUtc` instead of physically deleting rows.
@@ -76,7 +78,7 @@ Project-scoped custom agents live in `.codex/agents`; their reusable workflows l
 
 For multi-area production work, use `$quotefly-production-loop` and delegate independent specialist tasks when that improves speed or confidence. Keep the root agent as coordinator. Run Opera only after implementation evidence is ready; Opera must not edit the work it reviews. If Opera returns `CHANGES_REQUIRED`, route bounded findings to Rook and systemic findings to the owning senior specialist, rerun affected gates, and send the new diff back to Opera. A failed or unavailable required gate cannot receive approval.
 
-Do not route ambiguous architecture, security-boundary, migration-strategy, or provider-policy work to Rook. Agent approval never overrides the BCP rule or authorizes deployment, provider enablement, or production data changes.
+Do not route ambiguous architecture, security-boundary, migration-strategy, or provider-policy work to Rook. Agent approval does not expand the owner's standing authorization above. Production deployment and provider enablement must satisfy its exact-candidate green gate; isolated staging and sandbox work have the separate authorization above.
 
 ## Backend Guidelines
 

@@ -112,6 +112,27 @@ test("authentication and billing copy remains complete in neutral U.S. Spanish",
   assert.match(esUS.billing.trial.ownerChoose, /propietario/);
 });
 
+test("QuickBooks numbering failures give owned actionable copy in both languages", () => {
+  const cases = [
+    ["QUICKBOOKS_CUSTOM_NUMBERING_REQUIRED", "customNumberingRequired"],
+    ["QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID", "numberingPreflightInvalid"],
+    ["QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE", "numberingPreflightUnavailable"],
+    ["QUICKBOOKS_DOC_NUMBER_COLLISION", "docNumberCollision"],
+  ] as const;
+  for (const locale of [enUS, esUS]) {
+    for (const [code, key] of cases) {
+      const message = localizedApiError(
+        new ApiError("unsafe provider diagnostic", 409, { code }),
+        dictionaryT(locale),
+        { fallbackKey: "invoices.quickBooks.publishError" },
+      );
+      assert.equal(message, locale.invoices.quickBooks[key]);
+      assert.notEqual(message, locale.apiErrors.conflict);
+      assert.doesNotMatch(message, /unsafe provider diagnostic/);
+    }
+  }
+});
+
 test("API failures use stable localized mappings and never render backend or provider prose", () => {
   const spanish = dictionaryT(esUS);
 

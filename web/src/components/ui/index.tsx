@@ -137,7 +137,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             {...rest}
           />
         </div>
-        {error && <p id={errorId} className="text-xs text-red-600">{error}</p>}
+        {error && <p id={errorId} className="text-xs text-[var(--qf-danger-text)]">{error}</p>}
       </div>
     );
   },
@@ -154,9 +154,11 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 }
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(
-  ({ label, error, options, placeholder, className = "", id, ...rest }, ref) => {
+  ({ label, error, options, placeholder, className = "", id, "aria-describedby": ariaDescribedBy, "aria-invalid": ariaInvalid, ...rest }, ref) => {
     const generatedId = useId();
     const selectId = id ?? generatedId;
+    const errorId = `${selectId}-error`;
+    const describedBy = [ariaDescribedBy, error ? errorId : null].filter(Boolean).join(" ") || undefined;
     return (
       <div className="space-y-1">
         {label && (
@@ -167,6 +169,8 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
         <select
           ref={ref}
           id={selectId}
+          aria-describedby={describedBy}
+          aria-invalid={error ? true : ariaInvalid}
           className={cn(
             "min-h-[44px] w-full rounded-lg border bg-[var(--qf-panel)] px-3 py-2 text-sm text-[var(--qf-text)] transition-all hover:border-[var(--qf-border-strong)] focus:border-[var(--qf-focus)] focus:ring-4 focus:ring-[var(--qf-focus-ring)] focus:outline-none disabled:cursor-not-allowed disabled:bg-[var(--qf-panel-muted)] disabled:text-[var(--qf-text-muted)] sm:min-h-[38px]",
             error ? "border-red-300" : "border-[var(--qf-border)]",
@@ -179,7 +183,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
             <option key={opt.value} value={opt.value} disabled={opt.disabled}>{opt.label}</option>
           ))}
         </select>
-        {error && <p className="text-xs text-red-600">{error}</p>}
+        {error && <p id={errorId} className="text-xs text-[var(--qf-danger-text)]">{error}</p>}
       </div>
     );
   },
@@ -214,7 +218,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           )}
           {...rest}
         />
-        {error && <p className="text-xs text-red-600">{error}</p>}
+        {error && <p className="text-xs text-[var(--qf-danger-text)]">{error}</p>}
       </div>
     );
   },
@@ -605,6 +609,7 @@ interface ConfirmModalProps {
   confirmLabel?: string;
   cancelLabel?: string;
   loading?: boolean;
+  confirmDisabled?: boolean;
   confirmVariant?: ButtonVariant;
   children?: ReactNode;
   size?: ModalSize;
@@ -619,6 +624,7 @@ export function ConfirmModal({
   confirmLabel,
   cancelLabel,
   loading = false,
+  confirmDisabled = false,
   confirmVariant = "danger",
   children,
   size = "sm",
@@ -677,7 +683,7 @@ export function ConfirmModal({
         <Button type="button" variant="outline" onClick={onClose} disabled={loading} fullWidth className="order-2 sm:order-1 sm:w-auto">
           {resolvedCancelLabel}
         </Button>
-        <Button type="button" variant={confirmVariant} onClick={onConfirm} loading={loading} fullWidth className="order-1 sm:order-2 sm:w-auto">
+        <Button type="button" variant={confirmVariant} onClick={onConfirm} loading={loading} disabled={confirmDisabled} fullWidth className="order-1 sm:order-2 sm:w-auto">
           {resolvedConfirmLabel}
         </Button>
       </ModalFooter>
@@ -694,7 +700,7 @@ export function Spinner({ size = 16 }: { size?: number }) {
       height={size}
       viewBox="0 0 24 24"
       fill="none"
-      className="animate-spin"
+      className="animate-spin motion-reduce:animate-none"
       aria-hidden="true"
       focusable="false"
     >
