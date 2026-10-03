@@ -10,10 +10,12 @@ import { evaluateQuickBooksTaxInvoiceParity, QuickBooksTaxInvoiceParityError } f
 const CLAIM_MS = 120_000;
 export const QUICKBOOKS_TAX_INVOICE_PARITY_CONTRACT_VERSION = 1;
 const id = z.string().min(1).max(191);
+// Match the durable Estimate identity grammar before retaining an immutable ID.
+const providerInvoiceId = z.string().min(1).max(191).regex(/^[A-Za-z0-9_-]+$/);
 const commandSchema = z.strictObject({ taxEstimateOperationId: id,
   idempotencyKey: z.string().uuid() });
 const retainedSchema = z.strictObject({ tenantId: id, operationId: id,
-  providerRequestId: id, attemptToken: z.string().regex(/^[a-f0-9]{64}$/), providerInvoiceId: id });
+  providerRequestId: id, attemptToken: z.string().regex(/^[a-f0-9]{64}$/), providerInvoiceId });
 const quarantineSchema = retainedSchema.omit({ providerInvoiceId: true }).extend({
   failureCode: z.string().regex(/^[A-Z][A-Z0-9_]{0,190}$/),
 });
@@ -170,6 +172,11 @@ export async function retainCreatedQuickBooksTaxInvoiceIdentity(prisma: PrismaCl
     if (operation.providerInvoiceId && operation.providerInvoiceId !== input.providerInvoiceId) {
       reject("QUICKBOOKS_TAX_INVOICE_PROVIDER_ID_CONFLICT");
     }
+    if (operation.providerInvoiceId === input.providerInvoiceId) {
+      return Object.freeze({ outcome: "ALREADY_RETAINED" as const, operation,
+        canContinue: false as const, providerContinuationAuthorized: false as const,
+        publishingAuthorized: false as const });
+    }
     const now = new Date();
     let updated: typeof operation;
     try {
@@ -185,7 +192,7 @@ export async function retainCreatedQuickBooksTaxInvoiceIdentity(prisma: PrismaCl
       }
       throw error;
     }
-    return Object.freeze({ outcome: operation.providerInvoiceId ? "ALREADY_RETAINED" as const : "RETAINED" as const,
+    return Object.freeze({ outcome: "RETAINED" as const,
       operation: updated, canContinue: false as const, providerContinuationAuthorized: false as const,
       publishingAuthorized: false as const });
   }, { maxWait: 10_000, timeout: 15_000, isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });

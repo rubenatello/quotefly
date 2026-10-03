@@ -13,11 +13,15 @@ const providerKey = "quoteflyPendingProviderInvoiceIds";
 const terminalKey = "quoteflyInvoiceTerminalFailures";
 const deferredTaxKey = "quoteflyDeferredTaxInvoiceIds";
 const taxUnavailable = "QUICKBOOKS_TAX_INVOICE_WORKFLOW_UNAVAILABLE";
+const tenantIds: string[] = [];
+const userIds: string[] = [];
 
 async function fixture(localIds: string[], providerIds: string[] = []) {
   const stamp = randomUUID();
   const tenant = await prisma.tenant.create({ data: { name: "Webhook isolation test", slug: stamp } });
+  tenantIds.push(tenant.id);
   const user = await prisma.user.create({ data: { email: `${stamp}@example.com`, passwordHash: "synthetic-test-hash", fullName: "Test owner" } });
+  userIds.push(user.id);
   const member = await prisma.tenantUser.create({ data: { tenantId: tenant.id, userId: user.id, role: "owner" } });
   const connection = await prisma.quickBooksConnection.create({ data: {
     tenantId: tenant.id, realmId: stamp, environment: "sandbox", status: "CONNECTED",
@@ -63,7 +67,16 @@ async function addMappedInvoice(f: Awaited<ReturnType<typeof fixture>>, provider
 }
 
 describe("QuickBooks webhook invoice fanout checkpoints", () => {
-  afterAll(async () => { await prisma.$disconnect(); });
+  afterAll(async () => {
+    try {
+      await prisma.quickBooksWebhookReplay.deleteMany({ where: { tenantId: { in: tenantIds } } });
+      await prisma.quickBooksWebhookEvent.deleteMany({ where: { tenantId: { in: tenantIds } } });
+      await prisma.tenant.deleteMany({ where: { id: { in: tenantIds } } });
+      await prisma.user.deleteMany({ where: { id: { in: userIds } } });
+    } finally {
+      await prisma.$disconnect();
+    }
+  });
 
   test("tax-only work dead-letters once with its linked invoice IDs retained", async () => {
     const f = await fixture(["tax-invoice"]);

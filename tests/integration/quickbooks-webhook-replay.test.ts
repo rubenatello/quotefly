@@ -9,12 +9,14 @@ import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "../../src/services/quickbook
 import { listQuickBooksDeadLetters, replayQuickBooksDeadLetter } from "../../src/services/quickbooks-webhook-replay";
 
 const tenantIds: string[] = [];
+const userIds: string[] = [];
 async function fixture() {
   const stamp = randomUUID();
   const tenant = await prisma.tenant.create({ data: { name: "Recovery fixture", slug: stamp,
     subscriptionStatus: "trialing", trialStartsAtUtc: new Date(), trialEndsAtUtc: new Date(Date.now() + 86_400_000) } });
   tenantIds.push(tenant.id);
   const user = await prisma.user.create({ data: { email: `${stamp}@example.com`, passwordHash: "synthetic", fullName: "Test owner" } });
+  userIds.push(user.id);
   const member = await prisma.tenantUser.create({ data: { tenantId: tenant.id, userId: user.id, role: "owner" } });
   const connection = await prisma.quickBooksConnection.create({ data: {
     tenantId: tenant.id, realmId: stamp, environment: "sandbox", status: "CONNECTED",
@@ -42,6 +44,9 @@ describe("authorized QuickBooks dead-letter replay", () => {
   afterAll(async () => {
     // Test-only cleanup uses the guarded dedicated database's migration role.
     await prisma.quickBooksWebhookReplay.deleteMany({ where: { tenantId: { in: tenantIds } } });
+    await prisma.quickBooksWebhookEvent.deleteMany({ where: { tenantId: { in: tenantIds } } });
+    await prisma.tenant.deleteMany({ where: { id: { in: tenantIds } } });
+    await prisma.user.deleteMany({ where: { id: { in: userIds } } });
     await prisma.$disconnect();
   });
 

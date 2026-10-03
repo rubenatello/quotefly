@@ -193,9 +193,33 @@ describe("QuickBooks taxable Invoice lifecycle", () => {
     expect(recorded).toMatchObject({ outcome: "RECORDED", projectionMatches: true, estimateInvoiceParityProven: false, publishingAuthorized: false, operation: { status: "RECONCILIATION_REQUIRED", taxParityContractVersion: 1, lastFailureCode: "QUICKBOOKS_TAX_PROJECTION_REQUIRES_TRUSTED_PROVENANCE" } });
     expect(await recordQuickBooksTaxInvoiceProjectionMatch(runtimePrisma, f.actor, testRuntime(keys), { ...attempt, providerInvoiceId, canonicalEstimate: canonical.estimate, canonicalInvoice: structuredClone(exact) }))
       .toMatchObject({ outcome: "ALREADY_RECORDED", projectionMatches: true, publishingAuthorized: false });
+    const operationBeforeRepeat = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: result.operation.id } });
+    expect(await retainCreatedQuickBooksTaxInvoiceIdentity(runtimePrisma, { ...attempt, providerInvoiceId }))
+      .toMatchObject({ outcome: "ALREADY_RETAINED", operation: recorded.operation,
+        canContinue: false, providerContinuationAuthorized: false, publishingAuthorized: false });
+    expect(await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: result.operation.id } }))
+      .toEqual(operationBeforeRepeat);
     expect(await prisma.invoice.findUniqueOrThrow({ where: { id: f.invoice.id } })).toEqual(before);
     await expect(prisma.quickBooksInvoiceOperation.update({ where: { id: result.operation.id }, data: { taxCanonicalInvoiceHash: "f".repeat(64) } }))
       .rejects.toThrow(/write-once/);
+  });
+
+  test("malformed provider identities cannot mutate retention or projection evidence", async () => {
+    const f = await fixture(); const { canonical, result, attempt } = await claimedInvoice(f);
+    const before = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: result.operation.id } });
+    const invalidIds = ["", " ", "invoice 1", "invoice\n1", "invoice\t1", "invoice\u00001", "invoice\u200b1",
+      ".", "..", "invoice/1", "invoice\\1", "invoice?1", "invoice#1", "https://example.test/invoice/1", "a".repeat(192)];
+    for (const providerInvoiceId of invalidIds) {
+      await expect(retainCreatedQuickBooksTaxInvoiceIdentity(runtimePrisma, { ...attempt, providerInvoiceId }))
+        .rejects.toMatchObject({ code: "QUICKBOOKS_TAX_INVOICE_INPUT_INVALID" });
+      await expect(recordQuickBooksTaxInvoiceProjectionMatch(runtimePrisma, f.actor, testRuntime(keys), {
+        ...attempt, providerInvoiceId, canonicalEstimate: canonical.estimate,
+        canonicalInvoice: invoiceProjection(canonical.estimate, providerInvoiceId),
+      })).rejects.toMatchObject({ code: "QUICKBOOKS_TAX_INVOICE_INPUT_INVALID" });
+    }
+    expect(await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: result.operation.id } })).toEqual(before);
+    expect(await retainCreatedQuickBooksTaxInvoiceIdentity(runtimePrisma, { ...attempt, providerInvoiceId: "12345_QBO-invoice" }))
+      .toMatchObject({ outcome: "RETAINED", publishingAuthorized: false });
   });
 
   test("database invariants force RLS, deny runtime deletion and reject partial proof tuples", async () => {

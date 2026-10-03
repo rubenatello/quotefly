@@ -26,6 +26,8 @@ The remaining sequence is to verify that read-only job, resolve the masked monit
 
 The acceptance contract is [QuickBooks Hosted Payments And Reconciliation](quickbooks-hosted-payments-reconciliation.md). That contract defines the authoritative workflow, security boundary, state projection, recovery behavior, and evidence required before enablement.
 
+The internal lifecycle increment was independently approved by Sentinel and Opera and pushed as `de50673a7f1bfe6567b597e4cd0e7962265159f1`. CI 136 failed four notification-retention setup checks because a prior webhook suite left fixtures behind. Follow-up cleanup now removes only fixture-owned records and verifies preservation of pre-existing webhook identities and tenant/connection links. Follow-up product hardening rejects malformed durable Invoice identities with the same bounded alphanumeric/underscore/hyphen grammar as Estimate identities; repeated same-ID retention leaves the complete operation unchanged, preserving later projection reasons and timestamps. Eight focused lifecycle tests and 30 cleanup regression tests passed. Full local `verify:ci` passed on all follow-up code at 21:23 UTC with 652 database tests across 40 files and 416 main unit tests, no skips, and passing builds/lint/schema/security/evaluations/audits. Sentinel approved the source changes; final Opera review and a fresh remote CI run remain required. Hosted migration and provider dispatch remain unapproved.
+
 ## Current supported accounting workflow
 
 - Create and review an internal QuoteFly invoice from an accepted quote or completed Job.
