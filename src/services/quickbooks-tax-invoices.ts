@@ -23,6 +23,7 @@ const quarantineSchema = retainedSchema.omit({ providerInvoiceId: true }).extend
   failureCode: z.string().regex(/^[A-Z][A-Z0-9_]{0,190}$/),
 });
 const projectionSchema = retainedSchema.extend({ canonicalEstimate: z.unknown(), canonicalInvoice: z.unknown() });
+const expiredAttemptSchema = z.strictObject({ tenantId: id, operationId: id });
 const fenceSchema = z.strictObject({
   tenantId: id,
   operationId: id,
@@ -101,6 +102,41 @@ function requireAttempt(operation: Awaited<ReturnType<typeof readAndLockTaxOpera
     || !sameToken(operation.taxAttemptTokenHash, input.attemptToken)) {
     reject("QUICKBOOKS_TAX_INVOICE_ATTEMPT_INVALID");
   }
+}
+
+async function degradeExpiredTaxInvoiceAttempt(tx: Prisma.TransactionClient,
+  operation: Awaited<ReturnType<typeof readAndLockTaxOperation>>,
+  audit: { actorTenantUserId: string | null; requestId: string }) {
+  const now = new Date();
+  if (operation.status !== "PROCESSING" || !operation.claimExpiresAtUtc
+    || operation.claimExpiresAtUtc.getTime() > now.getTime()) {
+    return { expired: false as const, operation };
+  }
+  const updated = await tx.quickBooksInvoiceOperation.update({ where: { id: operation.id }, data: {
+    status: "RECONCILIATION_REQUIRED", claimTokenHash: null, claimExpiresAtUtc: null,
+    failedAtUtc: now, lastFailureCode: QUICKBOOKS_TAX_INVOICE_RESULT_UNKNOWN,
+  }, select: taxOperationSelect });
+  await tx.invoiceEvent.create({ data: {
+    tenantId: operation.tenantId, invoiceId: operation.invoiceId,
+    actorTenantUserId: audit.actorTenantUserId, type: "PROVIDER_RECONCILIATION_REQUIRED",
+    requestId: audit.requestId.slice(0, 191),
+  } });
+  return { expired: true as const, operation: updated };
+}
+
+/** Internal recovery only: expires durable intent without depending on current publishing authority. */
+export async function quarantineExpiredQuickBooksTaxInvoiceAttempt(prisma: PrismaClient, raw: unknown) {
+  const parsed = expiredAttemptSchema.safeParse(raw);
+  if (!parsed.success) reject("QUICKBOOKS_TAX_INVOICE_INPUT_INVALID");
+  const input = parsed.data;
+  return withTenantRlsContext(prisma, input.tenantId, async tx => {
+    const operation = await readAndLockTaxOperation(tx, input.tenantId, input.operationId);
+    const result = await degradeExpiredTaxInvoiceAttempt(tx, operation, {
+      actorTenantUserId: null, requestId: "quickbooks-tax-invoice-expired-attempt",
+    });
+    return freeze({ outcome: result.expired ? "QUARANTINED" as const : "UNCHANGED" as const,
+      operation: result.operation, publishingAuthorized: false as const });
+  }, { maxWait: 10_000, timeout: 15_000, isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
 }
 
 function taxInvoiceRequest(review: Awaited<ReturnType<typeof lockAndReadCurrentCanonicalTaxEstimate>>,
@@ -197,21 +233,16 @@ export async function claimReviewedQuickBooksTaxInvoice(prisma: PrismaClient, ac
       where: { tenantId: actor.tenantId, invoiceId: source.invoiceId }, select: taxOperationSelect,
     });
     if (existing) {
-      const now = new Date();
       if (existing.taxEstimateOperationId === reviewed.current.id
-        && existing.providerRequestId === reviewed.current.invoiceRequestId
-        && existing.status === "PROCESSING" && existing.claimExpiresAtUtc
-        && existing.claimExpiresAtUtc.getTime() <= now.getTime()) {
-        const expired = await tx.quickBooksInvoiceOperation.update({ where: { id: existing.id }, data: {
-          status: "RECONCILIATION_REQUIRED", claimTokenHash: null, claimExpiresAtUtc: null,
-          failedAtUtc: now, lastFailureCode: QUICKBOOKS_TAX_INVOICE_RESULT_UNKNOWN,
-        }, select: taxOperationSelect });
-        await tx.invoiceEvent.create({ data: { tenantId: actor.tenantId, invoiceId: source.invoiceId,
-          actorTenantUserId: reviewed.managerId, type: "PROVIDER_RECONCILIATION_REQUIRED",
-          requestId: actor.requestId.slice(0, 191) } });
-        return freeze({ outcome: "DUPLICATE" as const, operation: expired,
-          claimToken: null, requestProjection: null, dispatch: null,
-          publishingAuthorized: false as const });
+        && existing.providerRequestId === reviewed.current.invoiceRequestId) {
+        const result = await degradeExpiredTaxInvoiceAttempt(tx, existing, {
+          actorTenantUserId: reviewed.managerId, requestId: actor.requestId,
+        });
+        if (result.expired) {
+          return freeze({ outcome: "DUPLICATE" as const, operation: result.operation,
+            claimToken: null, requestProjection: null, dispatch: null,
+            publishingAuthorized: false as const });
+        }
       }
       if (existing.taxEstimateOperationId === reviewed.current.id
         && existing.commandKeyHash === commandKeyHash

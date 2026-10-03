@@ -17,6 +17,7 @@ import {
 import {
   assertQuickBooksTaxInvoiceCreateFence, claimReviewedQuickBooksTaxInvoice,
   QUICKBOOKS_TAX_INVOICE_RESULT_UNKNOWN, readCanonicalTaxInvoiceCredentialTarget,
+  quarantineExpiredQuickBooksTaxInvoiceAttempt,
   recordQuickBooksTaxInvoiceProjectionMatch, retainCreatedQuickBooksTaxInvoiceIdentity,
 } from "../../src/services/quickbooks-tax-invoices";
 import type { TaxReviewSource } from "../../src/services/quickbooks-tax-review-contract";
@@ -275,6 +276,92 @@ describe("QuickBooks taxable Invoice lifecycle", () => {
       type: "PROVIDER_RECONCILIATION_REQUIRED" } })).toBe(1);
     expect(await prisma.invoice.findUniqueOrThrow({ where: { id: f.invoice.id } }))
       .toMatchObject({ status: "DRAFT", version: f.invoice.version });
+  });
+
+  test("expired recovery survives authority, source and generation drift and audits once", async () => {
+    const f = await fixture(); const { canonical, result, attempt } = await claimedInvoice(f);
+    await prisma.quickBooksInvoiceOperation.update({ where: { id: result.operation.id },
+      data: { claimExpiresAtUtc: new Date(result.operation.processingStartedAtUtc!.getTime() + 1) } });
+    await prisma.tenantUser.update({ where: { id: f.member.id }, data: { role: "viewer" } });
+    await prisma.user.update({ where: { id: f.user.id }, data: { authVersion: { increment: 1 } } });
+    await prisma.invoice.update({ where: { id: f.invoice.id }, data: { version: { increment: 1 } } });
+    await prisma.quickBooksConnectionEvent.create({ data: {
+      tenantId: f.tenant.id, quickBooksConnectionId: f.connection.id, actorTenantUserId: f.member.id,
+      requestId: randomUUID(), action: "RECONNECTED", outcome: "SUCCEEDED", connectionGeneration: 2,
+    } });
+    await prisma.quickBooksTaxEstimateOperation.update({ where: { id: canonical.row.id },
+      data: { status: "SUPERSEDED", supersededAtUtc: new Date() } });
+    const invoiceBefore = await prisma.invoice.findUniqueOrThrow({ where: { id: f.invoice.id } });
+    const parentBefore = await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: canonical.row.id } });
+    const input = { tenantId: f.tenant.id, operationId: result.operation.id };
+    const recovered = await Promise.all([
+      quarantineExpiredQuickBooksTaxInvoiceAttempt(runtimePrisma, input),
+      quarantineExpiredQuickBooksTaxInvoiceAttempt(runtimePrisma, input),
+    ]);
+    expect(recovered.map(value => value.outcome).sort()).toEqual(["QUARANTINED", "UNCHANGED"]);
+    for (const value of recovered) {
+      expect(value).toMatchObject({ publishingAuthorized: false, operation: {
+        id: result.operation.id, status: "RECONCILIATION_REQUIRED", attemptCount: 1,
+        providerRequestId: result.operation.providerRequestId, payloadHash: result.operation.payloadHash,
+        taxAttemptTokenHash: result.operation.taxAttemptTokenHash, providerInvoiceId: null,
+        claimTokenHash: null, claimExpiresAtUtc: null, lastFailureCode: QUICKBOOKS_TAX_INVOICE_RESULT_UNKNOWN,
+      } });
+    }
+    const events = await prisma.invoiceEvent.findMany({ where: { tenantId: f.tenant.id,
+      invoiceId: f.invoice.id, type: "PROVIDER_RECONCILIATION_REQUIRED" } });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ actorTenantUserId: null,
+      requestId: "quickbooks-tax-invoice-expired-attempt" });
+    expect(await prisma.invoice.findUniqueOrThrow({ where: { id: f.invoice.id } })).toEqual(invoiceBefore);
+    expect(await prisma.quickBooksTaxEstimateOperation.findUniqueOrThrow({ where: { id: canonical.row.id } }))
+      .toEqual(parentBefore);
+    expect(await prisma.quickBooksInvoiceOperation.count({ where: { tenantId: f.tenant.id } })).toBe(1);
+    await retainCreatedQuickBooksTaxInvoiceIdentity(runtimePrisma, { ...attempt,
+      providerInvoiceId: "late-after-expired-recovery" });
+    const retained = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: result.operation.id } });
+    expect(await quarantineExpiredQuickBooksTaxInvoiceAttempt(runtimePrisma, input))
+      .toMatchObject({ outcome: "UNCHANGED", operation: { providerInvoiceId: "late-after-expired-recovery",
+        lastFailureCode: "QUICKBOOKS_TAX_INVOICE_IDENTITY_RETAINED" }, publishingAuthorized: false });
+    expect(await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: result.operation.id } }))
+      .toEqual(retained);
+  });
+
+  test("expired recovery cannot shorten a live lease or cross a tenant boundary", async () => {
+    const f = await fixture(); const { result } = await claimedInvoice(f);
+    const foreign = await fixture();
+    const before = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: result.operation.id } });
+    const input = { tenantId: f.tenant.id, operationId: result.operation.id };
+    expect(await quarantineExpiredQuickBooksTaxInvoiceAttempt(runtimePrisma, input))
+      .toMatchObject({ outcome: "UNCHANGED", publishingAuthorized: false });
+    await expect(quarantineExpiredQuickBooksTaxInvoiceAttempt(runtimePrisma, {
+      ...input, now: new Date(Date.now() + 300_000),
+    })).rejects.toMatchObject({ code: "QUICKBOOKS_TAX_INVOICE_INPUT_INVALID" });
+    await expect(quarantineExpiredQuickBooksTaxInvoiceAttempt(runtimePrisma, {
+      ...input, tenantId: foreign.tenant.id,
+    })).rejects.toMatchObject({ code: "QUICKBOOKS_TAX_INVOICE_OPERATION_NOT_FOUND" });
+    expect(await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: result.operation.id } }))
+      .toEqual(before);
+    expect(await prisma.invoiceEvent.count({ where: { tenantId: f.tenant.id, invoiceId: f.invoice.id,
+      type: "PROVIDER_RECONCILIATION_REQUIRED" } })).toBe(0);
+  });
+
+  test("expired recovery racing late identity retention cannot lose the provider identity", async () => {
+    const f = await fixture(); const { result, attempt } = await claimedInvoice(f);
+    await prisma.quickBooksInvoiceOperation.update({ where: { id: result.operation.id },
+      data: { claimExpiresAtUtc: new Date(result.operation.processingStartedAtUtc!.getTime() + 1) } });
+    await Promise.all([
+      quarantineExpiredQuickBooksTaxInvoiceAttempt(runtimePrisma, { tenantId: f.tenant.id,
+        operationId: result.operation.id }),
+      retainCreatedQuickBooksTaxInvoiceIdentity(runtimePrisma, { ...attempt,
+        providerInvoiceId: "late-racing-expired-recovery" }),
+    ]);
+    expect(await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: result.operation.id } }))
+      .toMatchObject({ providerInvoiceId: "late-racing-expired-recovery", status: "RECONCILIATION_REQUIRED",
+        taxAttemptTokenHash: result.operation.taxAttemptTokenHash, attemptCount: 1,
+        lastFailureCode: "QUICKBOOKS_TAX_INVOICE_IDENTITY_RETAINED", claimTokenHash: null,
+        claimExpiresAtUtc: null });
+    expect(await prisma.invoiceEvent.count({ where: { tenantId: f.tenant.id, invoiceId: f.invoice.id,
+      type: "PROVIDER_RECONCILIATION_REQUIRED" } })).toBeLessThanOrEqual(1);
   });
 
   test("late provider identity is retained and quarantined after all current authority becomes stale", async () => {
