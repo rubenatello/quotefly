@@ -73,19 +73,30 @@ test("draft due-date repair handles cancel, stale state, errors, and success on 
   await page.screenshot({ path: ".codex_tmp/invoice-due-editor-desktop.png", fullPage: true });
   await expect(save).toBeDisabled();
 
-  let canceledInvoiceResponseApplied = false;
+  let canceledInvoiceListResponseServed = false;
+  let canceledInvoiceDetailResponseServed = false;
   await page.route(new RegExp(`/v1/invoices\\?[^#]*sourceQuoteId=${quote.id}`), async route => {
     const response = await route.fetch();
     const payload = await response.json() as { items: Array<{ id: string; job: { status: string } }> };
     const targetInvoice = payload.items.find((item) => item.id === invoice.id);
     if (targetInvoice) {
       targetInvoice.job.status = "CANCELED";
-      canceledInvoiceResponseApplied = true;
+      canceledInvoiceListResponseServed = true;
+    }
+    await route.fulfill({ status: response.status(), contentType: "application/json", body: JSON.stringify(payload) });
+  });
+  await page.route(new RegExp(`/v1/invoices/${invoice.id}$`), async route => {
+    const response = await route.fetch();
+    const payload = await response.json() as { invoice: { id: string; job: { status: string } } };
+    if (payload.invoice.id === invoice.id) {
+      payload.invoice.job.status = "CANCELED";
+      canceledInvoiceDetailResponseServed = true;
     }
     await route.fulfill({ status: response.status(), contentType: "application/json", body: JSON.stringify(payload) });
   });
   await page.reload();
-  await expect.poll(() => canceledInvoiceResponseApplied).toBe(true);
+  await expect.poll(() => canceledInvoiceListResponseServed).toBe(true);
+  await expect.poll(() => canceledInvoiceDetailResponseServed).toBe(true);
   await expect(page.getByTestId("quickbooks-invoice-panel")).toBeVisible();
   await expect(page.getByRole("button", { name: "Change due date", exact: true })).toHaveCount(0);
 });
