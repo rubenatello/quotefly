@@ -1,7 +1,8 @@
+import { useGuardedNavigate } from "../../hooks/navigation-guard-context";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import type { ReactNode, FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import {
   api,
   ApiError,
@@ -480,7 +481,7 @@ export function DashboardProvider({
 }) {
   const { t } = useTranslation();
   const location = useLocation();
-  const navigate = useNavigate();
+  const navigate = useGuardedNavigate();
   const routeQuoteId = useMemo(() => {
     const match = location.pathname.match(/^\/app\/quotes\/([^/]+)\/?$/);
     if (!match?.[1]) return null;
@@ -735,7 +736,10 @@ export function DashboardProvider({
       }
     } catch (err) {
       if (requestId !== quoteDetailRequestIdRef.current || selectedQuoteIdRef.current !== quoteId) return;
-      setSelectedQuote(null);
+      // A transient refresh must not unmount memory-only edits for this record.
+      // Authorization and missing-record responses still clear the prior data.
+      const transient = !(err instanceof ApiError) || err.status >= 500;
+      setSelectedQuote(current => transient && current?.id === quoteId ? current : null);
       setOutboundEvents([]);
       setQuoteDetailError(
         err instanceof ApiError && err.status === 404

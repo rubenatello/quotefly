@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { withTenantRlsContext, type TenantRlsClient } from "../lib/tenant-rls";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
+import { lockQuickBooksConnection, lockQuickBooksTenantParent } from "./quickbooks-locks";
 import {
   QUICKBOOKS_RETENTION_BATCH_SIZE,
   QUICKBOOKS_UNKNOWN_REALM_QUARANTINE_RETENTION_DAYS,
@@ -26,6 +27,93 @@ export type QuickBooksWebhookEntityNotification = Readonly<{
 }>;
 
 const QUICKBOOKS_UNSUPPORTED_WEBHOOK_OPERATION = "QUICKBOOKS_WEBHOOK_OPERATION_UNSUPPORTED";
+
+// A signed deletion is sufficient to stop serving a cached payment link, but
+// is not evidence of a void, refund, or any other financial ledger transition.
+async function invalidateDeletedQuickBooksInvoiceLinks(
+  transaction: Prisma.TransactionClient,
+  binding: { tenantId: string; quickBooksConnectionId: string; realmId: string },
+) {
+  // Drain the entire scoped backlog in one database statement. A per-event
+  // loop would add several round trips per notification to Intuit's ack path;
+  // a LIMIT alone would leave deleted payment links usable indefinitely.
+  // Lock event and operation rows in stable order, then pass each mutation's
+  // RETURNING rows to the next CTE (never reread a same-command update).
+  // Reconciliation already fences its final operation UPDATE on all three
+  // generation fields cleared/advanced below. Its terminal-code read guard,
+  // that CAS, and PostgreSQL row locks cover deletion before/during/after a
+  // canonical projection without taking a ledger advisory lock per invoice.
+  await transaction.$executeRaw(Prisma.sql`
+    WITH deletion_candidates AS MATERIALIZED (
+      SELECT event."id"
+      FROM "QuickBooksWebhookEvent" event
+      WHERE event."tenantId" = ${binding.tenantId}
+        AND event."quickBooksConnectionId" = ${binding.quickBooksConnectionId}
+        AND event."realmId" = ${binding.realmId}
+        AND event."status" = 'DEAD'
+        AND event."operation" = 'Delete'
+        AND event."eventType" IN ('Invoice', 'RefundReceipt')
+        AND event."lastError" = ${QUICKBOOKS_UNSUPPORTED_WEBHOOK_OPERATION}
+      ORDER BY event."id"
+      FOR UPDATE OF event
+    ), claimed AS (
+      UPDATE "QuickBooksWebhookEvent" event
+      SET "lastError" = CASE WHEN event."eventType" = 'Invoice'
+        THEN 'QUICKBOOKS_INVOICE_DELETED_MANUAL_REVIEW'
+        ELSE 'QUICKBOOKS_REFUND_DELETED_LINKAGE_UNKNOWN_MANUAL_REVIEW' END
+      FROM deletion_candidates candidate
+      WHERE event."id" = candidate."id"
+        AND event."tenantId" = ${binding.tenantId}
+        AND event."quickBooksConnectionId" = ${binding.quickBooksConnectionId}
+        AND event."realmId" = ${binding.realmId}
+        AND event."lastError" = ${QUICKBOOKS_UNSUPPORTED_WEBHOOK_OPERATION}
+      RETURNING event."webhookEventId", event."entityId", event."eventType"
+    ), operation_targets AS MATERIALIZED (
+      SELECT operation."id"
+      FROM "QuickBooksInvoiceOperation" operation
+      WHERE operation."tenantId" = ${binding.tenantId}
+        AND operation."quickBooksConnectionId" = ${binding.quickBooksConnectionId}
+        AND operation."providerRealmId" = ${binding.realmId}
+        AND EXISTS (
+          SELECT 1 FROM claimed
+          WHERE claimed."eventType" = 'Invoice'
+            AND claimed."entityId" = operation."providerInvoiceId"
+        )
+      ORDER BY operation."id"
+      FOR UPDATE OF operation
+    ), invalidated AS (
+      UPDATE "QuickBooksInvoiceOperation" operation
+      SET "status" = 'RECONCILIATION_REQUIRED',
+        "providerInvoiceLink" = NULL, "invoiceLinkFetchedAtUtc" = NULL,
+        "providerSyncToken" = NULL, "providerUpdatedAtUtc" = NULL,
+        "lastReconciledAtUtc" = clock_timestamp(),
+        "claimTokenHash" = NULL, "claimExpiresAtUtc" = NULL,
+        "succeededAtUtc" = NULL, "failedAtUtc" = clock_timestamp(),
+        "lastFailureCode" = 'QUICKBOOKS_INVOICE_DELETED_MANUAL_REVIEW',
+        "updatedAt" = clock_timestamp()
+      FROM operation_targets target
+      WHERE operation."id" = target."id"
+        AND operation."tenantId" = ${binding.tenantId}
+        AND operation."quickBooksConnectionId" = ${binding.quickBooksConnectionId}
+        AND operation."providerRealmId" = ${binding.realmId}
+        AND EXISTS (
+          SELECT 1 FROM claimed
+          WHERE claimed."eventType" = 'Invoice'
+            AND claimed."entityId" = operation."providerInvoiceId"
+        )
+      RETURNING operation."invoiceId", operation."providerInvoiceId"
+    )
+    INSERT INTO "InvoiceEvent" ("id", "tenantId", "invoiceId", "type", "providerEventId")
+    SELECT
+      'qbo-delete-' || md5(${binding.tenantId} || ':' || claimed."webhookEventId" || ':' || invalidated."invoiceId"),
+      ${binding.tenantId}, invalidated."invoiceId", 'PROVIDER_RECONCILIATION_REQUIRED',
+      left('qbo-delete:' || claimed."webhookEventId" || ':' || invalidated."invoiceId", 191)
+    FROM invalidated
+    JOIN claimed ON claimed."eventType" = 'Invoice'
+      AND claimed."entityId" = invalidated."providerInvoiceId"
+    ON CONFLICT ("tenantId", "providerEventId") DO NOTHING
+  `);
+}
 
 function quickBooksWebhookSupported(notification: QuickBooksWebhookEntityNotification): boolean {
   return notification.supported !== false;
@@ -79,6 +167,32 @@ async function setQuickBooksWebhookIngressContext(
   `);
 }
 
+async function lockActiveQuickBooksWebhookBinding(
+  transaction: Prisma.TransactionClient,
+  binding: { tenantId: string; quickBooksConnectionId: string; realmId: string },
+) {
+  const [tenant] = await lockQuickBooksTenantParent(transaction, binding.tenantId);
+  if (!tenant || tenant.deletedAtUtc) return false;
+  await lockQuickBooksConnection(transaction, binding.tenantId);
+  // The preliminary realm lookup is a routing hint, not authority. Recheck
+  // after lifecycle locks so a disconnect/company change cannot attach a
+  // delivery to an obsolete tenant or connection.
+  const connection = await transaction.quickBooksConnection.findFirst({
+    where: {
+      id: binding.quickBooksConnectionId, tenantId: binding.tenantId, realmId: binding.realmId,
+      status: "CONNECTED", deletedAtUtc: null, disconnectRequestedAtUtc: null,
+    }, select: { id: true },
+  });
+  if (!connection) return false;
+  const active = await transaction.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT "id" FROM "QuickBooksRealmBinding"
+    WHERE "tenantId" = ${binding.tenantId} AND "quickBooksConnectionId" = ${binding.quickBooksConnectionId}
+      AND "realmId" = ${binding.realmId} AND "active" = true
+    FOR SHARE
+  `);
+  return active.length === 1;
+}
+
 async function cleanupExpiredUnknownQuickBooksWebhookQuarantine(
   transaction: Prisma.TransactionClient,
   realmId: string,
@@ -119,6 +233,7 @@ export async function adoptQuickBooksWebhookQuarantine(
 ): Promise<number> {
   return withTenantRlsContext(client, binding.tenantId, async (transaction) => {
     await setQuickBooksWebhookIngressContext(transaction, binding.realmId);
+    if (!await lockActiveQuickBooksWebhookBinding(transaction, binding)) return 0;
     const adopted = await transaction.quickBooksWebhookEvent.updateMany({
       where: {
         tenantId: null,
@@ -148,6 +263,7 @@ export async function adoptQuickBooksWebhookQuarantine(
         deadAtUtc: new Date(),
       },
     });
+    await invalidateDeletedQuickBooksInvoiceLinks(transaction, binding);
     return adopted.count + terminal.count;
   });
 }
@@ -219,6 +335,8 @@ export async function persistQuickBooksWebhookNotifications(
       continue;
     }
     const realmResult = await withTenantRlsContext(prisma, binding.tenantId, async (transaction) => {
+      await setQuickBooksWebhookIngressContext(transaction, realmId);
+      if (!await lockActiveQuickBooksWebhookBinding(transaction, { ...binding, realmId })) return null;
       const notificationRows = realmNotifications.map((notification) => ({
         notification,
         eventId: quickBooksWebhookEventId(notification),
@@ -229,7 +347,6 @@ export async function persistQuickBooksWebhookNotifications(
       const unsupportedEventIds = [...new Set(notificationRows
         .filter(({ notification }) => !quickBooksWebhookSupported(notification))
         .map(({ eventId }) => eventId))];
-      await setQuickBooksWebhookIngressContext(transaction, realmId);
       // Adopt and insert the whole bound-realm batch set-wise. The previous
       // per-event loop performed two or three sequential SQL statements for
       // every notification and could exceed Intuit's acknowledgement window
@@ -292,6 +409,7 @@ export async function persistQuickBooksWebhookNotifications(
           })),
         skipDuplicates: true,
       });
+      await invalidateDeletedQuickBooksInvoiceLinks(transaction, { ...binding, realmId });
       await transaction.quickBooksConnection.updateMany({
         where: { id: binding.quickBooksConnectionId, tenantId: binding.tenantId, deletedAtUtc: null },
         data: { lastWebhookAtUtc: new Date() },
@@ -302,6 +420,15 @@ export async function persistQuickBooksWebhookNotifications(
         duplicate: Math.max(0, realmNotifications.length - realmPersisted),
       };
     }, { maxWait: 5_000, timeout: 10_000 });
+    if (!realmResult) {
+      // Use a new ingress-only transaction, without the stale tenant context.
+      // Quarantine retains only the minimal envelope and supports later adoption.
+      const quarantined = await quarantineUnknownQuickBooksWebhooks(prisma, realmNotifications);
+      unknownRealm += realmNotifications.length;
+      persisted += quarantined.persisted;
+      duplicate += quarantined.duplicate;
+      continue;
+    }
     persisted += realmResult.persisted;
     duplicate += realmResult.duplicate;
   }

@@ -12,6 +12,7 @@ import {
   publicCanonicalUrl,
 } from "../src/lib/public-seo-data";
 import { BASIC_PLAN_PRICING_PATH } from "../src/lib/plans";
+import { QUICKBOOKS_PUBLIC_FAQS, QUICKBOOKS_PUBLIC_STATUS } from "../src/lib/public-integration-data";
 import { renderPublicSitemap } from "./sitemap";
 
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -19,6 +20,29 @@ const distDir = join(webRoot, "dist");
 const publicRobots = process.env.VITE_PUBLIC_SEARCH_INDEXING?.trim() === "disabled"
   ? "noindex,nofollow,noarchive"
   : "index,follow";
+
+test("QuickBooks status is answerable in raw HTML without claiming production availability", async () => {
+  const html = await readFile(join(distDir, "integrations", "quickbooks", "index.html"), "utf8");
+  const visibleText = decodeHtmlText(html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ""));
+  assert.equal((html.match(/<h1(?:\s|>)/g) ?? []).length, 1);
+  for (const statement of [QUICKBOOKS_PUBLIC_STATUS.label, QUICKBOOKS_PUBLIC_STATUS.summary, QUICKBOOKS_PUBLIC_STATUS.connection, QUICKBOOKS_PUBLIC_STATUS.candidateScope]) {
+    assert.ok(visibleText.includes(statement), `Missing visible availability boundary: ${statement}`);
+  }
+  for (const faq of QUICKBOOKS_PUBLIC_FAQS) {
+    assert.ok(visibleText.includes(faq.question));
+    assert.ok(visibleText.includes(faq.answer), `Missing visible FAQ answer: ${faq.question}`);
+  }
+  assert.match(html, /href="\/pricing#basic-plan"/);
+  assert.match(html, /href="\/support#feature-request"/);
+  assert.doesNotMatch(html, /src="[^"]*quickbooks\.png"/);
+  const schema = JSON.parse(extract(html, /<script type="application\/ld\+json">([\s\S]*?)<\/script>/, "QuickBooks schema"));
+  assert.deepEqual(schema["@graph"].map((node: { "@type": string }) => node["@type"]), ["WebPage", "BreadcrumbList"]);
+  assert.deepEqual(schema["@graph"][1].itemListElement.map((item: { item: string }) => item.item), [publicCanonicalUrl("/"), publicCanonicalUrl("/integrations/quickbooks")]);
+  for (const path of ["index.html", "pricing/index.html"]) {
+    const linkedHtml = await readFile(join(distDir, path), "utf8");
+    assert.match(linkedHtml, /href="\/integrations\/quickbooks"/);
+  }
+});
 
 function extract(html: string, expression: RegExp, label: string): string {
   const value = html.match(expression)?.[1]?.trim();
@@ -30,6 +54,7 @@ function decodeHtmlAttribute(value: string): string {
   return value
     .replaceAll("&quot;", '"')
     .replaceAll("&#39;", "'")
+    .replaceAll("&#x27;", "'")
     .replaceAll("&lt;", "<")
     .replaceAll("&gt;", ">")
     .replaceAll("&amp;", "&");
@@ -132,7 +157,7 @@ test("pricing describes the paid-AI cap without hiding deterministic Kody tools"
   assert.match(text, /Basic is the only plan available today/i);
   assert.match(text, /QuoteFly calendar only; no external-calendar sync or route optimization/i);
   assert.match(text, /Integrations on the horizon/i);
-  assert.match(text, /does not currently connect to QuickBooks Online or another external accounting platform/i);
+  assert.match(text, /direct QuickBooks Online integration is being validated in staging and is not available to customers/i);
   assert.match(text, /QuickBooks-friendly CSV export/i);
   assert.match(text, /No launch date is promised/i);
   assert.match(text, /EDI is not currently planned/i);

@@ -1,5 +1,11 @@
 # Dependency Health Snapshot
 
+## 2026-09-13 QuickBooks candidate verification
+
+- Updated Vitest to 4.1.11 to resolve GHSA-82fw-gwwq-j7x9.
+- Updated the frontend transitive js-yaml dependency within its compatible range to resolve GHSA-2883-xcg3-v3hh.
+- Root and frontend dependency audits pass with no advisory exceptions. The local `npm run verify` gate also passes; consumer release still requires the complete launch gate and provider evidence.
+
 ## 2026-08-10 security refresh
 
 - Refreshed the root and web lockfiles within their existing compatible version ranges.

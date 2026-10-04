@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import type { Invoice } from "../../web/src/lib/api";
 import {
   addSessionCookie,
   addWorkspaceMemberViaApi,
@@ -452,9 +453,15 @@ test("QuickBooks review uses mapped targets and recovers from a stale preview ve
     data: { sourceQuoteId: quote.id, dueAtUtc: "2026-10-01T17:00:00.000Z" },
   });
   expect(created.status()).toBe(201);
-  const invoice = (await created.json()) as { invoice: { id: string; version: number } };
+  const invoice = (await created.json()) as { invoice: Invoice };
 
   let previewVersion = invoice.invoice.version;
+  let canonicalVersion = invoice.invoice.version;
+  const canonicalReadVersions: number[] = [];
+  await page.route(`**/v1/invoices/${invoice.invoice.id}`, async (route) => {
+    canonicalReadVersions.push(canonicalVersion);
+    await route.fulfill({ json: { invoice: { ...invoice.invoice, version: canonicalVersion } } });
+  });
   const publishVersions: number[] = [];
   const publishBindings: string[] = [];
   let previewOperation: null | {
@@ -567,6 +574,17 @@ test("QuickBooks review uses mapped targets and recovers from a stale preview ve
   await dialog.getByRole("button", { name: "Publish to QuickBooks" }).click();
   await expect(panel).toContainText("This invoice changed after the review. Review the updated details before publishing.");
   await expect(panel).not.toContainText("Synthetic raw backend prose must not render.");
+  await expect.poll(() => canonicalReadVersions.length).toBeGreaterThanOrEqual(2);
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  await expect(panel.getByRole("button", { name: "Review QuickBooks draft" })).toHaveCount(0);
+  expect(publishVersions).toEqual([invoice.invoice.version]);
+  // Publishing stays closed until the complete canonical invoice catches up
+  // with the concurrent edit represented by the newer provider review.
+  canonicalVersion = previewVersion;
+  await page.reload();
+  await expect(panel.getByRole("button", { name: "Review QuickBooks draft" })).toBeVisible();
   await panel.getByRole("button", { name: "Review QuickBooks draft" }).click();
   await page.getByRole("dialog", { name: "Publish this invoice to QuickBooks?" })
     .getByRole("button", { name: "Publish to QuickBooks" })
@@ -761,7 +779,7 @@ test("a delayed QuickBooks mapping review cannot replace or publish a newly acti
   await addSessionCookie(context, owner);
   await page.goto(`/app/quotes/${firstQuote.id}`);
   const firstPanel = page.getByTestId("quickbooks-invoice-panel");
-  const customerSearchButton = firstPanel.getByRole("button", { name: "invoices.quickBooks.search", exact: true }).first();
+  const customerSearchButton = firstPanel.getByRole("button", { name: "Search", exact: true }).first();
   await expect(customerSearchButton).toBeVisible({ timeout: 30_000 });
   await customerSearchButton.click();
   await firstPanel.getByRole("button", { name: /QuickBooks Customer A/ }).click();
@@ -961,8 +979,8 @@ test("QuickBooks customer and item reviews refresh a no-email invoice for offlin
   await addSessionCookie(context, owner);
   await page.goto(`/app/quotes/${quote.id}`);
   const panel = page.getByTestId("quickbooks-invoice-panel");
-  const customerSearchButton = panel.getByRole("button", { name: "invoices.quickBooks.search", exact: true });
-  const itemSearchButton = panel.getByRole("button", { name: "invoices.quickBooks.searchItemsFor", exact: true });
+  const customerSearchButton = panel.getByRole("button", { name: "Search", exact: true });
+  const itemSearchButton = panel.getByRole("button", { name: `Search QuickBooks items for ${quote.title}`, exact: true });
   await expect(customerSearchButton).toBeVisible({ timeout: 30_000 });
   await expect(itemSearchButton).toBeVisible();
   await customerSearchButton.click();

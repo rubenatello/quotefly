@@ -90,6 +90,38 @@ const PROFILES = {
       QUICKBOOKS_CDC_WORKER_ENABLED: ["true"],
     },
   },
+  "quickbooks-worker": {
+    required: ["NODE_ENV", "DATABASE_URL", "JWT_SECRET", "APP_URL", "API_URL",
+      ...(process.env.QUICKBOOKS_ENVIRONMENT === "sandbox" ? ["QUICKBOOKS_SANDBOX_STAGING_ORIGINS"] : []),
+      "QUICKBOOKS_CLIENT_ID", "QUICKBOOKS_CLIENT_SECRET", "QUICKBOOKS_ENVIRONMENT",
+      "QUICKBOOKS_TOKEN_ENCRYPTION_KEY", "QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED",
+      "QUICKBOOKS_OAUTH_ONLY_MODE", "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED", "QUICKBOOKS_CDC_WORKER_ENABLED"],
+    forbidden: [...ALL_RUNTIME_SECRETS.filter(name => !["DATABASE_URL", "JWT_SECRET", "QUICKBOOKS_CLIENT_SECRET",
+      "QUICKBOOKS_TOKEN_ENCRYPTION_KEY", "QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS"].includes(name)), "OPEN_API_KEY"],
+    expected: { NODE_ENV: ["production"], QUICKBOOKS_ENVIRONMENT: ["sandbox", "production"],
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: ["true"], QUICKBOOKS_OAUTH_ONLY_MODE: ["false"],
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: ["true"], QUICKBOOKS_CDC_WORKER_ENABLED: ["true", "false"] },
+  },
+  "quickbooks-staging-accounting": {
+    required: ["NODE_ENV", "DATABASE_URL", "JWT_SECRET", "APP_URL", "API_URL",
+      "QUICKBOOKS_SANDBOX_STAGING_ORIGINS",
+      "QUICKBOOKS_CLIENT_ID", "QUICKBOOKS_CLIENT_SECRET", "QUICKBOOKS_ENVIRONMENT",
+      "QUICKBOOKS_REDIRECT_URI", "QUICKBOOKS_WEBHOOK_VERIFIER", "QUICKBOOKS_TOKEN_ENCRYPTION_KEY",
+      "QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED", "QUICKBOOKS_OAUTH_ONLY_MODE",
+      "QUICKBOOKS_RECONCILIATION_WORKER_ENABLED", "QUICKBOOKS_CDC_WORKER_ENABLED", "QUICKBOOKS_HOSTED_PAYMENTS_ENABLED"],
+    forbidden: ["DIRECT_DATABASE_URL"],
+    expected: { NODE_ENV: ["production"], QUICKBOOKS_ENVIRONMENT: ["sandbox"],
+      QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED: ["true"], QUICKBOOKS_OAUTH_ONLY_MODE: ["false"],
+      QUICKBOOKS_RECONCILIATION_WORKER_ENABLED: ["true"], QUICKBOOKS_CDC_WORKER_ENABLED: ["false"],
+      QUICKBOOKS_HOSTED_PAYMENTS_ENABLED: ["false"] },
+  },
+  "quickbooks-monitor": {
+    required: ["NODE_ENV", "DATABASE_URL", "RESEND_API_KEY", "PASSWORD_RESET_EMAIL_FROM", "QUICKBOOKS_ALERT_EMAIL",
+      "QUICKBOOKS_MONITOR_ENVIRONMENT_LABEL", "QUICKBOOKS_MONITOR_ENABLED", "QUICKBOOKS_MONITOR_EXPECT_RECONCILIATION", "QUICKBOOKS_MONITOR_EXPECT_CDC"],
+    forbidden: [...ALL_RUNTIME_SECRETS.filter((name) => !["DATABASE_URL", "RESEND_API_KEY"].includes(name)), "QUICKBOOKS_CLIENT_ID"],
+    expected: { QUICKBOOKS_MONITOR_ENABLED: ["true"], QUICKBOOKS_MONITOR_ENVIRONMENT_LABEL: ["staging", "production"],
+      QUICKBOOKS_MONITOR_EXPECT_RECONCILIATION: ["true", "false"], QUICKBOOKS_MONITOR_EXPECT_CDC: ["true", "false"] },
+  },
   "quickbooks-oauth": {
     required: [
       "NODE_ENV",
@@ -123,7 +155,7 @@ const PROFILES = {
 
 function usage() {
   process.stdout.write(
-    "Usage: node scripts/infrastructure-variable-audit.mjs --profile <api|worker|migrations|web|quickbooks|quickbooks-oauth>\n"
+    "Usage: node scripts/infrastructure-variable-audit.mjs --profile <api|worker|migrations|web|quickbooks|quickbooks-oauth|quickbooks-worker|quickbooks-staging-accounting|quickbooks-monitor>\n"
     + "Emits current-process presence metadata only; it never prints environment values.\n",
   );
 }

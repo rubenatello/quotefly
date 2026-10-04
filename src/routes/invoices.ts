@@ -1,6 +1,8 @@
 import { InvoicePaymentStatus, InvoiceStatus, Prisma } from "@prisma/client";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { getJwtClaims } from "../lib/auth";
+import { invoiceDueDateInputSchema, updateInvoiceDueDate } from "../services/invoice-due-date";
 import { buildAccessContext, hasCapability } from "../lib/access-policy";
 import { PaginationQuerySchema } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
@@ -102,6 +104,20 @@ function sendInvoiceError(reply: FastifyReply, error: unknown) {
 }
 
 export const invoiceRoutes: FastifyPluginAsync = async (app) => {
+  app.patch("/invoices/:invoiceId/due-date", { preHandler: [app.authenticate] }, async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const { invoiceId } = InvoiceParamsSchema.parse(request.params);
+    const payload = invoiceDueDateInputSchema.parse(request.body);
+    const key = idempotencyKey(request);
+    try {
+      const result = await updateInvoiceDueDate(app.prisma, getJwtClaims(request), invoiceId, payload, key, request.id);
+      reply.header("Cache-Control", "private, no-store");
+      return { invoice: serializeInvoice(result.invoice), duplicate: result.duplicate };
+    } catch (error) {
+      return sendInvoiceError(reply, error);
+    }
+  });
+
   app.get("/invoices", { preHandler: [app.authenticate] }, async (request, reply) => {
     const access = buildAccessContext(request);
     const query = ListInvoicesQuerySchema.parse(request.query);

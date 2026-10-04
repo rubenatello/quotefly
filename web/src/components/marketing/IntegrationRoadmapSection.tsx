@@ -1,5 +1,6 @@
 import { ArrowRight, FileSpreadsheet, Landmark, ShieldCheck, Webhook } from "lucide-react";
 import { Link } from "react-router-dom";
+import { QUICKBOOKS_PUBLIC_STATUS } from "../../lib/public-integration-data";
 
 const INTEGRATION_ROADMAP = [
   {
@@ -13,12 +14,12 @@ const INTEGRATION_ROADMAP = [
   },
   {
     icon: Landmark,
-    status: "On the horizon",
+    status: "In staging validation",
     statusClass: "border-orange-200 bg-orange-50 text-orange-900",
     iconClass: "bg-[var(--qf-brand-orange)] text-[var(--qf-brand-orange-contrast)]",
     title: "QuickBooks Online",
     description:
-      "The planned direction is a secure OAuth and API connection for reviewed invoice publishing and status reconciliation. No launch date is promised.",
+      QUICKBOOKS_PUBLIC_STATUS.connection + " No launch date is promised.",
   },
   {
     icon: Webhook,
@@ -55,12 +56,13 @@ export function IntegrationRoadmapSection() {
               Integrations on the horizon
             </h2>
             <p className="mt-5 text-base leading-7 text-slate-700">
-              QuoteFly does not currently connect to QuickBooks Online or another external accounting platform. Today, Basic supports internal invoice records and a QuickBooks-friendly CSV export. Live provider connections remain unavailable until they are release-verified.
+              {QUICKBOOKS_PUBLIC_STATUS.summary} Basic supports internal invoice records. Live provider connections remain unavailable until they are release-verified.
             </p>
+            <Link to={QUICKBOOKS_PUBLIC_STATUS.path} className="mt-3 inline-flex min-h-11 items-center font-semibold text-blue-800 underline underline-offset-4">Read the QuickBooks integration status and limits</Link>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-[#f7f4ee] p-5">
-            <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-700">Roadmap snapshot · August 2026</p>
+            <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-700">Roadmap snapshot · {QUICKBOOKS_PUBLIC_STATUS.updatedLabel}</p>
             <p className="mt-2 text-sm leading-6 text-slate-700">
               Customer demand helps set priority, but user count alone does not make an accounting integration ready.
             </p>

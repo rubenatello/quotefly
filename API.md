@@ -772,7 +772,7 @@ Responses:
 - `409 INVOICE_JOB_NOT_COMPLETED` when creating from a job that is not completed.
 - `409 INVOICE_IDEMPOTENCY_KEY_REUSED` when the same idempotency key is reused for a different payload.
 
-Provider invoice creation remains behind the existing QuickBooks routes for now. Before Jobs-to-QuickBooks or Jobs-to-Stripe invoice creation is exposed, add a durable `PROCESSING` claim/reconciliation path so concurrent clicks or uncertain provider timeouts cannot create duplicate external invoices.
+QuickBooks provider invoice creation uses the gated Invoice-owned publish/reconciliation routes below. Durable claims quarantine uncertain results rather than automatically creating another provider invoice. These engineering routes do not imply customer availability.
 
 ## AI Quote Endpoints
 
@@ -886,7 +886,7 @@ Soft-removes a member. Owner-only. Owners cannot remove their own active members
 
 ### `GET /v1/integrations/quickbooks/status`
 
-Returns QuickBooks configuration status, connection state, redirect URI, webhook URL, and sync counts. Requires a current owner or admin membership; member roles cannot view provider identifiers or connection metadata.
+Returns QuickBooks configuration and workflow availability, company connection state, setup readiness, worker heartbeat, and mapping/sync counts. Requires a current owner or admin membership. Credentials and provider payloads are never included.
 
 ### `POST /v1/integrations/quickbooks/connect`
 
@@ -898,7 +898,7 @@ OAuth callback used by Intuit. It verifies signed state and live owner/admin cap
 
 ### `POST /v1/integrations/quickbooks/disconnect`
 
-Disconnects QuickBooks and clears stored access/refresh tokens. Requires a current owner or admin membership. This local credential-removal route remains available while provider workflows are paused.
+Records disconnect intent, invalidates cached payment links, and attempts provider token revocation. Credentials are cleared when disconnection completes; a pending revocation retains encrypted recovery material for the bounded retry worker. A pending response is not proof that revocation completed. Requires a current owner or admin membership and remains available while normal accounting workflows are paused.
 
 ### `GET /v1/integrations/quickbooks/quotes/:quoteId/sync-preview`
 
@@ -906,27 +906,43 @@ Builds a preview of customer, invoice, and line-item payloads before pushing to 
 
 ### `POST /v1/integrations/quickbooks/quotes/:quoteId/push-invoice`
 
-Pushes an accepted, non-taxable quote to QuickBooks as an invoice. Requires a current owner or admin membership and `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=true`; otherwise it returns `503 { "error": "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE" }` before provider activity. Taxable quotes fail closed with `422 { "error": "QUICKBOOKS_TAX_SYNC_UNSUPPORTED" }` until tax mapping is implemented.
-
-Body:
-
-```json
-{
-  "createCustomerIfMissing": true,
-  "createItemsIfMissing": true,
-  "dueInDays": 14
-}
-```
-
-Best practice: only call this for `ACCEPTED` quotes after previewing warnings.
+Retired; no longer registered. Create an internal Invoice, review existing customer/item mappings, and use the Invoice-owned publish route below. The candidate never blindly creates provider customers or items.
 
 ### `GET /v1/integrations/quickbooks/quotes/:quoteId/invoice-status`
 
-Refreshes the synced invoice status from QuickBooks. Requires a current owner or admin membership and enabled provider workflows; while paused it returns `503 { "error": "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE" }` before a token refresh or provider call.
+Retired; no longer registered. Use the Invoice-owned refresh route below.
+
+### Invoice-owned QuickBooks candidate
+
+All provider mutations require current owner/admin membership, enabled accounting workflows, and confirmed matching company/setup. OAuth-only staging does not enable these operations. The candidate supports reviewed existing mappings and non-taxable USD invoices only.
+
+- `POST /v1/integrations/quickbooks/invoices/:invoiceId/sync-preview` returns the current invoice version, blockers, provider operation, and signed review binding for the selected billing email and payment options.
+- `POST /v1/integrations/quickbooks/invoices/:invoiceId/publish` requires an `Idempotency-Key`, `invoiceVersion`, `reviewBinding`, and the exact reviewed payment options. The durable operation serializes publication; uncertain outcomes require reconciliation.
+- The publish body optionally accepts `retryFailed: true` only when the server reports `operation.retryAvailable`. Obtain a fresh preview and explicit confirmation, then use a new command key. Only definite, allowlisted rejections without provider-success evidence qualify. A stale review, reused prior command key, timeout, or unknown result cannot authorize a new create. Repeating the same successful recovery command remains idempotent.
+- `POST /v1/integrations/quickbooks/invoices/:invoiceId/reconcile` resolves uncertain publish outcomes through bounded provider reads and fingerprint matching.
+- `POST /v1/integrations/quickbooks/invoices/:invoiceId/refresh` reconciles the canonical provider state into the local ledger.
+- `GET /v1/integrations/quickbooks/invoices/:invoiceId/payment-link` returns an eligible freshly reconciled hosted link with restricted delivery headers. Deleted, paid, void, disconnected, or otherwise unverified records cannot expose a cached link.
+
+### Reviewed customer and item lookup
+
+`POST /v1/integrations/quickbooks/mappings/customers/search` and `/mappings/items/search` accept `{ query, limit?, startPosition? }`. The search is a live name lookup against the tenant's active QuickBooks connection; it does not import a customer or item. `query` accepts 2–80 characters, `limit` defaults to 10 and accepts 1–25, and `startPosition` defaults to 1 and accepts 1–1,000,000. The response contains allowlisted `candidates` and `page: { startPosition, limit, hasMore, nextStartPosition }`. A bounded extra record determines whether another page exists; no total count is implied. At the maximum position, `hasMore` can remain true with no next position; narrow the search instead.
+
+Result pages reflect live provider data, not a fixed snapshot. Changing a search resets pagination; selecting a result still requires a fresh canonical mapping review before publication. Malformed, inactive, or oversized provider result pages fail safely instead of appearing to be an empty final page. The query follows [Intuit's pagination contract](https://intuit.github.io/QuickBooks-V3-PHP-SDK/quickstart.html#pagination).
+
+### Authorized webhook recovery
+
+- `GET /v1/integrations/quickbooks/recovery/events?limit=25&cursor=...` lists dead-letter events for the current tenant. `limit` defaults to 25 and accepts 1–50; omit `cursor` for the first page. The response includes `events`, accurate tenant queue `total`, `hasMore`, and opaque `nextCursor` (null on the last page). Pass `nextCursor` unchanged to reach older events, including replayable updates behind newer manual-review entries. Pages use descending dead-letter timestamp (nulls last) and internal event ID as a deterministic tie-breaker. The cursor anchor is validated against the current tenant's DEAD queue; foreign, missing, malformed, replayed, or retained-away anchors return a safe `400` with `code: QUICKBOOKS_RECOVERY_CURSOR_INVALID`. Refresh without a cursor to restart. Settings renders one bounded page at a time with Previous/Next controls, uses the queue total in its warning, and refreshes page one after replay or an invalidated cursor.
+  Each event contains internal event ID, allowlisted entity type, state, fixed failure reason, attempt count, timestamps, and operation support; it never returns provider IDs, realm IDs, credentials, or payloads. `replayEnabled` reports runtime configuration only; individual connection/setup checks still run at submission. The queue can change while an operator reviews it, so Refresh always reads the current first page and total.
+- `POST /v1/integrations/quickbooks/recovery/events/:eventId/replay` requires a 16–128 character `Idempotency-Key` (`A-Z`, `a-z`, digits, `.`, `_`, `:`, `-`) and a strict body containing `reason`: `PROVIDER_RECOVERED`, `CONNECTION_REAUTHORIZED`, or `MAPPING_CORRECTED`. Both routes require a live owner/admin membership and recheck membership, account deletion, tenant deletion, and session version inside the transaction.
+- A new replay requires enabled full accounting and reconciliation, configured provider/webhook credentials, confirmed current setup, and an active matching tenant/connection/company binding. Only dead events with supported operations qualify: Invoice Create/Update/Void, Payment Create/Update/Void/Delete, and RefundReceipt Create/Update. Deleted invoices and deleted refund receipts require manual review.
+- A successful request returns `{ replayId, eventId, outcome: "QUEUED", requestedAtUtc }`. It atomically resets the inbox attempt/claim state and removes only worker continuation, retry, and terminal checkpoints so the normal worker can rediscover canonical provider facts. It never calls the provider or creates an invoice. This acknowledges queueing, not completed reconciliation.
+- Reusing the same key and event/reason returns the original result, including after processing or inbox retention. Reusing that key for a different command returns `409`; a different key cannot concurrently queue an already-replayed event. Missing/foreign events return `404`, invalid inputs `400`, non-managers `403`, non-replayable/stale-connection requests `409`, and paused runtime `503`. New replay requests are limited to ten per minute.
+
+Recovery procedure: investigate the fixed failure reason, correct the connection/provider/mapping issue, verify the worker is healthy, then submit one supported event with a fresh key and the matching fixed reason. Preserve the response's replay ID as content-free evidence; reuse its key after a lost response. Inspect the worker outcome before submitting another replay. Escalate unsupported deletion/manual-review cases rather than resetting them directly in SQL. The append-only, forced-tenant-RLS `QuickBooksWebhookReplay` audit records actor membership, tenant, original event ID, fixed reason, sanitized prior failure, prior attempts, and hashed command key. The event reference intentionally survives inbox payload retention; runtime cannot update or delete audit history.
 
 ### `POST /v1/integrations/quickbooks/webhook`
 
-QuickBooks webhook receiver. Requires `intuit-signature` header and raw body signature validation. Do not call this from the frontend. While workflows are paused, verified callbacks return `503 { "error": "QUICKBOOKS_PROVIDER_WORKFLOWS_UNAVAILABLE" }` without a token refresh, provider call, or durable acknowledgement; this intentionally asks Intuit to retry rather than silently discarding a provider change. Once enabled, verified callbacks are acknowledged and may run the existing downstream refresh path.
+QuickBooks webhook receiver. Requires `intuit-signature` and raw-body signature validation. Do not call this from the frontend. While accounting workflows are paused it returns unavailable without durable acknowledgement. Once enabled, verified events are committed to the bounded durable inbox before acknowledgement; the worker processes canonical reconciliation asynchronously. Multi-invoice events preserve per-invoice checkpoints so a failed invoice does not discard successful siblings. Signed invoice deletions invalidate cached links and require manual review without inventing a void or refund.
 
 ## SMS Webhook
 

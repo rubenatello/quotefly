@@ -8,6 +8,17 @@ export type QuickBooksWorkerPageResult = Readonly<{
   cycleComplete: boolean;
 }>;
 
+/** Apply the scan cadence to complete tenant cycles, never to individual pages. */
+export function nextQuickBooksWorkerScanAt(
+  page: Pick<QuickBooksWorkerPageResult, "cycleComplete">,
+  intervalMs: number,
+  nowMs: number,
+): number {
+  // An incomplete cycle is due on the next bounded worker tick. The caller's
+  // normal active/idle pause remains responsible for preventing a hot loop.
+  return nowMs + (page.cycleComplete ? intervalMs : 0);
+}
+
 /**
  * Visits at most one keyset page. The caller owns a cursor per work cadence
  * (webhooks, revocation, and CDC), which keeps every tick bounded while still

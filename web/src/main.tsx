@@ -4,6 +4,9 @@ import './index.css'
 import App from './App.tsx'
 import { ThemeProvider } from './components/theme/ThemeProvider.tsx'
 import { LocaleProvider } from './i18n'
+import { installHistoryNavigationGuard } from './hooks/history-navigation-guard'
+
+installHistoryNavigationGuard()
 
 const rootElement = document.getElementById('root')!
 

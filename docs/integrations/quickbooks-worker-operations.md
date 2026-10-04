@@ -24,12 +24,17 @@ The worker receives only the least-privileged runtime `DATABASE_URL`; never give
 - `NODE_ENV=production`;
 - matching `QUICKBOOKS_ENVIRONMENT`;
 - development credentials for sandbox or separately approved production credentials;
-- exact webhook verifier;
+- `APP_URL`, `API_URL`, and explicit `QUICKBOOKS_SANDBOX_STAGING_ORIGINS` for the sandbox deployment boundary;
+- matching `JWT_SECRET` only while legacy token envelopes still require it; preserve the exact API credential bytes;
 - the exact same `QUICKBOOKS_TOKEN_ENCRYPTION_KEY` and intentionally managed `QUICKBOOKS_TOKEN_ENCRYPTION_KEY_PREVIOUS` values as the API for this environment; these keys remain independent from `JWT_SECRET`;
 - `QUICKBOOKS_PROVIDER_WORKFLOWS_ENABLED=true`;
+- `QUICKBOOKS_OAUTH_ONLY_MODE=false` for the separately authorized accounting test; the existing staging connection-only configuration must not be mistaken for accounting enablement;
 - `QUICKBOOKS_RECONCILIATION_WORKER_ENABLED=true`;
-- `QUICKBOOKS_CDC_WORKER_ENABLED=false` for the first connection/reconciliation stage;
-- `QUICKBOOKS_HOSTED_PAYMENTS_ENABLED=false` until InvoiceLink and payment eligibility evidence is approved.
+- `QUICKBOOKS_CDC_WORKER_ENABLED=false` for the first connection/reconciliation stage.
+
+The worker uses `quickbooks-worker-env.ts`, never the API's global environment schema. Its bootstrap validates injected configuration before importing the Prisma-backed runner, and refuses artifact-root or Prisma-directory env files (except `.env.example`). Hosted builds must exclude every real env file, including files Prisma could discover; inject values through the service secret manager. Local worker tests need a clean artifact too; changing only the current directory does not isolate Prisma's generated client. Keep the webhook verifier on the API ingress service only. The worker rejects it along with Stripe, Resend, OpenAI, Twilio, Redis, and migration credentials. Preserve the current API encryption key and share credentials through same-environment secret references without retrieving their values.
+
+Run `node scripts/infrastructure-variable-audit.mjs --profile quickbooks-worker` inside the deployed worker for fixed presence/flag evidence. This audit is not a substitute for successful narrow-parser startup, database-role readiness, and a fresh heartbeat. For the initial sandbox API phase, use `quickbooks-staging-accounting`; hosted payments and CDC stay disabled there until their own evidence run.
 
 The API and worker must run the same checked-in migrations and exact candidate SHA. The worker has no HTTP server; process supervision is liveness, while its content-free structured heartbeat is the operational readiness signal.
 
@@ -77,6 +82,8 @@ still mandatory before enabling provider workflows.
 
 Use [QuickBooks Online sandbox setup](quickbooks-sandbox-setup.md) and [QuickBooks owner testing checklist](quickbooks-owner-testing-checklist.md) for the complete test record.
 
+The September 13 candidate adds manager recovery controls in Settings. Use the paginated recovery list to reach older dead letters, including manual-review events. Correct the cause before replaying a supported event and record the structured reason. A lost response must reuse its original command identity; a known definitive rejection requires a fresh review. Deletion/manual-review events must not be forced back into the queue through direct SQL.
+
 ## Emergency stop and recovery
 
 1. Scale the worker to zero first.
@@ -88,3 +95,6 @@ Use [QuickBooks Online sandbox setup](quickbooks-sandbox-setup.md) and [QuickBoo
 7. Prefer a forward fix across the QuickBooks forced-RLS/migration boundary.
 
 Re-enable only after heartbeat, backlog, dead-letter inventory, provider reachability, realm binding, runtime RLS, alert delivery, and the original incident condition are verified.
+
+
+The separate default-off [operational monitor](quickbooks-operational-monitor.md) implements fixed-recipient alert state and delivery. Follow its narrow environment and real-delivery evidence requirements before counting alerts as operationally ready.

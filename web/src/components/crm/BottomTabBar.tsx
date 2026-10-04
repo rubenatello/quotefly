@@ -1,4 +1,5 @@
-import { useLocation, useNavigate } from "react-router-dom";
+import { useGuardedNavigate } from "../../hooks/navigation-guard-context";
+import { useLocation } from "react-router-dom";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { FilePlus2, FileText, LayoutDashboard, ListTodo } from "lucide-react";
@@ -76,7 +77,7 @@ function MobileTabButton({
 
 export function BottomTabBar() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
+  const navigate = useGuardedNavigate();
   const location = useLocation();
   const currentPage = workspacePageFromPath(location.pathname);
   const activeNavigation = WORKSPACE_PAGE_META[currentPage].activeNavigation;

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   applyKodyQuoteAiProvenance,
   clearQuoteAiProvenanceForAudit,
+  flushQuoteBuilderDraftBeforeLogout,
   isQuoteDraftTimestampFresh,
   hashQuoteCreateCommand,
   prepareQuoteBuilderDraftStorage,
@@ -11,6 +12,7 @@ import {
   quoteDeskDraftStorageKey,
   readQuoteBuilderDraft,
   readQuoteCreateRetryIdentity,
+  registerQuoteBuilderDraftLogoutFlush,
   reconcileQuoteAiProvenanceCustomer,
   removeQuoteBuilderDraft,
   resolveQuoteCreateRetryIdentity,
@@ -190,4 +192,44 @@ test("logout disables new recovery writes and still purges legacy browser keys",
   assert.equal(await writeQuoteBuilderDraft("new", value), null);
   assert.equal(localStorage.length, 0);
   assert.equal(calls.length, 0);
+});
+
+test("logout flush only invokes the active tenant and user registration", async () => {
+  installWindow();
+  prepareQuoteBuilderDraftStorage("tenant-1", "user-1");
+  let flushCount = 0;
+  registerQuoteBuilderDraftLogoutFlush("tenant-1", "user-1", async () => {
+    flushCount += 1;
+  });
+
+  assert.equal(await flushQuoteBuilderDraftBeforeLogout("tenant-1", "user-2"), false);
+  assert.equal(flushCount, 0);
+  assert.equal(await flushQuoteBuilderDraftBeforeLogout("tenant-1", "user-1"), true);
+  assert.equal(flushCount, 1);
+
+  purgeQuoteBuilderDraftStorage();
+  assert.equal(await flushQuoteBuilderDraftBeforeLogout("tenant-1", "user-1"), false);
+  assert.equal(flushCount, 1);
+});
+
+test("a timed-out logout flush cannot write after the same identity signs back in", async () => {
+  installWindow();
+  prepareQuoteBuilderDraftStorage("tenant-1", "user-1");
+  let releasePendingWrite: (() => void) | null = null;
+  const pendingWrite = new Promise<void>((resolve) => {
+    releasePendingWrite = resolve;
+  });
+  let staleWriteCount = 0;
+  registerQuoteBuilderDraftLogoutFlush("tenant-1", "user-1", async (isCurrent) => {
+    await pendingWrite;
+    if (isCurrent()) staleWriteCount += 1;
+  });
+
+  const flush = flushQuoteBuilderDraftBeforeLogout("tenant-1", "user-1");
+  purgeQuoteBuilderDraftStorage();
+  prepareQuoteBuilderDraftStorage("tenant-1", "user-1");
+  releasePendingWrite?.();
+  await flush;
+
+  assert.equal(staleWriteCount, 0);
 });

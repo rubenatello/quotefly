@@ -12,6 +12,7 @@ import { DataPrivacyPage } from "../src/pages/DataPrivacyPage";
 import { LandingPage } from "../src/pages/LandingPage";
 import { LandscapingSolutionsPage } from "../src/pages/LandscapingSolutionsPage";
 import { PricingPage } from "../src/pages/PricingPage";
+import { QuickBooksIntegrationPage } from "../src/pages/QuickBooksIntegrationPage";
 import { PrivacyPage } from "../src/pages/PrivacyPage";
 import { ServicesPage } from "../src/pages/ServicesPage";
 import { SolutionsPage } from "../src/pages/SolutionsPage";
@@ -184,6 +185,31 @@ function routeSchema(path: PublicRoutePath) {
     return { "@context": "https://schema.org", ...softwareApplication };
   }
 
+  if (path === "/integrations/quickbooks") {
+    return {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebPage",
+          "@id": `${canonical}#page`,
+          name: route.heading,
+          description: route.description,
+          url: canonical,
+          dateModified: route.lastModified,
+          isPartOf: { "@id": `${PUBLIC_SITE_URL}/#website` },
+          publisher: { "@id": `${PUBLIC_SITE_URL}/#organization` },
+        },
+        {
+          "@type": "BreadcrumbList",
+          itemListElement: [
+            { "@type": "ListItem", position: 1, name: "Home", item: publicCanonicalUrl("/") },
+            { "@type": "ListItem", position: 2, name: "QuickBooks", item: canonical },
+          ],
+        },
+      ],
+    };
+  }
+
   if (path.startsWith("/solutions/")) {
     const tradeLabel = path.slice("/solutions/".length);
     const breadcrumbName = tradeLabel === "hvac"
@@ -249,6 +275,7 @@ function publicPage(path: PublicRoutePath): ReactElement {
 
   if (path === "/") return createElement(LandingPage, { onOpenAuth });
   if (path === "/pricing") return createElement(PricingPage, { onOpenAuth });
+  if (path === "/integrations/quickbooks") return createElement(QuickBooksIntegrationPage);
   if (path === "/services") return createElement(ServicesPage, { onOpenAuth });
   if (path === "/solutions") return createElement(SolutionsPage, { onOpenAuth });
   if (path === "/solutions/landscaping") return createElement(LandscapingSolutionsPage, { onOpenAuth });

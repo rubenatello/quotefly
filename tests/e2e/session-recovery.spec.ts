@@ -18,6 +18,7 @@ test.describe("session recovery", () => {
   for (const publicRoute of [
     { path: "/" as const, heading: PUBLIC_ROUTE_SEO["/"].heading },
     { path: "/pricing" as const, heading: PUBLIC_ROUTE_SEO["/pricing"].heading },
+    { path: "/integrations/quickbooks" as const, heading: PUBLIC_ROUTE_SEO["/integrations/quickbooks"].heading },
     { path: "/support" as const, heading: PUBLIC_ROUTE_SEO["/support"].heading },
   ]) {
     test(`keeps ${publicRoute.path} available when the session API is degraded`, async ({ page }) => {

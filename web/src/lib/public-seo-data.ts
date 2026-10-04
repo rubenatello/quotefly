@@ -1,4 +1,5 @@
 import { BASIC_PLAN } from "./plans";
+import { QUICKBOOKS_PUBLIC_STATUS } from "./public-integration-data";
 
 export const PUBLIC_SITE_URL = "https://www.quotefly.us";
 export const PUBLIC_OG_IMAGE_URL = `${PUBLIC_SITE_URL}/og-image.jpg`;
@@ -8,6 +9,7 @@ export const PUBLIC_BASIC_PLAN = BASIC_PLAN;
 export const PUBLIC_ROUTE_PATHS = [
   "/",
   "/pricing",
+  "/integrations/quickbooks",
   "/services",
   "/solutions",
   "/solutions/hvac",
@@ -38,6 +40,15 @@ export type PublicRouteSeo = {
 };
 
 export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
+  "/integrations/quickbooks": {
+    path: "/integrations/quickbooks",
+    lastModified: QUICKBOOKS_PUBLIC_STATUS.updated,
+    title: "QuickBooks Online Integration Status & CSV Export | QuoteFly",
+    description: "QuoteFly offers QuickBooks-friendly CSV export. Direct QuickBooks Online integration is in staging validation and is not yet available to customers.",
+    heading: "QuoteFly and QuickBooks Online",
+    summary: QUICKBOOKS_PUBLIC_STATUS.summary,
+    schemaType: "WebPage",
+  },
   "/": {
     path: "/",
     lastModified: "2026-08-27",
@@ -51,7 +62,7 @@ export const PUBLIC_ROUTE_SEO: Record<PublicRoutePath, PublicRouteSeo> = {
   },
   "/pricing": {
     path: "/pricing",
-    lastModified: "2026-08-23",
+    lastModified: "2026-09-13",
     title: "Contractor Quoting Software Pricing & Features | QuoteFly",
     description:
       `QuoteFly Basic costs $${PUBLIC_BASIC_PLAN.monthlyPriceUsd} per month after a ${PUBLIC_BASIC_PLAN.trialDays}-day trial, with the first paid month 50% off. Includes quoting, Jobs, scheduling, dispatch, and internal invoice records.`,

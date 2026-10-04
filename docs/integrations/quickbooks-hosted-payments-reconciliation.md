@@ -25,14 +25,16 @@ QuoteFly must never collect, proxy, persist, or log card numbers, CVV values, ba
 
 Before publishing, an owner or admin must review and explicitly confirm:
 
-- the QuoteFly customer mapped to an existing QuickBooks customer or a separately reviewed new-customer payload;
-- each normalized QuoteFly invoice line mapped to an existing QuickBooks item or a separately reviewed new-item payload;
+- the QuoteFly customer mapped to an existing QuickBooks customer;
+- each normalized QuoteFly invoice line mapped to an existing QuickBooks item;
 - the destination QuickBooks company;
 - the customer billing email;
 - the enabled online payment methods;
 - invoice totals, due date, document number, and every line item.
 
 The confirmation must be bound to the exact tenant, invoice version, connection, realm, mappings, payment-method choices, and provider payload. A mapping or invoice change invalidates the review.
+
+The current candidate requires existing customer/item mappings and non-taxable USD invoices. Creating customers/items in QuickBooks and sales-tax publishing are outside this candidate's supported contract. Final public launch scope requires owner confirmation.
 
 ### Hosted payment link
 

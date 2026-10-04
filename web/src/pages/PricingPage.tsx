@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { Link } from "react-router-dom";
+import { QUICKBOOKS_PUBLIC_STATUS } from "../lib/public-integration-data";
 import {
   BadgeDollarSign,
   CalendarClock,
@@ -126,7 +128,7 @@ const PRICING_FAQS = [
   },
     {
       q: "Do you support QuickBooks?",
-      a: "Basic can create an internal QuoteFly invoice record and export reviewed accounting data through a QuickBooks-friendly CSV workflow. QuoteFly does not currently connect to QuickBooks Online, send that invoice, collect payment, or create and reconcile a QuickBooks invoice. Provider-backed workflows will stay unavailable until they are release-verified.",
+      a: QUICKBOOKS_PUBLIC_STATUS.summary + " Basic can create an internal QuoteFly invoice record. It does not send that invoice, collect payment, or create and reconcile a QuickBooks invoice.",
   },
   {
     q: "How does AI usage work?",
@@ -443,6 +445,7 @@ function PricingFaqs() {
               </summary>
               <div className="border-t border-slate-100 px-5 py-4">
                 <p className="text-sm leading-6 text-slate-700">{faq.a}</p>
+                {faq.q === "Do you support QuickBooks?" ? <Link to="/integrations/quickbooks" className="mt-2 inline-flex min-h-11 items-center text-sm font-semibold text-blue-800 underline underline-offset-4">QuickBooks integration status and limits</Link> : null}
               </div>
             </details>
           ))}
