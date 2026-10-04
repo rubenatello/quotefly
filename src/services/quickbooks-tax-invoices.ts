@@ -149,6 +149,13 @@ function taxInvoiceRequest(review: Awaited<ReturnType<typeof lockAndReadCurrentC
     PrivateNote: providerMarker(tenantId, source.invoiceId),
     CustomerRef: { value: source.customerMapping.providerId },
     CurrencyRef: { value: "USD" as const },
+    // Imported invoices can inherit payment defaults and trigger company auto-email.
+    // This initial tax flow does not authorize payment collection or email delivery.
+    EmailStatus: "NotSet" as const,
+    AllowOnlineACHPayment: false,
+    AllowOnlineCreditCardPayment: false,
+    AllowOnlinePayPalPayment: false,
+    AllowOnlineAffirmPayment: false,
     ShipFromAddr: source.origin,
     ShipAddr: source.destination,
     Line: review.review.estimateAst.Line,

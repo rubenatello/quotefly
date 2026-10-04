@@ -177,6 +177,14 @@ describe("QuickBooks taxable Invoice lifecycle", () => {
       taxEstimateOperationId: canonical.row.id, idempotencyKey: randomUUID(),
     });
     if (result.outcome !== "CLAIMED") throw new Error("Expected tax Invoice claim");
+    expect(result.requestProjection).toMatchObject({ EmailStatus: "NotSet",
+      AllowOnlineACHPayment: false,
+      AllowOnlineCreditCardPayment: false, AllowOnlinePayPalPayment: false,
+      AllowOnlineAffirmPayment: false });
+    expect(result.requestProjection).not.toHaveProperty("BillEmail");
+    expect(result.requestProjection).not.toHaveProperty("AllowOnlinePayment");
+    expect(Reflect.set(result.requestProjection, "AllowOnlineACHPayment", true)).toBe(false);
+    expect(Reflect.set(result.requestProjection, "EmailStatus", "NeedToSend")).toBe(false);
     const operationBefore = await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: result.operation.id } });
     const invoiceBefore = await prisma.invoice.findUniqueOrThrow({ where: { id: f.invoice.id } });
     const fenced = await assertQuickBooksTaxInvoiceCreateFence(runtimePrisma, f.actor, testRuntime(keys), {
@@ -188,6 +196,14 @@ describe("QuickBooks taxable Invoice lifecycle", () => {
     expect(Object.isFrozen(fenced)).toBe(true);
     expect(Object.isFrozen(fenced.dispatch)).toBe(true);
     expect(Object.isFrozen(fenced.dispatch.requestProjection)).toBe(true);
+    expect(fenced.dispatch.requestProjection).toMatchObject({ EmailStatus: "NotSet",
+      AllowOnlineACHPayment: false,
+      AllowOnlineCreditCardPayment: false, AllowOnlinePayPalPayment: false,
+      AllowOnlineAffirmPayment: false });
+    expect(fenced.dispatch.requestProjection).not.toHaveProperty("AllowOnlinePayment");
+    await expect(assertQuickBooksTaxInvoiceCreateFence(runtimePrisma, f.actor, testRuntime(keys), {
+      ...result.dispatch.attempt, AllowOnlineACHPayment: true,
+    })).rejects.toMatchObject({ code: "QUICKBOOKS_TAX_INVOICE_INPUT_INVALID" });
     expect(await prisma.quickBooksInvoiceOperation.findUniqueOrThrow({ where: { id: result.operation.id } }))
       .toEqual(operationBefore);
     expect(await prisma.invoice.findUniqueOrThrow({ where: { id: f.invoice.id } })).toEqual(invoiceBefore);

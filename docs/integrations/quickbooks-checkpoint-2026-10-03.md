@@ -2,6 +2,16 @@
 
 ## Reviewed source and verification
 
+### Latest continuation after 23:43 UTC
+
+Expired tax Invoice recovery was independently approved by Sentinel and Opera, committed and pushed as `7c445678a5db839e2228d366c2af8d1f7b62c874`, tree `52fcdd058442d79ed77cb8843f47b6cc80f771aa`. Local `verify:ci` passed 659 database tests across 40 files and 416 main unit tests with zero skips. Remote CI 139 remains running at this snapshot. Application staging remains on reviewed source 797b218; production and main are unchanged.
+
+The new two-file source increment freezes explicit `EmailStatus: NotSet` and disabled ACH/card/PayPal/Affirm fields in the tax Invoice request and rebuilds them at the final create fence. It supplies no `BillEmail` or deprecated aggregate `AllowOnlinePayment`. The first local full gate passed at 23:43:13 UTC; a subsequent Sentinel finding removed the deprecated field, so that earlier pass does not cover the final bytes. The revised full `verify:ci` gate passed at 23:51:54 UTC on Node 22.23.2: 659 database tests across 40 files, 416 main unit tests, zero skips, and passing build/lint/schema/security/evaluation/audit stages. Final review remains pending at this snapshot. There is still no tax Invoice route or dispatcher, no provider call and no local Invoice promotion.
+
+The earlier Phase 2 staging-job operations were rejected for ambiguous-upload cleanup, actual runtime attestation propagation, cleanup readback after a transport error, and unsupported zero-activity claims. They remain frozen and unused. Corrected package `0d37054656dbc1e5dc5e7f30482b6e83e07a1a522d8fe9f90881b1a8baf7cf6a`, artifact `357b982d9b6604ebf151a03d81a3d5dc95eaa29db7fcc4da83a892094c4e8cc6`, verification `3cc1fc551d6674d2cd3c3ccff1502a2989fc12dba8a98f28e394076b969fe3de`, passes 17 actual-module tests and local Linux build/package/engine checks. Its new operations and independent reviews are pending. It requires a new credential-free Phase 1 hosted proof; the successful historical a0d032 package does not authorize the corrected package. No database reference has been supplied to the job.
+
+Browser access is now available. The existing Intuit Developer tab was signed out at the last check; the owner was asked to sign in without sharing credentials or verification codes. Real Estimate/Invoice, signed webhook, recovery, alert-delivery and production-approval evidence remain outstanding.
+
 Feature branch: `feature/quickbooks-staging-acceptance-20260913`. Reviewed application source: `797b218f8db663206d48fc3f70392d46dade3dfa`, tree `a2bc69b0334ac276a877be46f9240a20ee6c9cab`. Production main remains unchanged; PR 9 remains a draft.
 
 Source includes invoice-publication claim revalidation, overdue/canceled-Job guards, a safe draft due-date correction endpoint and UI, and dependency security patches. The successor commit fixes only the canceled-Job browser fixture's inconsistent canonical response.
