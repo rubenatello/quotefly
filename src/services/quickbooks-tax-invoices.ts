@@ -21,6 +21,7 @@ const retainedSchema = z.strictObject({ tenantId: id, operationId: id,
   providerRequestId: id, attemptToken: z.string().regex(/^[a-f0-9]{64}$/), providerInvoiceId });
 const quarantineSchema = retainedSchema.omit({ providerInvoiceId: true }).extend({
   failureCode: z.string().regex(/^[A-Z][A-Z0-9_]{0,190}$/),
+  providerInvoiceId: providerInvoiceId.optional(),
 });
 const projectionSchema = retainedSchema.extend({ canonicalEstimate: z.unknown(), canonicalInvoice: z.unknown() });
 const expiredAttemptSchema = z.strictObject({ tenantId: id, operationId: id });
@@ -371,9 +372,14 @@ export async function retainCreatedQuickBooksTaxInvoiceIdentity(prisma: PrismaCl
 }
 
 async function quarantine(tx: Prisma.TransactionClient,
-  operation: Awaited<ReturnType<typeof readAndLockTaxOperation>>, failureCode: string) {
-  if (operation.status === "RECONCILIATION_REQUIRED" && operation.lastFailureCode === failureCode) return operation;
+  operation: Awaited<ReturnType<typeof readAndLockTaxOperation>>, failureCode: string, knownProviderInvoiceId?: string) {
+  if (knownProviderInvoiceId && operation.providerInvoiceId && operation.providerInvoiceId !== knownProviderInvoiceId) {
+    reject("QUICKBOOKS_TAX_INVOICE_PROVIDER_ID_CONFLICT");
+  }
+  if (operation.status === "RECONCILIATION_REQUIRED" && operation.lastFailureCode === failureCode
+    && (!knownProviderInvoiceId || operation.providerInvoiceId === knownProviderInvoiceId)) return operation;
   return tx.quickBooksInvoiceOperation.update({ where: { id: operation.id }, data: {
+    ...(knownProviderInvoiceId ? { providerInvoiceId: knownProviderInvoiceId } : {}),
     status: "RECONCILIATION_REQUIRED", claimTokenHash: null, claimExpiresAtUtc: null,
     failedAtUtc: new Date(), lastFailureCode: failureCode,
   }, select: taxOperationSelect });
@@ -386,7 +392,7 @@ export async function quarantineQuickBooksTaxInvoiceAttempt(prisma: PrismaClient
   return withTenantRlsContext(prisma, input.tenantId, async tx => {
     const operation = await readAndLockTaxOperation(tx, input.tenantId, input.operationId);
     requireAttempt(operation, input);
-    const updated = await quarantine(tx, operation, input.failureCode);
+    const updated = await quarantine(tx, operation, input.failureCode, input.providerInvoiceId);
     return Object.freeze({ outcome: "QUARANTINED" as const, operation: updated,
       publishingAuthorized: false as const });
   }, { maxWait: 10_000, timeout: 15_000, isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });

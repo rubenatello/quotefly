@@ -1,6 +1,12 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import type { QuickBooksCredentialRuntimeEnv, QuickBooksOAuthRuntimeEnv, QuickBooksProviderHttpEnv } from "../config/quickbooks-runtime-types";
 import { z } from "zod";
+import {
+  projectCanonicalQuickBooksTaxEstimate,
+  projectCanonicalQuickBooksTaxInvoice,
+  type CanonicalQuickBooksTaxEstimate,
+  type CanonicalQuickBooksTaxInvoice,
+} from "./quickbooks-tax-provider-projections";
 
 const ACCOUNTING_SCOPE = "com.intuit.quickbooks.accounting";
 const QUICKBOOKS_AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2";
@@ -455,7 +461,24 @@ async function quickBooksFetch(
     ) {
       const retryDelayMs = quickBooksRetryDelayMs(response, attempt);
       if (retryDelayMs === null) return response;
-      await response.body?.cancel().catch(() => undefined);
+      if (deadlineAtMs === undefined) {
+        await response.body?.cancel().catch(() => undefined);
+      } else {
+        // Cleanup of an abandoned retry response shares the caller's deadline.
+        // A stalled stream cancellation must not hold canonical reads open forever.
+        let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            response.body?.cancel().catch(() => undefined),
+            new Promise<never>((_resolve, reject) => {
+              cleanupTimer = setTimeout(() => reject(new QuickBooksProviderError("QUICKBOOKS_READ_DEADLINE", false)),
+                Math.max(0, deadlineAtMs - Date.now()));
+            }),
+          ]);
+        } finally {
+          clearTimeout(cleanupTimer);
+        }
+      }
       await wait(retryDelayMs);
       continue;
     }
@@ -471,12 +494,14 @@ async function quickBooksApiRequest<T>(
   path: string,
   init: RequestInit = {},
   deadlineAtMs?: number,
+  readControls?: Readonly<{ maxResponseBytes: number; rejectRedirects: boolean }>,
 ): Promise<T> {
   const mutation = (init.method ?? "GET").toUpperCase() !== "GET";
   let response: Response;
   try {
     response = await quickBooksFetch(runtimeEnv, `${getQuickBooksApiBaseUrl(runtimeEnv)}/v3/company/${realmId}${path}`, {
       ...init,
+      ...(readControls?.rejectRedirects ? { redirect: "error" as const } : {}),
       headers: {
         Accept: "application/json",
         ...(init.body ? { "Content-Type": "application/json" } : {}),
@@ -484,7 +509,8 @@ async function quickBooksApiRequest<T>(
         Authorization: `Bearer ${accessToken}`,
       },
     }, !mutation, deadlineAtMs);
-  } catch {
+  } catch (error) {
+    if (readControls && !mutation && error instanceof QuickBooksProviderError) throw error;
     throw new QuickBooksProviderError(
       mutation ? "QUICKBOOKS_MUTATION_RESULT_UNKNOWN" : "QUICKBOOKS_NETWORK_ERROR",
       mutation,
@@ -493,9 +519,52 @@ async function quickBooksApiRequest<T>(
 
   let responseBody: string;
   try {
-    responseBody = await response.text();
+    if (readControls) {
+      const declaredLength = Number(response.headers.get("content-length"));
+      if (!response.body) throw new QuickBooksProviderError("QUICKBOOKS_RESPONSE_INVALID", false);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let byteCount = 0;
+      responseBody = "";
+      // Keep the caller's absolute deadline while a stream read or cancellation is pending,
+      // independently of fetch's network AbortSignal (including custom fetch transports).
+      let deadlineTimer: ReturnType<typeof setTimeout>;
+      const bodyDeadline = new Promise<never>((_resolve, reject) => {
+        deadlineTimer = setTimeout(() => reject(new QuickBooksProviderError("QUICKBOOKS_READ_DEADLINE", false)),
+          Math.max(0, (deadlineAtMs ?? Date.now() + runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS) - Date.now()));
+      });
+      try {
+        if (Number.isFinite(declaredLength) && declaredLength > readControls.maxResponseBytes) {
+          throw new QuickBooksProviderError("QUICKBOOKS_RESPONSE_TOO_LARGE", false);
+        }
+        while (true) {
+          if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {
+            throw new QuickBooksProviderError("QUICKBOOKS_READ_DEADLINE", false);
+          }
+          const chunk = await Promise.race([reader.read(), bodyDeadline]);
+          if (chunk.done) break;
+          byteCount += chunk.value.byteLength;
+          if (byteCount > readControls.maxResponseBytes) {
+            throw new QuickBooksProviderError("QUICKBOOKS_RESPONSE_TOO_LARGE", false);
+          }
+          responseBody += decoder.decode(chunk.value, { stream: true });
+        }
+        responseBody += decoder.decode();
+      } catch (error) {
+        // Cancellation is cleanup only: a stalled transport must not extend the read budget
+        // or replace the original fixed error. Promise.race also observes late rejections.
+        await Promise.race([reader.cancel().catch(() => undefined), bodyDeadline]).catch(() => undefined);
+        throw error;
+      } finally {
+        clearTimeout(deadlineTimer!);
+        reader.releaseLock();
+      }
+    } else {
+      responseBody = await response.text();
+    }
     if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) throw new Error("deadline");
-  } catch {
+  } catch (error) {
+    if (readControls && !mutation && error instanceof QuickBooksProviderError) throw error;
     throw new QuickBooksProviderError(mutation ? "QUICKBOOKS_MUTATION_RESULT_UNKNOWN" : "QUICKBOOKS_READ_DEADLINE", mutation);
   }
   if (!response.ok) {
@@ -512,6 +581,47 @@ async function quickBooksApiRequest<T>(
       response.status,
     );
   }
+}
+
+const QUICKBOOKS_TAX_CANONICAL_RESPONSE_MAX_BYTES = 512 * 1024;
+const quickBooksCanonicalId = z.string().min(1).max(191).regex(/^[A-Za-z0-9_-]+$/);
+
+function assertQuickBooksCanonicalReadInput(realmId: string, entityId: string, deadlineAtMs: number): void {
+  if (!quickBooksCanonicalId.safeParse(realmId).success || !quickBooksCanonicalId.safeParse(entityId).success
+    || !Number.isSafeInteger(deadlineAtMs) || deadlineAtMs <= Date.now()) {
+    throw new QuickBooksProviderError("QUICKBOOKS_TAX_CANONICAL_READ_INPUT_INVALID", false);
+  }
+}
+
+export async function fetchQuickBooksCanonicalTaxEstimate(
+  runtimeEnv: QuickBooksCredentialRuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  estimateId: string,
+  options: Readonly<{ deadlineAtMs: number }>,
+): Promise<CanonicalQuickBooksTaxEstimate> {
+  assertQuickBooksCanonicalReadInput(realmId, estimateId, options.deadlineAtMs);
+  const response = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken,
+    `/estimate/${encodeURIComponent(estimateId)}`, {}, options.deadlineAtMs,
+    { maxResponseBytes: QUICKBOOKS_TAX_CANONICAL_RESPONSE_MAX_BYTES, rejectRedirects: true });
+  return projectCanonicalQuickBooksTaxEstimate(response, estimateId);
+}
+
+export async function fetchQuickBooksCanonicalTaxInvoice(
+  runtimeEnv: QuickBooksCredentialRuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  invoiceId: string,
+  options: Readonly<{ deadlineAtMs: number; expectedEstimateId: string }>,
+): Promise<CanonicalQuickBooksTaxInvoice> {
+  assertQuickBooksCanonicalReadInput(realmId, invoiceId, options.deadlineAtMs);
+  if (!quickBooksCanonicalId.safeParse(options.expectedEstimateId).success) {
+    throw new QuickBooksProviderError("QUICKBOOKS_TAX_CANONICAL_READ_INPUT_INVALID", false);
+  }
+  const response = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken,
+    `/invoice/${encodeURIComponent(invoiceId)}`, {}, options.deadlineAtMs,
+    { maxResponseBytes: QUICKBOOKS_TAX_CANONICAL_RESPONSE_MAX_BYTES, rejectRedirects: true });
+  return projectCanonicalQuickBooksTaxInvoice(response, invoiceId, options.expectedEstimateId);
 }
 
 export async function queryQuickBooksEntity<T>(
@@ -705,6 +815,9 @@ export async function createQuickBooksServiceItem(
 
 export const QUICKBOOKS_INVOICE_IDENTITY_BIND_BUDGET_MS = 20_000;
 export const QUICKBOOKS_INVOICE_NUMBERING_BUDGET_MS = 20_000;
+// CREATE returns full line descriptions; allow the supported large invoice shape
+// while retaining a fixed bound on an uncertain mutation response.
+const QUICKBOOKS_INVOICE_CREATE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 
 /** One attempt context survives the credential-refresh callback replay. */
 export function createQuickBooksInvoiceWriteControl(params: {
@@ -775,6 +888,8 @@ export async function createQuickBooksInvoice(
       method: "POST",
       body: requestBody,
     },
+    Date.now() + runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS,
+    { maxResponseBytes: QUICKBOOKS_INVOICE_CREATE_RESPONSE_MAX_BYTES, rejectRedirects: true },
   );
 
   return parseQuickBooksEntity(QuickBooksInvoiceSchema, response.Invoice, "QUICKBOOKS_INVOICE_RESPONSE_INVALID");

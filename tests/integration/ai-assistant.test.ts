@@ -5398,27 +5398,35 @@ describe("AI assistant", () => {
       usage: { consumedCredits: 0 },
     });
 
-    const gap = await app.inject({
-      method: "POST",
-      url: "/v1/ai/assistant",
-      headers: { cookie: owner.cookie },
-      payload: { message: `Book an additional visit for job #${ownerJob.job.jobNumber} on 2027-03-14 from 2:30 AM to 3:30 AM`, tool: "AUTO", context: { currentPage: "jobs" } },
-    });
-    expect(gap.statusCode).toBe(200);
-    expect(gap.json()).toMatchObject({ assistant: { tool: "PREPARE_BOOKING", actions: [] } });
+    // Keep both DST fixtures in the future regardless of the date CI runs.
+    // Fake only Date so network/database timers continue to run normally.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-31T18:00:00.000Z"));
+    try {
+      const gap = await app.inject({
+        method: "POST",
+        url: "/v1/ai/assistant",
+        headers: { cookie: owner.cookie },
+        payload: { message: `Book an additional visit for job #${ownerJob.job.jobNumber} on 2027-03-14 from 2:30 AM to 3:30 AM`, tool: "AUTO", context: { currentPage: "jobs" } },
+      });
+      expect(gap.statusCode).toBe(200);
+      expect(gap.json()).toMatchObject({ assistant: { tool: "PREPARE_BOOKING", actions: [] } });
 
-    const fold = await app.inject({
-      method: "POST",
-      url: "/v1/ai/assistant",
-      headers: { cookie: owner.cookie },
-      payload: { message: `Book an additional visit for job #${ownerJob.job.jobNumber} on 2026-11-01 from 1:30 AM to 2:30 AM`, tool: "AUTO", context: { currentPage: "jobs" } },
-    });
-    expect(fold.statusCode).toBe(200);
-    const foldBody = fold.json() as { assistant: { answer: string; actions: Array<{ type: string; requiresConfirmation: boolean; payload: { startsAtUtc: string } }> } };
-    expect(foldBody.assistant.answer).toMatch(/occurs twice/i);
-    expect(foldBody.assistant.actions).toHaveLength(2);
-    expect(new Set(foldBody.assistant.actions.map((action) => action.payload.startsAtUtc)).size).toBe(2);
-    expect(foldBody.assistant.actions.every((action) => action.type === "OPEN_BOOKING_REVIEW" && action.requiresConfirmation === false)).toBe(true);
+      const fold = await app.inject({
+        method: "POST",
+        url: "/v1/ai/assistant",
+        headers: { cookie: owner.cookie },
+        payload: { message: `Book an additional visit for job #${ownerJob.job.jobNumber} on 2026-11-01 from 1:30 AM to 2:30 AM`, tool: "AUTO", context: { currentPage: "jobs" } },
+      });
+      expect(fold.statusCode).toBe(200);
+      const foldBody = fold.json() as { assistant: { answer: string; actions: Array<{ type: string; requiresConfirmation: boolean; payload: { startsAtUtc: string } }> } };
+      expect(foldBody.assistant.answer).toMatch(/occurs twice/i);
+      expect(foldBody.assistant.actions).toHaveLength(2);
+      expect(new Set(foldBody.assistant.actions.map((action) => action.payload.startsAtUtc)).size).toBe(2);
+      expect(foldBody.assistant.actions.every((action) => action.type === "OPEN_BOOKING_REVIEW" && action.requiresConfirmation === false)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
 
     const dispatch = await app.inject({
       method: "POST",
