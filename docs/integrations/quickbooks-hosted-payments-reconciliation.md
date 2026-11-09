@@ -1,8 +1,16 @@
 # QuickBooks Hosted Payments And Reconciliation
 
-Last updated: 2026-09-02
+Last updated: 2026-11-08 Pacific
 
 Status: Engineering candidate in progress. QuickBooks provider workflows remain default-off and are not approved for production enablement.
+
+The owner selected option 2 on November 8: a customer-facing **Pay invoice** action opens QuickBooks-hosted checkout, and QuoteFly mirrors the linked invoice's payment status and balance. The delivery candidate is a manager-generated customer invoice PDF with a vetted clickable QuickBooks Pay button, not an anonymous invoice portal. Downloading the PDF does not mark the invoice sent. A payment form or direct Payments API charge inside QuoteFly is outside this selected workflow. The original quote may display its linked invoice's collection status without replacing the quote's acceptance state. This selection does not approve production enablement, waive tax safeguards, or establish provider test evidence.
+
+## Provider test boundary
+
+The dedicated Intuit sandbox is available for invoice/accounting, recorded-payment, signed-webhook and reconciliation testing. Intuit's [sandbox Pay Now guidance](https://help.developer.intuit.com/s/question/0D5TR00000VIQey0AH/can-you-have-a-pay-now-button-on-invoices-generated-in-the-sandbox-account) says invoice payment options are unsupported there. The sandbox's Accounting/Payments feature labels alone do not prove hosted checkout or InvoiceLink availability. A recorded sandbox Payment tests accounting sync; it is not evidence of customer checkout, card processing or settlement.
+
+Keep hosted-link and tax checks intact when sandbox functionality is absent. Record each untested provider capability explicitly. An actual checkout proof requires a separately bounded, approved provider-supported environment and eligible merchant; no live charge or production workflow is authorized by a sandbox test result.
 
 ## Product and provider boundary
 
@@ -25,14 +33,16 @@ QuoteFly must never collect, proxy, persist, or log card numbers, CVV values, ba
 
 Before publishing, an owner or admin must review and explicitly confirm:
 
-- the QuoteFly customer mapped to an existing QuickBooks customer or a separately reviewed new-customer payload;
-- each normalized QuoteFly invoice line mapped to an existing QuickBooks item or a separately reviewed new-item payload;
+- the QuoteFly customer mapped to an existing QuickBooks customer;
+- each normalized QuoteFly invoice line mapped to an existing QuickBooks item;
 - the destination QuickBooks company;
 - the customer billing email;
 - the enabled online payment methods;
 - invoice totals, due date, document number, and every line item.
 
 The confirmation must be bound to the exact tenant, invoice version, connection, realm, mappings, payment-method choices, and provider payload. A mapping or invoice change invalidates the review.
+
+The current candidate requires existing customer/item mappings and non-taxable USD invoices. Creating customers/items in QuickBooks and sales-tax publishing are outside this candidate's supported contract. Final public launch scope requires owner confirmation.
 
 ### Hosted payment link
 

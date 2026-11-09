@@ -1,0 +1,15 @@
+# Preserve reviewed source during isolated staging configuration changes
+
+On September 23, 2026, a normal Railway variable change rebuilt the staging API from its connected GitHub main branch even though automatic deployment was disabled and deployment triggers were empty. Health and readiness were green, but none of thirteen expected source hashes matched. The source check stopped the sandbox test before any provider call.
+
+This procedure applies only to QuoteFly's isolated QuickBooks staging API. Production still requires the exact-candidate release gate. Migration and worker services have separate reviewed entrypoints and artifacts.
+
+1. Record the exact committed source, successful CI, independent approval, artifact path, source manifest and intended non-secret flag changes. Check the explicit Railway project, environment and service IDs before any mutation.
+2. Verify the staging API repository source is detached. The supported detached forms are a literal null source or an object with its own `repo` and `image` properties both explicitly null. Missing properties, an unknown shape, or any non-null repository/image must fail closed. Also verify automatic deployment is false and deployment trigger count is zero. Do not disconnect a production or worker source as part of this procedure.
+3. Stage only the reviewed flag changes with Railway's `variable set --skip-deploys` and explicit project/environment/service arguments. Never use a normal variable update as the deployment mechanism. Capture only success/failure and fixed non-secret booleans; never print environment values.
+4. Upload the reviewed immutable API artifact using `railway up` from that artifact directory with explicit project/environment/service arguments. Do not upload the working repository, pass an unintended positional source path, or use a source-rebuild action. Do not run an API upload against the one-shot migration service.
+5. Require deployment SUCCESS, exact deployed source hashes, expected presence-only configuration, least-privileged runtime checks and both health/readiness HTTP 200 before browser testing. A healthy endpoint does not establish source identity.
+6. For a bounded provider test, record the ready time, approved actions, untouched flags, restoration deadline and aggregate baseline. Reserve enough time to build and verify the restoring deployment. Stop at any source/configuration drift, unexpected provider error or reauthentication requirement.
+7. Restore the reviewed default flags with `--skip-deploys`, explicitly upload the same reviewed artifact and verify source, configuration and health/readiness again before the deadline. Record only approved statuses/counts. Compare the post-test aggregate with the baseline and explain every expected delta.
+
+The successful September 23 customer/item test used these safeguards and restored OAuth-only mode in under eight minutes. It did not publish accounting records or establish tax, payment, webhook, alert-delivery or production evidence.

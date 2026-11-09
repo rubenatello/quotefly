@@ -18,6 +18,7 @@ export type BillingRequiredSession = {
   tenantName: string;
   role: string;
   subscriptionStatus?: string;
+  trialEndsAtUtc?: string | null;
   entitlements?: TenantEntitlements;
 };
 
@@ -45,8 +46,13 @@ function billingReasonText(session: BillingRequiredSession, t: TFunction): strin
   return t("billing.reasonDefault");
 }
 
-function billingStatusText(value: string | null | undefined, t: TFunction): string {
-  const normalized = (value ?? "not_started").toLowerCase().replace(/-/g, "_");
+function billingStatusText(session: BillingRequiredSession, t: TFunction): string {
+  const normalized = (session.subscriptionStatus ?? "not_started").toLowerCase().replace(/-/g, "_");
+  if (normalized === "trialing" && session.entitlements?.billingRequired && !session.entitlements.isTrial) {
+    const endedAt = session.trialEndsAtUtc ? Date.parse(session.trialEndsAtUtc) : NaN;
+    return t(Number.isFinite(endedAt) && endedAt <= Date.now()
+      ? "billing.status.trialEnded" : "billing.status.trialUnavailable");
+  }
   if (normalized === "active") return t("billing.status.active");
   if (normalized === "trialing") return t("billing.status.trialing");
   if (normalized === "past_due") return t("billing.status.pastDue");
@@ -81,7 +87,7 @@ export function BillingRequiredScreen({
   const location = useLocation();
   const confirmingCheckout = new URLSearchParams(location.search).get("billing") === "success";
   const ownerView = normalizeSessionRole(session.role) === "owner";
-  const status = billingStatusText(session.subscriptionStatus, t);
+  const status = billingStatusText(session, t);
   const firstPaidPrice = formatUsd(locale, BASIC_PLAN.firstPaidMonthPriceUsd);
   const monthlyPrice = t("billing.monthlyPrice", { price: formatUsd(locale, BASIC_PLAN.monthlyPriceUsd) });
   const basicFeatures = [t("billing.featureAiQuotes"), t("billing.featureCustomers"), t("billing.featurePdfs")];

@@ -4781,7 +4781,7 @@ describe("QuoteFly API integration", () => {
       where: { realmId: boundRealmId, entityId: "bound-deleted-invoice" },
     })).resolves.toMatchObject({
       status: "DEAD",
-      lastError: "QUICKBOOKS_WEBHOOK_OPERATION_UNSUPPORTED",
+      lastError: "QUICKBOOKS_INVOICE_DELETED_MANUAL_REVIEW",
       deadAtUtc: expect.any(Date),
     });
   });

@@ -19,11 +19,16 @@ import {
 import type { AppSession, SessionRecovery } from "./lib/app-session";
 import { AI_USAGE_UPDATED_EVENT, type AiUsageUpdateDetail } from "./lib/ai-credits";
 import { browserTimeZone } from "./lib/display-format";
-import { prepareQuoteBuilderDraftStorage, purgeQuoteBuilderDraftStorage } from "./lib/quote-builder-draft-storage";
+import {
+  flushQuoteBuilderDraftBeforeLogout,
+  prepareQuoteBuilderDraftStorage,
+  purgeQuoteBuilderDraftStorage,
+} from "./lib/quote-builder-draft-storage";
 import { useLocale } from "./i18n";
 
 const LandingPage = lazy(() => import("./pages/LandingPage").then((module) => ({ default: module.LandingPage })));
 const PricingPage = lazy(() => import("./pages/PricingPage").then((module) => ({ default: module.PricingPage })));
+const QuickBooksIntegrationPage = lazy(() => import("./pages/QuickBooksIntegrationPage").then((module) => ({ default: module.QuickBooksIntegrationPage })));
 const ServicesPage = lazy(() => import("./pages/ServicesPage").then((module) => ({ default: module.ServicesPage })));
 const SolutionsPage = lazy(() => import("./pages/SolutionsPage").then((module) => ({ default: module.SolutionsPage })));
 const LandscapingSolutionsPage = lazy(() => import("./pages/LandscapingSolutionsPage").then((module) => ({ default: module.LandscapingSolutionsPage })));
@@ -39,6 +44,7 @@ const AuthModal = lazy(() => import("./components/AuthModal").then((module) => (
 const CrmAppLayout = lazy(() => import("./components/CrmAppLayout").then((module) => ({ default: module.CrmAppLayout })));
 
 const SESSION_CHECK_TIMEOUT_MS = 15_000;
+const LOGOUT_DRAFT_FLUSH_TIMEOUT_MS = 750;
 type UsageWithAccountingPause = TenantUsageSnapshot & { accountingUnavailable?: boolean };
 
 async function loadAuthSession(): Promise<AuthSessionPayload> {
@@ -62,6 +68,23 @@ function clearStoredSession() {
   localStorage.removeItem("qf_token");
   localStorage.removeItem("qf_tenant_id");
   localStorage.removeItem("qf_full_name");
+}
+
+async function flushDraftBeforeLogout(session: AppSession | null) {
+  if (!session) return;
+  let timeoutId: number | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timeoutId = window.setTimeout(resolve, LOGOUT_DRAFT_FLUSH_TIMEOUT_MS);
+  });
+
+  try {
+    await Promise.race([
+      flushQuoteBuilderDraftBeforeLogout(session.tenantId, session.userId),
+      timeout,
+    ]);
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+  }
 }
 
 function toSession(payload: AuthSessionPayload): AppSession {
@@ -129,6 +152,7 @@ function MarketingLayout({
           <Routes>
             <Route index element={<LandingPage onOpenAuth={onOpenAuth} />} />
             <Route path="pricing" element={<PricingPage onOpenAuth={onOpenAuth} />} />
+            <Route path="integrations/quickbooks" element={<QuickBooksIntegrationPage />} />
             <Route path="services" element={<ServicesPage onOpenAuth={onOpenAuth} />} />
             <Route path="solutions" element={<SolutionsPage onOpenAuth={onOpenAuth} />} />
             <Route path="solutions/landscaping" element={<LandscapingSolutionsPage onOpenAuth={onOpenAuth} />} />
@@ -209,6 +233,7 @@ function AppRoutes() {
   // refresh. A refresh started after this barrier is still authoritative and may
   // clear the client-side pause when the server has recovered.
   const accountingPauseGenerationRef = useRef(0);
+  const logoutInProgressRef = useRef(false);
 
   useEffect(() => {
     const handleAiUsageUpdate = (event: Event) => {
@@ -350,6 +375,7 @@ function AppRoutes() {
   }, [handleSessionCheckFailure, reconcileLocale]);
 
   const handleAuthSuccess = (payload: AuthPayload) => {
+    logoutInProgressRef.current = false;
     purgeQuoteBuilderDraftStorage();
     localStorage.setItem("qf_full_name", payload.user.fullName);
     setIsSessionChecking(true);
@@ -385,14 +411,31 @@ function AppRoutes() {
   };
 
   const handleLogout = async () => {
-    purgeQuoteBuilderDraftStorage();
+    if (logoutInProgressRef.current) return;
+    logoutInProgressRef.current = true;
+    let logoutRequest: Promise<void> | null = null;
+    const dispatchLogout = () => {
+      if (logoutRequest) return logoutRequest;
+      logoutRequest = api.auth.logout({ keepalive: true }).catch((error) => {
+        if (!(error instanceof ApiError && error.status === 401)) {
+          console.error("Logout failed", error);
+        }
+      });
+      return logoutRequest;
+    };
+    const handlePageHide = () => {
+      // A closing or navigated tab cannot wait for the draft flush. The API
+      // Use the existing API origin and credentials with a bodyless request.
+      void dispatchLogout();
+    };
+    window.addEventListener("pagehide", handlePageHide, { once: true });
+
     try {
-      await api.auth.logout();
-    } catch (error) {
-      if (!(error instanceof ApiError && error.status === 401)) {
-        console.error("Logout failed", error);
-      }
+      await flushDraftBeforeLogout(session);
+      purgeQuoteBuilderDraftStorage();
+      await dispatchLogout();
     } finally {
+      window.removeEventListener("pagehide", handlePageHide);
       clearStoredSession();
       setSession(null);
     }

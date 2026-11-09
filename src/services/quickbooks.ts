@@ -1,6 +1,12 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
-import type { env } from "../config/env";
+import type { QuickBooksCredentialRuntimeEnv, QuickBooksOAuthRuntimeEnv, QuickBooksProviderHttpEnv } from "../config/quickbooks-runtime-types";
 import { z } from "zod";
+import {
+  projectCanonicalQuickBooksTaxEstimate,
+  projectCanonicalQuickBooksTaxInvoice,
+  type CanonicalQuickBooksTaxEstimate,
+  type CanonicalQuickBooksTaxInvoice,
+} from "./quickbooks-tax-provider-projections";
 
 const ACCOUNTING_SCOPE = "com.intuit.quickbooks.accounting";
 const QUICKBOOKS_AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2";
@@ -11,7 +17,7 @@ const QUICKBOOKS_HOSTED_LINK_ENVELOPE_VERSION = "qbl1";
 const QUICKBOOKS_HOSTED_LINK_AAD = Buffer.from("quotefly:quickbooks:hosted-payment-link:v1", "utf8");
 const QUICKBOOKS_OAUTH_STATE_ENVELOPE_VERSION = "qbo2";
 
-type RuntimeEnv = typeof env;
+type RuntimeEnv = QuickBooksCredentialRuntimeEnv;
 
 const QuickBooksRefSchema = z.object({
   value: z.string().min(1),
@@ -40,7 +46,7 @@ const QuickBooksLinkedTxnSchema = z.object({
 }).passthrough();
 
 const QuickBooksInvoiceSchema = z.object({
-  Id: z.string().min(1),
+  Id: z.string().min(1).max(191),
   SyncToken: z.string().optional(),
   DocNumber: z.string().optional(),
   TxnDate: z.string().optional(),
@@ -55,7 +61,12 @@ const QuickBooksInvoiceSchema = z.object({
   AllowOnlinePayment: z.boolean().optional(),
   AllowOnlineACHPayment: z.boolean().optional(),
   AllowOnlineCreditCardPayment: z.boolean().optional(),
+  AllowOnlinePayPalPayment: z.boolean().optional(),
+  AllowOnlineAffirmPayment: z.boolean().optional(),
   CurrencyRef: QuickBooksRefSchema.optional(),
+  TxnTaxDetail: z.object({
+    TotalTax: z.number().finite().optional(),
+  }).passthrough().optional(),
   MetaData: z.object({ CreateTime: z.string().optional(), LastUpdatedTime: z.string().optional() }).passthrough().optional(),
   Line: z.array(z.object({
     Description: z.string().optional(),
@@ -65,6 +76,7 @@ const QuickBooksInvoiceSchema = z.object({
       Qty: z.number().finite().optional(),
       UnitPrice: z.number().finite().optional(),
       ItemRef: QuickBooksRefSchema.optional(),
+      TaxCodeRef: QuickBooksRefSchema.optional(),
     }).passthrough().optional(),
   }).passthrough()).optional(),
   LinkedTxn: z.array(QuickBooksLinkedTxnSchema).optional(),
@@ -195,8 +207,11 @@ export type QuickBooksInvoiceEntity = {
   AllowOnlinePayment?: boolean;
   AllowOnlineACHPayment?: boolean;
   AllowOnlineCreditCardPayment?: boolean;
+  AllowOnlinePayPalPayment?: boolean;
+  AllowOnlineAffirmPayment?: boolean;
   MetaData?: { CreateTime?: string; LastUpdatedTime?: string };
   CurrencyRef?: QuickBooksApiRef;
+  TxnTaxDetail?: { TotalTax?: number };
   Line?: Array<{
     Description?: string;
     Amount?: number;
@@ -205,6 +220,7 @@ export type QuickBooksInvoiceEntity = {
       Qty?: number;
       UnitPrice?: number;
       ItemRef?: QuickBooksApiRef;
+      TaxCodeRef?: QuickBooksApiRef;
     };
   }>;
   LinkedTxn?: Array<{ TxnId?: string; TxnType?: string }>;
@@ -311,11 +327,25 @@ export function validateQuickBooksReconciliationInvoice(
   ) {
     throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_FRESHNESS_INVALID", false);
   }
-  return parseQuickBooksEntity(
+  const parsed = parseQuickBooksEntity(
     QuickBooksReconciliationInvoiceSchema,
     value,
     "QUICKBOOKS_INVOICE_RECONCILIATION_RESPONSE_INVALID",
   ) as QuickBooksReconciliationInvoiceEntity;
+  // QuoteFly's current invoice-publish contract is explicitly non-taxable.
+  // Intuit may omit a line code in a canonical response, but an explicit code
+  // other than NON or a nonzero total tax is evidence the provider applied a
+  // different tax treatment and must never update the QuoteFly ledger.
+  if (parsed.TxnTaxDetail?.TotalTax !== undefined && parsed.TxnTaxDetail.TotalTax !== 0) {
+    throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_TAX_UNSUPPORTED", false);
+  }
+  for (const line of parsed.Line ?? []) {
+    const taxCode = line.SalesItemLineDetail?.TaxCodeRef?.value;
+    if (taxCode !== undefined && taxCode !== "NON") {
+      throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_TAX_UNSUPPORTED", false);
+    }
+  }
+  return parsed;
 }
 
 export function classifyQuickBooksProviderFailure(error: unknown): {
@@ -348,11 +378,11 @@ export function isQuickBooksConfigured(runtimeEnv: RuntimeEnv): boolean {
   return runtimeEnv.QUICKBOOKS_CLIENT_ID.trim().length > 0 && runtimeEnv.QUICKBOOKS_CLIENT_SECRET.trim().length > 0;
 }
 
-export function isQuickBooksWebhookConfigured(runtimeEnv: RuntimeEnv): boolean {
+export function isQuickBooksWebhookConfigured(runtimeEnv: { QUICKBOOKS_WEBHOOK_VERIFIER: string }): boolean {
   return runtimeEnv.QUICKBOOKS_WEBHOOK_VERIFIER.trim().length > 0;
 }
 
-export function getQuickBooksRedirectUri(runtimeEnv: RuntimeEnv): string {
+export function getQuickBooksRedirectUri(runtimeEnv: Pick<QuickBooksOAuthRuntimeEnv, "API_URL" | "QUICKBOOKS_REDIRECT_URI">): string {
   if (runtimeEnv.QUICKBOOKS_REDIRECT_URI.trim()) {
     return runtimeEnv.QUICKBOOKS_REDIRECT_URI.trim();
   }
@@ -360,7 +390,7 @@ export function getQuickBooksRedirectUri(runtimeEnv: RuntimeEnv): string {
   return `${runtimeEnv.API_URL.replace(/\/$/, "")}/v1/integrations/quickbooks/callback`;
 }
 
-export function getQuickBooksApiBaseUrl(runtimeEnv: RuntimeEnv): string {
+export function getQuickBooksApiBaseUrl(runtimeEnv: Pick<QuickBooksProviderHttpEnv, "QUICKBOOKS_ENVIRONMENT">): string {
   return runtimeEnv.QUICKBOOKS_ENVIRONMENT === "sandbox"
     ? "https://sandbox-quickbooks.api.intuit.com"
     : "https://quickbooks.api.intuit.com";
@@ -398,22 +428,29 @@ function waitForQuickBooksRetry(delayMs: number) {
 }
 
 async function quickBooksFetch(
-  runtimeEnv: RuntimeEnv,
+  runtimeEnv: QuickBooksProviderHttpEnv,
   url: string,
   init: RequestInit,
   retryRead: boolean,
+  deadlineAtMs?: number,
 ): Promise<Response> {
+  const remaining = () => deadlineAtMs === undefined ? runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS : deadlineAtMs - Date.now();
+  const wait = async (delay: number) => {
+    if (deadlineAtMs !== undefined && remaining() <= delay) throw new QuickBooksProviderError("QUICKBOOKS_READ_DEADLINE", false);
+    await waitForQuickBooksRetry(delay);
+  };
   const maxAttempts = retryRead ? runtimeEnv.QUICKBOOKS_PROVIDER_READ_RETRIES + 1 : 1;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (remaining() <= 0) throw new QuickBooksProviderError("QUICKBOOKS_READ_DEADLINE", false);
     let response: Response;
     try {
       response = await fetch(url, {
         ...init,
-        signal: AbortSignal.timeout(runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS),
+        signal: AbortSignal.timeout(Math.max(1, Math.floor(Math.min(runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS, remaining())))),
       });
     } catch {
       if (retryRead && attempt + 1 < maxAttempts) {
-        await waitForQuickBooksRetry(Math.min(2_000, 200 * (2 ** attempt)));
+        await wait(Math.min(2_000, 200 * (2 ** attempt)));
         continue;
       }
       throw new QuickBooksProviderError(
@@ -428,8 +465,25 @@ async function quickBooksFetch(
     ) {
       const retryDelayMs = quickBooksRetryDelayMs(response, attempt);
       if (retryDelayMs === null) return response;
-      await response.body?.cancel().catch(() => undefined);
-      await waitForQuickBooksRetry(retryDelayMs);
+      if (deadlineAtMs === undefined) {
+        await response.body?.cancel().catch(() => undefined);
+      } else {
+        // Cleanup of an abandoned retry response shares the caller's deadline.
+        // A stalled stream cancellation must not hold canonical reads open forever.
+        let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            response.body?.cancel().catch(() => undefined),
+            new Promise<never>((_resolve, reject) => {
+              cleanupTimer = setTimeout(() => reject(new QuickBooksProviderError("QUICKBOOKS_READ_DEADLINE", false)),
+                Math.max(0, deadlineAtMs - Date.now()));
+            }),
+          ]);
+        } finally {
+          clearTimeout(cleanupTimer);
+        }
+      }
+      await wait(retryDelayMs);
       continue;
     }
     return response;
@@ -443,27 +497,80 @@ async function quickBooksApiRequest<T>(
   accessToken: string,
   path: string,
   init: RequestInit = {},
+  deadlineAtMs?: number,
+  readControls?: Readonly<{ maxResponseBytes: number; rejectRedirects: boolean }>,
 ): Promise<T> {
   const mutation = (init.method ?? "GET").toUpperCase() !== "GET";
   let response: Response;
   try {
     response = await quickBooksFetch(runtimeEnv, `${getQuickBooksApiBaseUrl(runtimeEnv)}/v3/company/${realmId}${path}`, {
       ...init,
+      ...(readControls?.rejectRedirects ? { redirect: "error" as const } : {}),
       headers: {
         Accept: "application/json",
         ...(init.body ? { "Content-Type": "application/json" } : {}),
         ...(init.headers ?? {}),
         Authorization: `Bearer ${accessToken}`,
       },
-    }, !mutation);
-  } catch {
+    }, !mutation, deadlineAtMs);
+  } catch (error) {
+    if (readControls && !mutation && error instanceof QuickBooksProviderError) throw error;
     throw new QuickBooksProviderError(
       mutation ? "QUICKBOOKS_MUTATION_RESULT_UNKNOWN" : "QUICKBOOKS_NETWORK_ERROR",
       mutation,
     );
   }
 
-  const responseBody = await response.text();
+  let responseBody: string;
+  try {
+    if (readControls) {
+      const declaredLength = Number(response.headers.get("content-length"));
+      if (!response.body) throw new QuickBooksProviderError("QUICKBOOKS_RESPONSE_INVALID", false);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let byteCount = 0;
+      responseBody = "";
+      // Keep the caller's absolute deadline while a stream read or cancellation is pending,
+      // independently of fetch's network AbortSignal (including custom fetch transports).
+      let deadlineTimer: ReturnType<typeof setTimeout>;
+      const bodyDeadline = new Promise<never>((_resolve, reject) => {
+        deadlineTimer = setTimeout(() => reject(new QuickBooksProviderError("QUICKBOOKS_READ_DEADLINE", false)),
+          Math.max(0, (deadlineAtMs ?? Date.now() + runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS) - Date.now()));
+      });
+      try {
+        if (Number.isFinite(declaredLength) && declaredLength > readControls.maxResponseBytes) {
+          throw new QuickBooksProviderError("QUICKBOOKS_RESPONSE_TOO_LARGE", false);
+        }
+        while (true) {
+          if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) {
+            throw new QuickBooksProviderError("QUICKBOOKS_READ_DEADLINE", false);
+          }
+          const chunk = await Promise.race([reader.read(), bodyDeadline]);
+          if (chunk.done) break;
+          byteCount += chunk.value.byteLength;
+          if (byteCount > readControls.maxResponseBytes) {
+            throw new QuickBooksProviderError("QUICKBOOKS_RESPONSE_TOO_LARGE", false);
+          }
+          responseBody += decoder.decode(chunk.value, { stream: true });
+        }
+        responseBody += decoder.decode();
+      } catch (error) {
+        // Cancellation is cleanup only: a stalled transport must not extend the read budget
+        // or replace the original fixed error. Promise.race also observes late rejections.
+        await Promise.race([reader.cancel().catch(() => undefined), bodyDeadline]).catch(() => undefined);
+        throw error;
+      } finally {
+        clearTimeout(deadlineTimer!);
+        reader.releaseLock();
+      }
+    } else {
+      responseBody = await response.text();
+    }
+    if (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs) throw new Error("deadline");
+  } catch (error) {
+    if (readControls && !mutation && error instanceof QuickBooksProviderError) throw error;
+    throw new QuickBooksProviderError(mutation ? "QUICKBOOKS_MUTATION_RESULT_UNKNOWN" : "QUICKBOOKS_READ_DEADLINE", mutation);
+  }
   if (!response.ok) {
     const ambiguous = mutation && (response.status === 408 || response.status === 429 || response.status >= 500);
     throw new QuickBooksProviderError(`QUICKBOOKS_HTTP_${response.status}`, ambiguous, response.status);
@@ -480,12 +587,54 @@ async function quickBooksApiRequest<T>(
   }
 }
 
+const QUICKBOOKS_TAX_CANONICAL_RESPONSE_MAX_BYTES = 512 * 1024;
+const quickBooksCanonicalId = z.string().min(1).max(191).regex(/^[A-Za-z0-9_-]+$/);
+
+function assertQuickBooksCanonicalReadInput(realmId: string, entityId: string, deadlineAtMs: number): void {
+  if (!quickBooksCanonicalId.safeParse(realmId).success || !quickBooksCanonicalId.safeParse(entityId).success
+    || !Number.isSafeInteger(deadlineAtMs) || deadlineAtMs <= Date.now()) {
+    throw new QuickBooksProviderError("QUICKBOOKS_TAX_CANONICAL_READ_INPUT_INVALID", false);
+  }
+}
+
+export async function fetchQuickBooksCanonicalTaxEstimate(
+  runtimeEnv: QuickBooksCredentialRuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  estimateId: string,
+  options: Readonly<{ deadlineAtMs: number }>,
+): Promise<CanonicalQuickBooksTaxEstimate> {
+  assertQuickBooksCanonicalReadInput(realmId, estimateId, options.deadlineAtMs);
+  const response = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken,
+    `/estimate/${encodeURIComponent(estimateId)}`, {}, options.deadlineAtMs,
+    { maxResponseBytes: QUICKBOOKS_TAX_CANONICAL_RESPONSE_MAX_BYTES, rejectRedirects: true });
+  return projectCanonicalQuickBooksTaxEstimate(response, estimateId);
+}
+
+export async function fetchQuickBooksCanonicalTaxInvoice(
+  runtimeEnv: QuickBooksCredentialRuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  invoiceId: string,
+  options: Readonly<{ deadlineAtMs: number; expectedEstimateId: string }>,
+): Promise<CanonicalQuickBooksTaxInvoice> {
+  assertQuickBooksCanonicalReadInput(realmId, invoiceId, options.deadlineAtMs);
+  if (!quickBooksCanonicalId.safeParse(options.expectedEstimateId).success) {
+    throw new QuickBooksProviderError("QUICKBOOKS_TAX_CANONICAL_READ_INPUT_INVALID", false);
+  }
+  const response = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken,
+    `/invoice/${encodeURIComponent(invoiceId)}`, {}, options.deadlineAtMs,
+    { maxResponseBytes: QUICKBOOKS_TAX_CANONICAL_RESPONSE_MAX_BYTES, rejectRedirects: true });
+  return projectCanonicalQuickBooksTaxInvoice(response, invoiceId, options.expectedEstimateId);
+}
+
 export async function queryQuickBooksEntity<T>(
   runtimeEnv: RuntimeEnv,
   realmId: string,
   accessToken: string,
   query: string,
   entityName: string,
+  strictResponse = false,
 ): Promise<T[]> {
   let response: Response;
   try {
@@ -516,6 +665,13 @@ export async function queryQuickBooksEntity<T>(
     throw new QuickBooksProviderError("QUICKBOOKS_QUERY_RESPONSE_INVALID", false, response.status);
   }
 
+  if (strictResponse && (
+    !payload || typeof payload !== "object" || Array.isArray(payload)
+    || !payload.QueryResponse || typeof payload.QueryResponse !== "object" || Array.isArray(payload.QueryResponse)
+    || (payload.QueryResponse[entityName] !== undefined && !Array.isArray(payload.QueryResponse[entityName]))
+  )) {
+    throw new QuickBooksProviderError("QUICKBOOKS_QUERY_RESPONSE_INVALID", false, response.status);
+  }
   const results = payload.QueryResponse?.[entityName];
   return Array.isArray(results) ? results : [];
 }
@@ -661,16 +817,72 @@ export async function createQuickBooksServiceItem(
   return payload.Item;
 }
 
+export const QUICKBOOKS_INVOICE_IDENTITY_BIND_BUDGET_MS = 20_000;
+export const QUICKBOOKS_INVOICE_NUMBERING_BUDGET_MS = 20_000;
+// CREATE returns full line descriptions; allow the supported large invoice shape
+// while retaining a fixed bound on an uncertain mutation response.
+const QUICKBOOKS_INVOICE_CREATE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
+
+/** One attempt context survives the credential-refresh callback replay. */
+export function createQuickBooksInvoiceWriteControl(params: {
+  payload: Record<string, unknown>;
+  providerRequestId: string;
+  realmId: string;
+  claimDeadlineAtMs: number;
+  beforeCreate: () => Promise<void>;
+}) {
+  return {
+    requestBody: JSON.stringify(params.payload),
+    providerRequestId: params.providerRequestId,
+    realmId: params.realmId,
+    claimDeadlineAtMs: params.claimDeadlineAtMs,
+    numberingDeadlineAtMs: Math.min(params.claimDeadlineAtMs, Date.now() + QUICKBOOKS_INVOICE_NUMBERING_BUDGET_MS),
+    beforeCreate: params.beforeCreate,
+    postAttempted: false,
+    phase: "preflight" as "preflight" | "fence" | "create",
+  };
+}
+export type QuickBooksInvoiceWriteControl = ReturnType<typeof createQuickBooksInvoiceWriteControl>;
+
+export function classifyQuickBooksInvoiceWriteFailure(error: unknown, control: QuickBooksInvoiceWriteControl) {
+  const failure = classifyQuickBooksProviderFailure(error);
+  // An explicit final CREATE rejection remains distinguishable from a later
+  // preflight, fence, refresh, transport or persistence failure.
+  const explicitRejection = control.phase === "create" && error instanceof QuickBooksProviderError
+    && error.statusCode !== undefined && error.statusCode >= 400 && error.statusCode < 500
+    && ![401, 408, 429].includes(error.statusCode) && /^QUICKBOOKS_HTTP_\d{3}$/.test(error.code);
+  return control.postAttempted && !explicitRejection
+    ? { code: "QUICKBOOKS_MUTATION_RESULT_UNKNOWN", ambiguous: true }
+    : failure;
+}
+
 export async function createQuickBooksInvoice(
   runtimeEnv: RuntimeEnv,
   realmId: string,
   accessToken: string,
   payload: Record<string, unknown>,
-  providerRequestId?: string,
+  providerRequestId: string | undefined,
+  control: QuickBooksInvoiceWriteControl,
 ): Promise<QuickBooksInvoiceEntity> {
+  // Snapshot once: the numbering checks must describe the exact body sent even
+  // while the read-only provider preflight awaits network responses.
+  control.phase = "preflight";
+  if (realmId !== control.realmId || providerRequestId !== control.providerRequestId
+      || JSON.stringify(payload) !== control.requestBody) {
+    throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID", false);
+  }
+  const requestBody = control.requestBody;
+  await assertQuickBooksInvoiceNumberingSafe(runtimeEnv, realmId, accessToken, JSON.parse(requestBody), control.numberingDeadlineAtMs);
+  control.phase = "fence";
+  await control.beforeCreate();
+  if (Date.now() + runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS + QUICKBOOKS_INVOICE_IDENTITY_BIND_BUDGET_MS >= control.claimDeadlineAtMs) {
+    throw new QuickBooksProviderError("QUICKBOOKS_PUBLISH_DEADLINE", false);
+  }
   const requestQuery = providerRequestId
     ? `?requestid=${encodeURIComponent(providerRequestId)}`
     : "";
+  control.phase = "create";
+  control.postAttempted = true;
   const response = await quickBooksApiRequest<{ Invoice: QuickBooksInvoiceEntity }>(
     runtimeEnv,
     realmId,
@@ -678,11 +890,89 @@ export async function createQuickBooksInvoice(
     `/invoice${requestQuery}`,
     {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: requestBody,
     },
+    Date.now() + runtimeEnv.QUICKBOOKS_PROVIDER_TIMEOUT_MS,
+    { maxResponseBytes: QUICKBOOKS_INVOICE_CREATE_RESPONSE_MAX_BYTES, rejectRedirects: true },
   );
 
   return parseQuickBooksEntity(QuickBooksInvoiceSchema, response.Invoice, "QUICKBOOKS_INVOICE_RESPONSE_INVALID");
+}
+
+export const QUICKBOOKS_INVOICE_PRECREATE_FAILURE_CODES = [
+  "QUICKBOOKS_CUSTOM_NUMBERING_REQUIRED",
+  "QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID",
+  "QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE",
+  "QUICKBOOKS_DOC_NUMBER_COLLISION",
+] as const;
+
+/** All returned text is fixed and safe for a contractor-facing response. */
+export function quickBooksInvoicePrecreateFailureMessage(code: string): string | null {
+  switch (code) {
+    case "QUICKBOOKS_CUSTOM_NUMBERING_REQUIRED":
+      return "Enable custom transaction numbers in QuickBooks sales settings, then review this invoice again. No invoice was created.";
+    case "QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID":
+    case "QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE":
+      return "QuoteFly could not verify QuickBooks invoice numbering. Try again after reviewing the invoice. No invoice was created.";
+    case "QUICKBOOKS_DOC_NUMBER_COLLISION":
+      return "QuickBooks already has an invoice with this number. Review the existing invoice before continuing. No invoice was created.";
+    default:
+      return null;
+  }
+}
+
+async function assertQuickBooksInvoiceNumberingSafe(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  payload: unknown,
+  deadlineAtMs: number,
+): Promise<void> {
+  const parsedPayload = z.object({ DocNumber: z.string().min(1).max(21).refine((value) => value === value.trim()) }).safeParse(payload);
+  if (!parsedPayload.success) throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID", false);
+  let preferences: unknown;
+  try {
+    preferences = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, "/preferences", {}, deadlineAtMs);
+  } catch (error) {
+    // Preserve the existing credential-refresh flow; no CREATE has happened.
+    if (error instanceof QuickBooksProviderError && error.statusCode === 401) throw error;
+    throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE", false);
+  }
+  const parsedPreferences = z.object({
+    Preferences: z.object({
+      SalesFormsPrefs: z.object({ CustomTxnNumbers: z.boolean().optional() }).optional(),
+    }),
+  }).safeParse(preferences);
+  if (!parsedPreferences.success) throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID", false);
+  if (parsedPreferences.data.Preferences.SalesFormsPrefs?.CustomTxnNumbers !== true) {
+    throw new QuickBooksProviderError("QUICKBOOKS_CUSTOM_NUMBERING_REQUIRED", false);
+  }
+
+  const query = `SELECT * FROM Invoice WHERE DocNumber = '${escapeQuickBooksQueryValue(parsedPayload.data.DocNumber)}' MAXRESULTS 1`;
+  let result: unknown;
+  try {
+    result = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, `/query?query=${encodeURIComponent(query)}`, {}, deadlineAtMs);
+  } catch (error) {
+    if (error instanceof QuickBooksProviderError && error.statusCode === 401) throw error;
+    throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_UNAVAILABLE", false);
+  }
+  const parsedQuery = z.object({
+    QueryResponse: z.object({
+      Invoice: z.array(z.object({ Id: z.string().min(1) })).optional(),
+      totalCount: z.number().int().nonnegative().optional(),
+      maxResults: z.number().int().nonnegative().optional(),
+      startPosition: z.number().int().nonnegative().optional(),
+    }).strict(),
+    time: z.string().optional(),
+  }).strict().safeParse(result);
+  if (!parsedQuery.success) throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID", false);
+  const response = parsedQuery.data.QueryResponse;
+  if ((response.Invoice?.length ?? 0) > 0 || (response.totalCount ?? 0) > 0) {
+    throw new QuickBooksProviderError("QUICKBOOKS_DOC_NUMBER_COLLISION", false);
+  }
+  if ((response.maxResults ?? 0) > 0) {
+    throw new QuickBooksProviderError("QUICKBOOKS_NUMBERING_PREFLIGHT_INVALID", false);
+  }
 }
 
 export async function findQuickBooksInvoicesByDocNumber(
@@ -865,27 +1155,57 @@ export async function fetchQuickBooksItem(
   return item;
 }
 
+const QuickBooksMappingSearchInputSchema = z.object({
+  queryText: z.string().trim().min(2).max(80),
+  limit: z.number().int().min(1).max(25),
+  startPosition: z.number().int().min(1).max(1_000_000),
+});
+
+export type QuickBooksMappingSearchPage<T> = {
+  candidates: T[];
+  page: { startPosition: number; limit: number; hasMore: boolean; nextStartPosition: number | null };
+};
+
+// These are live provider offsets, not a snapshot; mapping selection still needs
+// canonical review. At the position guard, hasMore remains truthful while a null
+// continuation tells the caller to narrow the search.
+function quickBooksMappingSearchPage<T>(results: T[], limit: number, startPosition: number): QuickBooksMappingSearchPage<T> {
+  const hasMore = results.length > limit;
+  return {
+    candidates: results.slice(0, limit),
+    page: {
+      startPosition,
+      limit,
+      hasMore,
+      nextStartPosition: hasMore && startPosition + limit <= 1_000_000 ? startPosition + limit : null,
+    },
+  };
+}
+
 export async function searchQuickBooksCustomers(
   runtimeEnv: RuntimeEnv,
   realmId: string,
   accessToken: string,
   queryText: string,
   limit: number,
-): Promise<QuickBooksCustomerEntity[]> {
-  const normalized = normalizeQuickBooksName(queryText, 80);
-  const boundedLimit = Math.min(25, Math.max(1, Math.trunc(limit)));
+  startPosition = 1,
+): Promise<QuickBooksMappingSearchPage<QuickBooksCustomerEntity>> {
+  const input = QuickBooksMappingSearchInputSchema.parse({ queryText, limit, startPosition });
+  const normalized = normalizeQuickBooksName(input.queryText, 80);
   const results = await queryQuickBooksEntity<unknown>(
     runtimeEnv,
     realmId,
     accessToken,
-    `SELECT * FROM Customer WHERE DisplayName LIKE '%${escapeQuickBooksQueryValue(normalized)}%' AND Active = true MAXRESULTS ${boundedLimit}`,
+    `SELECT * FROM Customer WHERE DisplayName LIKE '%${escapeQuickBooksQueryValue(normalized)}%' AND Active = true STARTPOSITION ${startPosition} MAXRESULTS ${limit + 1}`,
     "Customer",
+    true,
   );
-  return results.map((result) => parseQuickBooksEntity(
-    QuickBooksCustomerSchema,
-    result,
+  const candidates = parseQuickBooksEntity(
+    z.array(QuickBooksCustomerSchema.extend({ Active: z.literal(true).optional() })).max(limit + 1),
+    results,
     "QUICKBOOKS_CUSTOMER_QUERY_RESPONSE_INVALID",
-  ));
+  );
+  return quickBooksMappingSearchPage(candidates, limit, startPosition);
 }
 
 export async function searchQuickBooksItems(
@@ -894,21 +1214,24 @@ export async function searchQuickBooksItems(
   accessToken: string,
   queryText: string,
   limit: number,
-): Promise<QuickBooksItemEntity[]> {
-  const normalized = normalizeQuickBooksName(queryText, 80);
-  const boundedLimit = Math.min(25, Math.max(1, Math.trunc(limit)));
+  startPosition = 1,
+): Promise<QuickBooksMappingSearchPage<QuickBooksItemEntity>> {
+  const input = QuickBooksMappingSearchInputSchema.parse({ queryText, limit, startPosition });
+  const normalized = normalizeQuickBooksName(input.queryText, 80);
   const results = await queryQuickBooksEntity<unknown>(
     runtimeEnv,
     realmId,
     accessToken,
-    `SELECT * FROM Item WHERE Name LIKE '%${escapeQuickBooksQueryValue(normalized)}%' AND Active = true MAXRESULTS ${boundedLimit}`,
+    `SELECT * FROM Item WHERE Name LIKE '%${escapeQuickBooksQueryValue(normalized)}%' AND Active = true ORDERBY Name STARTPOSITION ${startPosition} MAXRESULTS ${limit + 1}`,
     "Item",
+    true,
   );
-  return results.map((result) => parseQuickBooksEntity(
-    QuickBooksItemSchema,
-    result,
+  const candidates = parseQuickBooksEntity(
+    z.array(QuickBooksItemSchema.extend({ Active: z.literal(true).optional() })).max(limit + 1),
+    results,
     "QUICKBOOKS_ITEM_QUERY_RESPONSE_INVALID",
-  ));
+  );
+  return quickBooksMappingSearchPage(candidates, limit, startPosition);
 }
 
 export async function fetchQuickBooksCdc(
@@ -965,7 +1288,7 @@ export function summarizeQuickBooksInvoice(invoice: QuickBooksInvoiceEntity): Qu
   };
 }
 
-export function buildQuickBooksAuthorizationUrl(runtimeEnv: RuntimeEnv, state: string): string {
+export function buildQuickBooksAuthorizationUrl(runtimeEnv: QuickBooksOAuthRuntimeEnv, state: string): string {
   const url = new URL(QUICKBOOKS_AUTHORIZE_URL);
   url.searchParams.set("client_id", runtimeEnv.QUICKBOOKS_CLIENT_ID);
   url.searchParams.set("redirect_uri", getQuickBooksRedirectUri(runtimeEnv));
@@ -1022,6 +1345,10 @@ export function verifySignedQuickBooksState(runtimeEnv: RuntimeEnv, state: strin
     const authTag = Buffer.from(authTagPart, "base64url");
     const encrypted = Buffer.from(encryptedPart, "base64url");
     if (iv.length !== 12 || authTag.length !== 16 || encrypted.length === 0) return null;
+    // Reject alternate encodings with nonzero unused base64 bits. Every state
+    // generated by QuoteFly has one canonical spelling, including its GCM tag.
+    if (iv.toString("base64url") !== ivPart || authTag.toString("base64url") !== authTagPart
+      || encrypted.toString("base64url") !== encryptedPart) return null;
     const key = createHash("sha256")
       .update("quotefly:quickbooks:oauth-state:qbo2\0", "utf8")
       .update(runtimeEnv.JWT_SECRET, "utf8")
@@ -1041,7 +1368,7 @@ export function verifySignedQuickBooksState(runtimeEnv: RuntimeEnv, state: strin
 }
 
 export async function exchangeQuickBooksAuthorizationCode(
-  runtimeEnv: RuntimeEnv,
+  runtimeEnv: QuickBooksOAuthRuntimeEnv,
   code: string,
 ): Promise<QuickBooksTokenResponse> {
   const body = new URLSearchParams({
@@ -1074,6 +1401,74 @@ export async function exchangeQuickBooksAuthorizationCode(
     await response.json(),
     "QUICKBOOKS_TOKEN_EXCHANGE_RESPONSE_INVALID",
   );
+}
+
+// These capability reads deliberately strip unrelated provider fields. The
+// existing OAuth CompanyInfo contract below remains unchanged.
+const QuickBooksCompanyTaxInfoSchema = z.object({
+  Id: z.string().min(1).max(30),
+  Country: z.string().max(100).optional(),
+  CompanyAddr: z.object({
+    Line1: z.string().max(500).optional(),
+    City: z.string().max(255).optional(),
+    Country: z.string().max(100).optional(),
+    CountrySubDivisionCode: z.string().max(255).optional(),
+    PostalCode: z.string().max(30).optional(),
+  }).optional(),
+});
+
+const QuickBooksTaxPreferencesSchema = z.object({
+  TaxPrefs: z.object({ UsingSalesTax: z.boolean().optional() }).optional(),
+  SalesFormsPrefs: z.object({
+    AllowEstimates: z.boolean().optional(),
+    UsingProgressInvoicing: z.boolean().optional(),
+  }).optional(),
+  CurrencyPrefs: z.object({
+    HomeCurrency: z.object({ value: z.string().max(20) }).optional(),
+  }).optional(),
+});
+
+export type QuickBooksCompanyTaxInfo = z.infer<typeof QuickBooksCompanyTaxInfoSchema>;
+export type QuickBooksTaxPreferences = z.infer<typeof QuickBooksTaxPreferencesSchema>;
+
+function assertQuickBooksCapabilityReadInput(realmId: string, accessToken: string): void {
+  if (!/^[0-9]{1,30}$/.test(realmId) || !accessToken.trim()) {
+    throw new QuickBooksProviderError("QUICKBOOKS_TAX_CAPABILITY_INPUT_INVALID", false);
+  }
+}
+
+export async function fetchQuickBooksCompanyTaxInfo(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  deadlineAtMs?: number,
+): Promise<QuickBooksCompanyTaxInfo> {
+  assertQuickBooksCapabilityReadInput(realmId, accessToken);
+  const payload = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, `/companyinfo/${realmId}`, {}, deadlineAtMs);
+  const parsed = parseQuickBooksEntity(
+    z.object({ CompanyInfo: QuickBooksCompanyTaxInfoSchema }),
+    payload,
+    "QUICKBOOKS_TAX_COMPANY_RESPONSE_INVALID",
+  );
+  if (parsed.CompanyInfo.Id !== realmId) {
+    throw new QuickBooksProviderError("QUICKBOOKS_TAX_COMPANY_REALM_MISMATCH", false);
+  }
+  return parsed.CompanyInfo;
+}
+
+export async function fetchQuickBooksTaxPreferences(
+  runtimeEnv: RuntimeEnv,
+  realmId: string,
+  accessToken: string,
+  deadlineAtMs?: number,
+): Promise<QuickBooksTaxPreferences> {
+  assertQuickBooksCapabilityReadInput(realmId, accessToken);
+  const payload = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, "/preferences", {}, deadlineAtMs);
+  return parseQuickBooksEntity(
+    z.object({ Preferences: QuickBooksTaxPreferencesSchema }),
+    payload,
+    "QUICKBOOKS_TAX_PREFERENCES_RESPONSE_INVALID",
+  ).Preferences;
 }
 
 export async function fetchQuickBooksCompanyInfo(
@@ -1338,12 +1733,12 @@ export function decryptQuickBooksHostedPaymentLink(runtimeEnv: RuntimeEnv, encry
   throw new Error("QuickBooks hosted payment link payload is invalid.");
 }
 
-export function buildQuickBooksAdminRedirect(runtimeEnv: RuntimeEnv, state: string): string {
+export function buildQuickBooksAdminRedirect(runtimeEnv: { APP_URL: string }, state: string): string {
   return `${runtimeEnv.APP_URL.replace(/\/$/, "")}/app/settings?integrations=${encodeURIComponent(state)}#admin-quickbooks`;
 }
 
 export function verifyQuickBooksWebhookSignature(
-  runtimeEnv: RuntimeEnv,
+  runtimeEnv: { QUICKBOOKS_WEBHOOK_VERIFIER: string },
   payload: string,
   signature: string,
 ): boolean {
@@ -1361,3 +1756,44 @@ export function verifyQuickBooksWebhookSignature(
 }
 
 export const QUICKBOOKS_ACCOUNTING_SCOPE = ACCOUNTING_SCOPE;
+
+// Tax-only projections: never reuse the broad mapping readers for tax decisions.
+export const quickBooksTaxOpaqueIdSchema = z.string().min(1).max(191)
+  .refine((value) => value !== "." && value !== ".." && !/[\s\p{Cc}\p{Cf}]/u.test(value));
+const taxSyncToken = z.string().regex(/^\d{1,64}$/);
+const QuickBooksTaxCustomerSchema = z.object({
+  Id: quickBooksTaxOpaqueIdSchema, SyncToken: taxSyncToken, Active: z.boolean(),
+  Taxable: z.boolean().optional(), TaxExemptionReasonId: quickBooksTaxOpaqueIdSchema.nullable().optional(),
+});
+const QuickBooksTaxItemSchema = z.object({
+  Id: quickBooksTaxOpaqueIdSchema, SyncToken: taxSyncToken, Active: z.boolean(),
+  // Intuit ItemTypeEnum includes desktop variants; only Service is supported here.
+  Type: z.enum(["Assembly", "Category", "Discount", "Fixed Asset", "Group", "Inventory", "NonInventory", "Other Charge", "Payment", "Service", "Subtotal", "Tax", "Tax Group"]),
+  Taxable: z.boolean().optional(),
+  TaxClassificationRef: z.object({ value: quickBooksTaxOpaqueIdSchema }).optional(),
+});
+export type QuickBooksTaxCustomer = z.infer<typeof QuickBooksTaxCustomerSchema>;
+export type QuickBooksTaxItem = z.infer<typeof QuickBooksTaxItemSchema>;
+
+export async function fetchQuickBooksTaxCustomer(runtimeEnv: RuntimeEnv, realmId: string, accessToken: string,
+  customerId: string, deadlineAtMs?: number): Promise<QuickBooksTaxCustomer> {
+  assertQuickBooksCapabilityReadInput(realmId, accessToken);
+  if (!quickBooksTaxOpaqueIdSchema.safeParse(customerId).success) throw new QuickBooksProviderError("QUICKBOOKS_TAX_FACTS_INPUT_INVALID", false);
+  const payload = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, `/customer/${encodeURIComponent(customerId)}`, {}, deadlineAtMs);
+  const { Customer: customer } = parseQuickBooksEntity(z.object({ Customer: QuickBooksTaxCustomerSchema }), payload, "QUICKBOOKS_TAX_CUSTOMER_RESPONSE_INVALID");
+  if (customer.Id !== customerId) throw new QuickBooksProviderError("QUICKBOOKS_TAX_CUSTOMER_ID_MISMATCH", false);
+  if (!customer.Active) throw new QuickBooksProviderError("QUICKBOOKS_TAX_CUSTOMER_INACTIVE", false);
+  return customer;
+}
+
+export async function fetchQuickBooksTaxItem(runtimeEnv: RuntimeEnv, realmId: string, accessToken: string,
+  itemId: string, deadlineAtMs?: number): Promise<QuickBooksTaxItem> {
+  assertQuickBooksCapabilityReadInput(realmId, accessToken);
+  if (!quickBooksTaxOpaqueIdSchema.safeParse(itemId).success) throw new QuickBooksProviderError("QUICKBOOKS_TAX_FACTS_INPUT_INVALID", false);
+  const payload = await quickBooksApiRequest<unknown>(runtimeEnv, realmId, accessToken, `/item/${encodeURIComponent(itemId)}`, {}, deadlineAtMs);
+  const { Item: item } = parseQuickBooksEntity(z.object({ Item: QuickBooksTaxItemSchema }), payload, "QUICKBOOKS_TAX_ITEM_RESPONSE_INVALID");
+  if (item.Id !== itemId) throw new QuickBooksProviderError("QUICKBOOKS_TAX_ITEM_ID_MISMATCH", false);
+  if (!item.Active) throw new QuickBooksProviderError("QUICKBOOKS_TAX_ITEM_INACTIVE", false);
+  if (item.Type !== "Service") throw new QuickBooksProviderError("QUICKBOOKS_TAX_ITEM_TYPE_UNSUPPORTED", false);
+  return item;
+}

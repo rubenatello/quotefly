@@ -5,6 +5,7 @@ import {
   createCustomerViaApi,
   createQuoteViaApi,
   escapeRegExp,
+  expectSessionCookieCleared,
   signUpViaApi,
   type E2eAccount,
 } from "./helpers";
@@ -538,17 +539,82 @@ test.describe("quote builder secure server draft recovery", () => {
     await expect.poll(async () => persistentBrowserDraftKeys(freshTab)).toHaveLength(0);
   });
 
-  test("explicit sign out leaves no plaintext draft in browser storage", async ({ context, page, request }) => {
+  test("immediate sign out flushes the current draft and restores it after sign in", async ({ context, page, request }) => {
     const account = await signUpViaApi(request, "builder-draft-logout");
     await addSessionCookie(context, account);
     await page.goto("/app/build");
     await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
-    await page.getByLabel("Quote title").fill("Must disappear on sign out");
-    await expect.poll(async () => (await getServerDraft(request, account))?.payload.quote?.title).toBe("Must disappear on sign out");
+    await page.getByLabel("Quote title").fill("Flush this exact title before sign out");
 
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/\/$/);
+    await expectSessionCookieCleared(context);
     await expect.poll(async () => persistentBrowserDraftKeys(page)).toHaveLength(0);
+
+    await page.getByRole("button", { name: "Sign In", exact: true }).first().click();
+    const dialog = page.getByRole("dialog", { name: "Sign in" });
+    await dialog.getByLabel("Email Address").fill(account.email);
+    await dialog.getByLabel("Password").fill(account.password);
+    await dialog.getByRole("button", { name: /^Sign in$/i }).click();
+    await expect(page.getByRole("button", { name: "Prioritize my day", exact: true })).toBeVisible({ timeout: 30_000 });
+    await page.goto("/app/build");
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByLabel("Quote title")).toHaveValue("Flush this exact title before sign out");
+    await expect.poll(async () => persistentBrowserDraftKeys(page)).toHaveLength(0);
+  });
+
+  test("a slow failed draft flush cannot keep the session signed in", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "builder-draft-logout-slow-flush");
+    await addSessionCookie(context, account);
+    let delayedFlushes = 0;
+    await page.route("**/v1/quote-drafts/new", async (route) => {
+      if (route.request().method() !== "PUT") return route.fallback();
+      delayedFlushes += 1;
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Unavailable" }) });
+    });
+
+    await page.goto("/app/build");
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+    await page.getByLabel("Quote title").fill("Slow failed logout flush");
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect.poll(() => delayedFlushes).toBeGreaterThan(0);
+    await expect(page).toHaveURL(/\/$/, { timeout: 3_000 });
+    await expectSessionCookieCleared(context);
+    await expect.poll(async () => persistentBrowserDraftKeys(page)).toHaveLength(0);
+  });
+
+  test("pagehide dispatches a keepalive logout while a draft flush is held", async ({ context, page, request }) => {
+    const account = await signUpViaApi(request, "builder-draft-logout-pagehide");
+    await addSessionCookie(context, account);
+    let heldDraftWrites = 0;
+    let releaseDraftWrite: (() => void) | null = null;
+    const draftWriteHeld = new Promise<void>((resolve) => {
+      releaseDraftWrite = resolve;
+    });
+    let logoutRequests = 0;
+    await page.route("**/v1/quote-drafts/new", async (route) => {
+      if (route.request().method() !== "PUT") return route.fallback();
+      heldDraftWrites += 1;
+      await draftWriteHeld;
+      await route.abort("failed");
+    });
+    await page.route("**/v1/auth/logout", async (route) => {
+      logoutRequests += 1;
+      await route.fallback();
+    });
+
+    await page.goto("/app/build");
+    await expect(page.getByTestId("quote-builder")).toBeVisible({ timeout: 30_000 });
+    await page.getByLabel("Quote title").fill("Held draft before pagehide");
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect.poll(() => heldDraftWrites).toBeGreaterThan(0);
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false })));
+    await expect.poll(() => logoutRequests).toBe(1);
+    await expectSessionCookieCleared(context);
+
+    releaseDraftWrite?.();
+    await expect(page).toHaveURL(/\/$/, { timeout: 3_000 });
   });
 
   test("a definitive session 401 purges all builder drafts", async ({ page }) => {

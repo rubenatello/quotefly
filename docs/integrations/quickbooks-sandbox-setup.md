@@ -15,7 +15,7 @@ As of 2026-08-31, the isolated provider test surface is:
 
 DNS, TLS, API liveness, database readiness, trusted-origin CORS, least-privileged runtime login, staging-page `noindex`, and the OAuth authorization handoff have been verified. Public staging signup is disabled outside a short, monitored owner-registration window. The staging API currently permits OAuth/provider connection only. Hosted payments, reconciliation, CDC, and webhook processing remain disabled, and no webhook verifier is configured.
 
-The remaining OAuth proof is an owner action in a real browser: approve the dedicated Intuit sandbox company, return to QuoteFly, verify the expected company, and stop before **Confirm setup**. Do not use a live QuickBooks company.
+On September 13, 2026, the owner completed the browser connection and supplied the staging settings screen showing **Quotefly Sandbox**, **Connection verified**, accounting permission granted, company binding active, and encrypted credentials available. This is owner-observed connection evidence only. Accounting setup, invoice publishing, hosted payments, signed webhook processing, reconciliation, and CDC remain disabled and untested against Intuit. See the [current release candidate](quickbooks-release-candidate-2026-09-13.md) for the next evidence gates.
 
 Official references:
 

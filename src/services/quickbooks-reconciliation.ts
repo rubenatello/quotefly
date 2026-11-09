@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
-import type { env } from "../config/env";
+import type { QuickBooksCredentialRuntimeEnv } from "../config/quickbooks-runtime-types";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import {
   decryptQuickBooksHostedPaymentLink,
@@ -22,7 +22,12 @@ import {
 } from "./quickbooks-credentials";
 import { QUICKBOOKS_SETUP_CHECKLIST_VERSION } from "./quickbooks-setup";
 
-type RuntimeEnv = typeof env;
+type RuntimeEnv = QuickBooksCredentialRuntimeEnv;
+
+const MISSING_PROVIDER_INVOICE_REVIEW_CODES = [
+  "QUICKBOOKS_INVOICE_DELETED_MANUAL_REVIEW",
+  "QUICKBOOKS_INVOICE_NOT_FOUND_MANUAL_REVIEW",
+];
 
 type ReconciliationContext = {
   invoiceId: string;
@@ -291,7 +296,6 @@ function providerPaymentReviewFailure(
   reviewed: { allowOnlineAchPayment: boolean; allowOnlineCardPayment: boolean },
 ): string | null {
   const record = invoice as Record<string, unknown>;
-  const reviewedOnlinePayment = reviewed.allowOnlineAchPayment || reviewed.allowOnlineCardPayment;
   const methods = [
     ["AllowOnlineACHPayment", reviewed.allowOnlineAchPayment],
     ["AllowOnlineCreditCardPayment", reviewed.allowOnlineCardPayment],
@@ -308,13 +312,18 @@ function providerPaymentReviewFailure(
       ? "QUICKBOOKS_PAYMENT_METHOD_INELIGIBLE"
       : "QUICKBOOKS_PAYMENT_METHOD_REVIEW_MISMATCH";
   }
-  if (
-    Object.prototype.hasOwnProperty.call(record, "AllowOnlinePayment")
-    && record.AllowOnlinePayment !== reviewedOnlinePayment
-  ) {
-    return reviewedOnlinePayment && record.AllowOnlinePayment === false
-      ? "QUICKBOOKS_PAYMENT_METHOD_INELIGIBLE"
-      : "QUICKBOOKS_PAYMENT_METHOD_REVIEW_MISMATCH";
+  if (record.AllowOnlinePayPalPayment === true || record.AllowOnlineAffirmPayment === true) {
+    return "QUICKBOOKS_PAYMENT_METHOD_REVIEW_MISMATCH";
+  }
+  if (record.AllowOnlinePayment === true) {
+    if (
+      !reviewed.allowOnlineAchPayment
+      || !reviewed.allowOnlineCardPayment
+      || record.AllowOnlineACHPayment !== true
+      || record.AllowOnlineCreditCardPayment !== true
+    ) {
+      return "QUICKBOOKS_PAYMENT_METHOD_REVIEW_MISMATCH";
+    }
   }
   return null;
 }
@@ -325,6 +334,7 @@ async function loadContext(prisma: PrismaClient, tenantId: string, invoiceId: st
       where: { tenantId, invoiceId, archivedAtUtc: null, providerInvoiceId: { not: null } },
       select: {
         id: true,
+        taxEstimateOperationId: true,
         providerInvoiceId: true,
         payloadHash: true,
         allowOnlineAchPayment: true,
@@ -332,6 +342,7 @@ async function loadContext(prisma: PrismaClient, tenantId: string, invoiceId: st
         providerSyncToken: true,
         providerUpdatedAtUtc: true,
         lastReconciledAtUtc: true,
+        lastFailureCode: true,
         connection: {
           select: {
             id: true,
@@ -349,6 +360,17 @@ async function loadContext(prisma: PrismaClient, tenantId: string, invoiceId: st
     });
     if (!operation?.providerInvoiceId) {
       throw new QuickBooksReconciliationError("QUICKBOOKS_OPERATION_NOT_READY", "The invoice has no provider identity to reconcile.", false);
+    }
+    if (operation.taxEstimateOperationId) {
+      throw new QuickBooksReconciliationError("QUICKBOOKS_TAX_INVOICE_WORKFLOW_UNAVAILABLE",
+        "Taxable QuickBooks invoice processing is not available yet.", false);
+    }
+    if (operation.lastFailureCode && MISSING_PROVIDER_INVOICE_REVIEW_CODES.includes(operation.lastFailureCode)) {
+      throw new QuickBooksReconciliationError(
+        operation.lastFailureCode,
+        "The QuickBooks invoice is unavailable. Review it manually before any further accounting action.",
+        false,
+      );
     }
     if (operation.connection.status !== "CONNECTED" || operation.connection.deletedAtUtc) {
       throw new QuickBooksReconciliationError("QUICKBOOKS_NOT_CONNECTED", "Reconnect QuickBooks before reconciliation.", true);
@@ -419,7 +441,12 @@ async function quarantineQuickBooksReconciliationTransaction(
     where: {
       id: params.operationId,
       tenantId: params.tenantId,
+      taxEstimateOperationId: null,
       ...(params.expectedGeneration ?? {}),
+      OR: [
+        { lastFailureCode: null },
+        { lastFailureCode: { notIn: MISSING_PROVIDER_INVOICE_REVIEW_CODES } },
+      ],
     },
     data: {
       status: "RECONCILIATION_REQUIRED",
@@ -428,6 +455,13 @@ async function quarantineQuickBooksReconciliationTransaction(
       failedAtUtc: new Date(),
       succeededAtUtc: null,
       lastFailureCode: params.code.slice(0, 191),
+      ...(params.code === "QUICKBOOKS_INVOICE_NOT_FOUND_MANUAL_REVIEW" ? {
+        providerInvoiceLink: null,
+        invoiceLinkFetchedAtUtc: null,
+        providerSyncToken: null,
+        providerUpdatedAtUtc: null,
+        lastReconciledAtUtc: new Date(),
+      } : {}),
     },
   });
   if (quarantined.count !== 1) return false;
@@ -631,6 +665,18 @@ export async function reconcileQuickBooksInvoice(params: {
     if (isQuickBooksReauthorizationError(error)) {
       throw new QuickBooksProviderError("QUICKBOOKS_REAUTH_REQUIRED", false, 401);
     }
+    if (error instanceof QuickBooksProviderError && error.statusCode === 404) {
+      const code = "QUICKBOOKS_INVOICE_NOT_FOUND_MANUAL_REVIEW";
+      await quarantineQuickBooksReconciliation({
+        prisma: params.prisma,
+        tenantId: params.tenantId,
+        invoiceId: params.invoiceId,
+        operationId: context.operation.id,
+        code,
+        expectedGeneration,
+      });
+      throw new QuickBooksReconciliationError(code, "The QuickBooks invoice could not be found. Review it manually.", false);
+    }
     throw error;
   }
   let providerInvoice: QuickBooksReconciliationInvoiceEntity;
@@ -800,7 +846,8 @@ export async function reconcileQuickBooksInvoice(params: {
     });
     const [currentOperation, existingPayments] = await Promise.all([
       transaction.quickBooksInvoiceOperation.findFirstOrThrow({
-        where: { id: context.operation.id, tenantId: params.tenantId, invoiceId: params.invoiceId, archivedAtUtc: null },
+        where: { id: context.operation.id, tenantId: params.tenantId, invoiceId: params.invoiceId, archivedAtUtc: null,
+          taxEstimateOperationId: null },
         select: {
           id: true,
           providerSyncToken: true,
@@ -810,6 +857,7 @@ export async function reconcileQuickBooksInvoice(params: {
           providerInvoiceLink: true,
           lastReconciledAtUtc: true,
           succeededAtUtc: true,
+          lastFailureCode: true,
         },
       }),
       transaction.invoicePayment.findMany({
@@ -817,6 +865,9 @@ export async function reconcileQuickBooksInvoice(params: {
         select: { id: true, providerPaymentId: true, amount: true, refundedAmount: true, status: true },
       }),
     ]);
+    if (currentOperation.lastFailureCode && MISSING_PROVIDER_INVOICE_REVIEW_CODES.includes(currentOperation.lastFailureCode)) {
+      return { kind: "QUARANTINED" as const, code: currentOperation.lastFailureCode, retryable: false };
+    }
     const generationDecision = compareProviderGeneration(incomingGeneration, currentOperation);
     if (generationDecision === "STALE") {
       return {
@@ -917,9 +968,11 @@ export async function reconcileQuickBooksInvoice(params: {
       where: {
         id: currentOperation.id,
         tenantId: params.tenantId,
+        taxEstimateOperationId: null,
         providerSyncToken: currentOperation.providerSyncToken,
         providerUpdatedAtUtc: currentOperation.providerUpdatedAtUtc,
         lastReconciledAtUtc: currentOperation.lastReconciledAtUtc,
+        lastFailureCode: currentOperation.lastFailureCode,
       },
       data: {
         status: paymentLinkUnavailable ? "RECONCILIATION_REQUIRED" : "SUCCEEDED",

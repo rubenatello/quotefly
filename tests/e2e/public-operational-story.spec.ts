@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { BASIC_PLAN_PRICING_PATH } from "../../web/src/lib/plans";
 import { PUBLIC_ROUTE_SEO } from "../../web/src/lib/public-seo-data";
 
-const PUBLIC_OPERATIONAL_ROUTES = ["/", "/solutions", "/solutions/hvac", "/solutions/landscaping", "/services", "/pricing", "/about"] as const;
+const PUBLIC_OPERATIONAL_ROUTES = ["/", "/solutions", "/solutions/hvac", "/solutions/landscaping", "/services", "/pricing", "/about", "/integrations/quickbooks"] as const;
 const RESPONSIVE_WIDTHS = [360, 390, 768, 1280, 1440] as const;
 
 async function expectNoSeriousAccessibilityViolations(page: Page, label: string) {
@@ -92,7 +92,7 @@ test("public pages tell the verified quote-to-internal-invoice story", async ({ 
   await expect(integrations.getByRole("heading", { name: "Integrations on the horizon" })).toBeVisible();
   await expect(integrations.getByRole("article")).toHaveCount(3);
   await expect(integrations.getByText("QuickBooks-friendly CSV export", { exact: true })).toBeVisible();
-  await expect(integrations.getByText(/does not currently connect to QuickBooks Online/i)).toBeVisible();
+  await expect(integrations.getByText(/direct QuickBooks Online integration is being validated in staging and is not available to customers/i)).toBeVisible();
   await expect(integrations.getByText(/EDI is not currently planned/i)).toBeVisible();
   await expect(integrations.getByRole("link", { name: "Request an integration" })).toHaveAttribute("href", "/support#feature-request");
   await expect(page.getByRole("link", { name: "Integrations roadmap" })).toHaveAttribute("href", "/pricing#integrations");

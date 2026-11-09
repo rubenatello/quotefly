@@ -26,12 +26,16 @@ const FORCED_RLS_ROWS = [
   { tableName: "InvoiceEvent", enabled: true, forced: true },
   { tableName: "InvoicePayment", enabled: true, forced: true },
   { tableName: "QuickBooksInvoiceOperation", enabled: true, forced: true },
+  { tableName: "QuickBooksTaxEstimateOperation", enabled: true, forced: true },
+  { tableName: "InvoiceTaxContext", enabled: true, forced: true },
+  { tableName: "InvoiceTaxContextLine", enabled: true, forced: true },
   { tableName: "QuickBooksConnection", enabled: true, forced: true },
   { tableName: "QuickBooksConnectionEvent", enabled: true, forced: true },
   { tableName: "QuickBooksCustomerMap", enabled: true, forced: true },
   { tableName: "QuickBooksItemMap", enabled: true, forced: true },
   { tableName: "QuickBooksInvoiceSync", enabled: true, forced: true },
   { tableName: "QuickBooksWebhookEvent", enabled: true, forced: true },
+  { tableName: "QuickBooksWebhookReplay", enabled: true, forced: true },
   { tableName: "QuickBooksOAuthState", enabled: true, forced: true },
   { tableName: "QuickBooksRealmBinding", enabled: true, forced: true },
   { tableName: "QuickBooksCdcCursor", enabled: true, forced: true },
@@ -190,6 +194,33 @@ describe("health and readiness routes", () => {
     expect(response.json()).toEqual({ error: "Service is not ready." });
     expect(response.body).not.toContain("JobEvent");
     expect(queryRaw).toHaveBeenCalledTimes(2);
+  });
+
+  test("requires forced tenant isolation on replay audit records before readiness", async () => {
+    for (const auditRows of [
+      FORCED_RLS_ROWS.filter((row) => row.tableName !== "QuickBooksWebhookReplay"),
+      FORCED_RLS_ROWS.map((row) => row.tableName === "QuickBooksWebhookReplay" ? { ...row, forced: false } : row),
+    ]) {
+      const queryRaw = vi.fn(async () => queryRaw.mock.calls.length === 1 ? [{ value: 1 }] : auditRows);
+      const response = await buildHealthServer(queryRaw).inject({ method: "GET", url: "/v1/ready" });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ error: "Service is not ready." });
+    }
+  });
+
+  test.each(["QuickBooksTaxEstimateOperation", "InvoiceTaxContext", "InvoiceTaxContextLine"])("requires present, enabled and forced tenant isolation on %s", async (tableName) => {
+    for (const rows of [
+      FORCED_RLS_ROWS.filter((row) => row.tableName !== tableName),
+      FORCED_RLS_ROWS.map((row) => row.tableName === tableName ? { ...row, enabled: false } : row),
+      FORCED_RLS_ROWS.map((row) => row.tableName === tableName ? { ...row, forced: false } : row),
+    ]) {
+      const queryRaw = vi.fn(async () => queryRaw.mock.calls.length === 1 ? [{ value: 1 }] : rows);
+      const response = await buildHealthServer(queryRaw).inject({ method: "GET", url: "/v1/ready" });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ error: "Service is not ready." });
+      expect(response.body).not.toContain(tableName);
+      expect(queryRaw).toHaveBeenCalledTimes(2);
+    }
   });
 
   test("production readiness verifies the connected least-privileged runtime role", async () => {

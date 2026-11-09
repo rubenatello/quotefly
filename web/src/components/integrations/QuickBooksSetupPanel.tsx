@@ -14,10 +14,12 @@ import { useTranslation } from "react-i18next";
 import type { QuickBooksSetupCheckKey, QuickBooksSetupPhase, QuickBooksStatusPayload } from "../../lib/api";
 import { Alert, Badge, Button, Card } from "../ui";
 import { QuickBooksSetupGuide } from "./QuickBooksSetupGuide";
+import { QuickBooksRecoveryPanel } from "./QuickBooksRecoveryPanel";
 
 type QuickBooksAction = "connect" | "confirm" | "disconnect" | null;
 
 type QuickBooksSetupPanelProps = {
+  tenantId: string;
   canManage: boolean;
   status: QuickBooksStatusPayload | null;
   loading: boolean;
@@ -74,6 +76,7 @@ function formatDateTime(value: string | null | undefined, locale: string, fallba
 }
 
 export function QuickBooksSetupPanel({
+  tenantId,
   canManage,
   status,
   loading,
@@ -87,6 +90,8 @@ export function QuickBooksSetupPanel({
   const { t, i18n } = useTranslation();
   const [guideOpen, setGuideOpen] = useState(false);
   const guideTriggerRef = useRef<HTMLButtonElement>(null);
+  const diagnosticsRef = useRef<HTMLDetailsElement>(null);
+  const [recoveryCount, setRecoveryCount] = useState(0);
 
   function closeGuide() {
     setGuideOpen(false);
@@ -138,7 +143,10 @@ export function QuickBooksSetupPanel({
     : setup.capabilities.canReconnect && connection?.status !== "CONNECTED"
       ? { label: t("admin.quickBooksSetup.reconnect"), handler: onConnect }
       : null;
-  const actionableFailures = setup.checks.filter((check) => !check.passed && check.managedBy === "WORKSPACE");
+  const oauthOnly = Boolean(status.oauthOnlyMode);
+  const connectionVerified = oauthOnly && setup.phase === "READY_FOR_CONFIRMATION";
+  const actionableFailures = setup.checks.filter((check) => !check.passed && check.managedBy === "WORKSPACE"
+    && !(oauthOnly && check.key === "SETUP_CONFIRMED"));
   const platformFailures = setup.checks.filter((check) => !check.passed && check.managedBy === "QUOTEFLY");
   const reconciliationWorkerExpected = setup.checks.some(
     (check) => check.key === "RECONCILIATION_WORKER_ENABLED" && check.passed,
@@ -164,7 +172,7 @@ export function QuickBooksSetupPanel({
             </div>
           </div>
           <div className="flex flex-wrap gap-2 sm:justify-end">
-            <Badge tone={phaseTone(setup.phase)}>{t(phaseKey(setup.phase))}</Badge>
+            <Badge tone={phaseTone(setup.phase)}>{t(connectionVerified ? "admin.quickBooksSetup.connectionVerified" : phaseKey(setup.phase))}</Badge>
             <Badge tone={status.environment === "sandbox" ? "amber" : "slate"}>
               {status.environment === "sandbox" ? t("admin.quickBooksSetup.sandbox") : t("admin.quickBooksSetup.production")}
             </Badge>
@@ -178,7 +186,7 @@ export function QuickBooksSetupPanel({
             {primaryAction.label}
           </Button>
         ) : null}
-        {setup.capabilities.canConfirm && !setup.confirmed ? (
+        {!oauthOnly && setup.capabilities.canConfirm && !setup.confirmed ? (
           <Button variant="success" icon={<IconShieldCheckFilled size={18} />} onClick={onConfirm} loading={action === "confirm"} disabled={action !== null && action !== "confirm"}>
             {t("admin.quickBooksSetup.confirm")}
           </Button>
@@ -207,7 +215,14 @@ export function QuickBooksSetupPanel({
         </div>
       ) : null}
 
-      {connection?.status === "CONNECTED" && platformFailures.length ? (
+      {oauthOnly ? (
+        <div className="mt-5">
+          <Alert tone="info">
+            <p className="font-semibold">{t("admin.quickBooksSetup.connectionOnlyTitle")}</p>
+            <p className="mt-1">{t("admin.quickBooksSetup.connectionOnlyDescription")}</p>
+          </Alert>
+        </div>
+      ) : connection?.status === "CONNECTED" && platformFailures.length ? (
         <div className="mt-5">
           <Alert tone="warning">
             <p className="font-semibold">{t("admin.quickBooksSetup.platformWaitingTitle")}</p>
@@ -225,7 +240,14 @@ export function QuickBooksSetupPanel({
         </div>
       ) : null}
 
-      <details className="mt-5 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4">
+      {recoveryCount > 0 && <div className="mt-5"><Alert tone="warning">
+        <p>{t("admin.quickBooksRecovery.attention", { count: recoveryCount })}</p>
+        <Button variant="outline" className="mt-2 min-h-11 sm:min-h-11" onClick={() => {
+          if (diagnosticsRef.current) diagnosticsRef.current.open = true;
+          document.getElementById("quickbooks-recovery")?.focus();
+        }}>{t("admin.quickBooksRecovery.open")}</Button>
+      </Alert></div>}
+      <details ref={diagnosticsRef} className="mt-5 rounded-2xl border border-[var(--qf-border)] bg-[var(--qf-panel)] px-4">
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 py-3 text-sm font-semibold text-[var(--qf-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qf-focus)]">
           <span>{t("admin.quickBooksSetup.diagnosticsTitle")}</span>
           <span className="text-xs font-medium text-[var(--qf-text-muted)]">{t("admin.quickBooksSetup.diagnosticsHint")}</span>
@@ -238,7 +260,7 @@ export function QuickBooksSetupPanel({
           </div>
           <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{t("admin.quickBooksSetup.checklistDescription")}</p>
           <ul className="mt-3 grid gap-2 sm:grid-cols-2">
-            {setup.checks.map((check) => (
+            {setup.checks.filter(check => !(oauthOnly && check.key === "SETUP_CONFIRMED")).map((check) => (
               <li key={check.key} className="flex min-h-12 items-start gap-2 rounded-xl border border-[var(--qf-border)] bg-[var(--qf-panel-muted)] px-3 py-2.5">
                 {check.passed
                   ? <IconCircleCheckFilled className="mt-0.5 shrink-0 text-[var(--qf-success-text)]" size={18} aria-hidden="true" />
@@ -305,6 +327,7 @@ export function QuickBooksSetupPanel({
           </div>
         </aside>
       </div>
+      <QuickBooksRecoveryPanel tenantId={tenantId} canManage={canManage} status={status} onAvailabilityChange={setRecoveryCount} />
       </details>
       </Card>
       <QuickBooksSetupGuide

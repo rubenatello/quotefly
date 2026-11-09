@@ -152,6 +152,8 @@ The hosted-payment and reconciliation work is an engineering candidate, not an a
 
 The authoritative acceptance contract is [docs/integrations/quickbooks-hosted-payments-reconciliation.md](docs/integrations/quickbooks-hosted-payments-reconciliation.md). Current product and API truth is recorded in [docs/integrations/quickbooks-api-progress.md](docs/integrations/quickbooks-api-progress.md).
 
+See the [ordered production release runbook](docs/deployment/ordered-production-release.md) for exact-candidate migration-before-API sequencing, trigger controls, and recovery evidence.
+
 ### Coordinated migration rehearsal
 
 The `20260827120000_add_quickbooks_hosted_payment_reconciliation` migration enables forced RLS on existing QuickBooks tables. It is not backward-compatible with an API binary that queries those tables without setting `app.tenant_id`.

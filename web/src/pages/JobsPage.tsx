@@ -14,9 +14,10 @@ import {
   type ScheduleAssignee,
   type ScheduleRange,
 } from "../components/jobs/JobScheduleWorkspace";
-import { InvoicePanel } from "../components/invoices/InvoicePanel";
+import { InvoicePanel, type InvoiceTaxContextActivity } from "../components/invoices/InvoicePanel";
 import { api, ApiError, type AppointmentNotificationReceipt, type Job, type JobAppointment, type JobAppointmentStatus, type JobNote, type JobScheduleAppointment, type JobStatus, type OrgUserRole } from "../lib/api";
 import { localizedApiError } from "../lib/localized-api-error";
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
 import { resolveTenantWallTime, toTenantDateTimeInput, validTimeZone, type TenantWallTimeResolution } from "../lib/tenant-time";
 import { cn } from "../lib/utils";
 import { publishNotificationsUpdated } from "../lib/notification-display";
@@ -1323,6 +1324,8 @@ function JobDetail({
   editStale,
   onSave,
   onReloadLatest,
+  onRequestNavigation,
+  onTaxContextActivityChange,
   kodyBookingReview,
   kodyDispatchReview,
   kodyFocusReturnId,
@@ -1338,6 +1341,8 @@ function JobDetail({
   editStale: boolean;
   onSave: (payload: { assignedTenantUserId: string | null; accessInstructions: string | null }) => Promise<void>;
   onReloadLatest: () => void | Promise<void>;
+  onRequestNavigation: (action: () => void) => void;
+  onTaxContextActivityChange: (activity: InvoiceTaxContextActivity) => void;
   kodyBookingReview: KodyBookingReviewDetail | null;
   kodyDispatchReview: KodyDispatchReviewDetail | null;
   kodyFocusReturnId: "kody-launcher" | null;
@@ -1350,6 +1355,12 @@ function JobDetail({
   const assigneeName = job.assignedTenantUser?.user.fullName ?? t("jobs.unassigned");
   const [assignedTenantUserId, setAssignedTenantUserId] = useState(job.assignedTenantUserId ?? "");
   const [accessInstructions, setAccessInstructions] = useState(job.accessInstructions ?? "");
+  const [editingJobVersion, setEditingJobVersion] = useState(job.version);
+  if (editingJobVersion !== job.version) {
+    setEditingJobVersion(job.version);
+    setAssignedTenantUserId(job.assignedTenantUserId ?? "");
+    setAccessInstructions(job.accessInstructions ?? "");
+  }
 
   const assigneeOptions = useMemo(() => {
     const options = [
@@ -1388,7 +1399,7 @@ function JobDetail({
     <section className="rounded-3xl border border-[var(--qf-border)] bg-[var(--qf-panel)] p-4 shadow-[var(--qf-shadow-sm)] sm:p-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <Button variant="ghost" className="mb-3 min-h-11 px-0" onClick={() => navigate("/app/jobs")}>
+          <Button variant="ghost" className="mb-3 min-h-11 px-0" onClick={() => onRequestNavigation(() => navigate("/app/jobs"))}>
             <ArrowLeft size={16} />
             {t("jobs.backToJobs")}
           </Button>
@@ -1402,7 +1413,7 @@ function JobDetail({
           <p className="mt-1 text-sm text-[var(--qf-text-soft)]">{job.title}</p>
         </div>
         <div className="grid gap-2 sm:flex sm:flex-wrap sm:justify-end">
-          <Button className="min-h-11" onClick={() => navigate(`/app/quotes/${job.sourceQuoteId}`)}>
+          <Button className="min-h-11" onClick={() => onRequestNavigation(() => navigate(`/app/quotes/${job.sourceQuoteId}`))}>
             <ExternalLink size={16} />
             {t("jobs.openQuote")}
           </Button>
@@ -1449,6 +1460,7 @@ function JobDetail({
           createBlockedReason={job.status === "COMPLETED" ? null : t("invoices.completeJobFirst")}
           kodyInvoiceId={kodyInvoiceId}
           onKodyInvoiceConsumed={onKodyReviewConsumed}
+          onTaxContextActivityChange={onTaxContextActivityChange}
         />
       </div>
 
@@ -1579,13 +1591,38 @@ export function JobsPage() {
   const [listError, setListError] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailErrorRetainsCurrentJob, setDetailErrorRetainsCurrentJob] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [editStale, setEditStale] = useState(false);
   const [assignees, setAssignees] = useState<JobAssigneeOption[]>([]);
   const [assigneesLoading, setAssigneesLoading] = useState(false);
+  const [taxContextActivity, setTaxContextActivity] = useState<InvoiceTaxContextActivity>({ open: false, pending: false, saving: false });
   const listRequestGenerationRef = useRef(0);
   const detailRequestGenerationRef = useRef(0);
+  const {
+    navigationPromptOpen: taxNavigationPromptOpen,
+    requestNavigation,
+    cancelNavigation: cancelTaxNavigation,
+    continueNavigation: continueTaxNavigation,
+  } = useUnsavedChangesGuard(
+    taxContextActivity.pending,
+    taxContextActivity.pending
+      ? { historyPrompt: t("invoices.taxContext.leavePrompt"), blockNavigation: taxContextActivity.saving }
+      : undefined,
+  );
+  const taxConfirmModal = (
+    <ConfirmModal
+      open={taxNavigationPromptOpen}
+      onClose={cancelTaxNavigation}
+      onConfirm={continueTaxNavigation}
+      title={taxContextActivity.saving ? t("invoices.taxContext.savingTitle") : t("invoices.taxContext.leaveTitle")}
+      description={taxContextActivity.saving ? t("invoices.taxContext.savingLeaveHelp") : t("invoices.taxContext.leaveDescription")}
+      confirmLabel={taxContextActivity.saving ? t("invoices.taxContext.savingTitle") : t("invoices.taxContext.leaveConfirm")}
+      confirmDisabled={taxContextActivity.saving}
+      confirmVariant="warning"
+    />
+  );
 
   useEffect(() => {
     if (jobId) return;
@@ -1638,15 +1675,19 @@ export function JobsPage() {
     detailRequestGenerationRef.current = generation;
     setDetailLoading(true);
     setDetailError(null);
+    setDetailErrorRetainsCurrentJob(false);
     setEditError(null);
     setEditStale(false);
     try {
       const response = await api.jobs.get(id);
       if (generation !== detailRequestGenerationRef.current) return;
       setSelectedJob(response.job);
+      setDetailErrorRetainsCurrentJob(false);
     } catch (err) {
       if (generation !== detailRequestGenerationRef.current) return;
-      setSelectedJob(null);
+      const transient = !(err instanceof ApiError) || err.status >= 500;
+      setSelectedJob((current) => transient && current?.id === id ? current : null);
+      setDetailErrorRetainsCurrentJob(transient);
       setDetailError(localizedApiError(err, t, { fallbackKey: "jobs.loadDetailError" }));
     } finally {
       if (generation === detailRequestGenerationRef.current) setDetailLoading(false);
@@ -1716,10 +1757,13 @@ export function JobsPage() {
   };
 
   if (jobId) {
-    if (detailLoading) {
+    const retainJobDetailDuringTaxRefresh = Boolean(
+      selectedJob && taxContextActivity.pending && (detailLoading || detailErrorRetainsCurrentJob),
+    );
+    if (detailLoading && !retainJobDetailDuringTaxRefresh) {
       return <LoadingState title={t("jobs.loadingDetail")} />;
     }
-    if (detailError || !selectedJob) {
+    if (!selectedJob || (detailError && !retainJobDetailDuringTaxRefresh)) {
       return (
         <EmptyState
           icon={<BriefcaseBusiness size={24} />}
@@ -1727,7 +1771,7 @@ export function JobsPage() {
           description={detailError ?? t("jobs.loadDetailError")}
           action={
             <div className="flex flex-wrap justify-center gap-2">
-              <Button variant="outline" onClick={() => navigate("/app/jobs")}>{t("jobs.backToJobs")}</Button>
+              <Button variant="outline" onClick={() => requestNavigation(() => navigate("/app/jobs"))}>{t("jobs.backToJobs")}</Button>
               {jobId && <Button onClick={() => void loadJob(jobId)}>{t("jobs.retry")}</Button>}
             </div>
           }
@@ -1735,8 +1779,18 @@ export function JobsPage() {
       );
     }
     return (
+      <>
+      {detailLoading && retainJobDetailDuringTaxRefresh ? (
+        <div className="mb-4"><LoadingState variant="compact" title={t("jobs.loadingDetail")} /></div>
+      ) : null}
+      {detailError && retainJobDetailDuringTaxRefresh ? (
+        <div className="mb-4 space-y-2" data-testid="job-refresh-error">
+          <Alert tone="error">{detailError}</Alert>
+          <Button variant="outline" onClick={() => void loadJob(jobId)}>{t("jobs.retry")}</Button>
+        </div>
+      ) : null}
       <JobDetail
-        key={`${selectedJob.id}:${selectedJob.version}`}
+        key={selectedJob.id}
         job={selectedJob}
         canManageJobs={canManageJobs}
         assignees={assignees}
@@ -1746,12 +1800,16 @@ export function JobsPage() {
         editStale={editStale}
         onSave={handleSaveJob}
         onReloadLatest={() => loadJob(selectedJob.id)}
+        onRequestNavigation={requestNavigation}
+        onTaxContextActivityChange={setTaxContextActivity}
         kodyBookingReview={kodyReview.booking}
         kodyDispatchReview={kodyReview.dispatch}
         kodyFocusReturnId={kodyReview.focusReturnId}
         kodyInvoiceId={kodyReview.invoiceId}
         onKodyReviewConsumed={consumeKodyReview}
       />
+      {taxConfirmModal}
+      </>
     );
   }
 
@@ -1846,8 +1904,8 @@ export function JobsPage() {
                 key={job.id}
                 job={job}
                 active={job.id === jobId}
-                onOpen={(item) => navigate(`/app/jobs/${item.id}`)}
-                onOpenQuote={(item) => navigate(`/app/quotes/${item.sourceQuoteId}`)}
+                onOpen={(item) => requestNavigation(() => navigate(`/app/jobs/${item.id}`))}
+                onOpenQuote={(item) => requestNavigation(() => navigate(`/app/quotes/${item.sourceQuoteId}`))}
               />
             ))
           )}
@@ -1868,6 +1926,7 @@ export function JobsPage() {
       />
         </>
       )}
+      {taxConfirmModal}
     </div>
   );
 }

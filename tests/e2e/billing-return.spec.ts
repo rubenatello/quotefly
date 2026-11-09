@@ -1,6 +1,22 @@
 import { expect, test } from "@playwright/test";
 import { addSessionCookie, signUpViaApi } from "./helpers";
 
+test("an expired trial does not claim to be active on the billing gate", async ({ context, page, request }) => {
+  const account = await signUpViaApi(request, "billing-expired-status");
+  await addSessionCookie(context, account);
+  await page.route("**/v1/auth/me", async route => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    Object.assign(payload.tenant, { subscriptionStatus: "trialing", trialEndsAtUtc: "2020-01-01T00:00:00.000Z", isTrial: false });
+    Object.assign(payload.tenant.entitlements, { isTrial: false, hasWorkspaceAccess: false, billingRequired: true, accessReason: "payment_required" });
+    await route.fulfill({ response, json: payload });
+  });
+  await page.goto("/app/customers");
+  await expect(page.getByText("Trial ended", { exact: true })).toBeVisible();
+  await expect(page.getByText("Trial active", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Start Basic to unlock your workspace." })).toBeVisible();
+});
+
 test("checkout return waits for verified billing state before confirming activation", async ({
   context,
   page,
