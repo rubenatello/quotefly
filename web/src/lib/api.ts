@@ -3049,6 +3049,11 @@ export const api = {
   },
 
   invoices: {
+    downloadPdf: (invoiceId: string, options: { includeQuickBooksPayment: boolean } = { includeQuickBooksPayment: false }) =>
+      requestBlob(`/v1/invoices/${encodeURIComponent(invoiceId)}/pdf${toQueryString({
+        includeQuickBooksPayment: options.includeQuickBooksPayment,
+      })}`, { cache: "no-store", referrerPolicy: "no-referrer" }),
+
     list: (query?: {
       mine?: boolean;
       status?: InvoiceStatus;

@@ -8,12 +8,15 @@ import { PaginationQuerySchema } from "../lib/query-scope";
 import { measureRequestPerformance } from "../lib/request-performance";
 import { withTenantRlsContext } from "../lib/tenant-rls";
 import { withTransactionConflictRetry } from "../lib/transaction-retry";
+import { renderInvoicePdf, type InvoicePdfData } from "../services/invoice-pdf";
+import { readQuickBooksHostedPaymentLink } from "../services/quickbooks-hosted-payment-links";
 import {
   createInvoice,
   getInvoice,
   InvoiceServiceError,
   listInvoices,
   type InvoicePublic,
+  visibleInvoiceWhere,
 } from "../services/invoices";
 
 const InvoiceStatusSchema = z.nativeEnum(InvoiceStatus);
@@ -104,6 +107,87 @@ function sendInvoiceError(reply: FastifyReply, error: unknown) {
 }
 
 export const invoiceRoutes: FastifyPluginAsync = async (app) => {
+  app.get("/invoices/:invoiceId/pdf", {
+    preHandler: [app.authenticate],
+    config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
+  }, async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    reply.header("Referrer-Policy", "no-referrer");
+    const access = buildAccessContext(request);
+    const claims = getJwtClaims(request);
+    const { invoiceId } = InvoiceParamsSchema.parse(request.params);
+    const { includeQuickBooksPayment } = z.object({
+      includeQuickBooksPayment: BooleanQuerySchema.default(false),
+    }).strict().parse(request.query);
+    const result = await withTenantRlsContext(app.prisma, access.tenantId, async (transaction) => {
+      const membership = await transaction.tenantUser.findFirst({
+        where: { id: access.tenantUserId, tenantId: access.tenantId, userId: claims.userId, deletedAtUtc: null,
+          user: { deletedAtUtc: null, authVersion: claims.authVersion }, tenant: { deletedAtUtc: null } },
+        select: { role: true },
+      });
+      if (!membership || !["owner", "admin"].includes(membership.role.trim().toLowerCase())) {
+        return { error: "INVOICE_PDF_FORBIDDEN" as const };
+      }
+      // Explicit customer-safe projection; no provider credentials, source costs, or staff notes.
+      const invoice = await transaction.invoice.findFirst({
+        where: { ...visibleInvoiceWhere(access), id: invoiceId },
+        select: {
+          invoiceNumber: true, titleSnapshot: true, scopeSnapshot: true, documentLocale: true,
+          status: true, paymentStatus: true, currency: true, issuedAtUtc: true, dueAtUtc: true, createdAt: true,
+          subtotalAmount: true, taxAmount: true, totalAmount: true, amountPaid: true, balanceDue: true,
+          customer: { select: { fullName: true } },
+          lineItems: { orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+            select: { description: true, quantity: true, unitPrice: true, lineTotal: true } },
+        },
+      });
+      if (!invoice) return { error: "INVOICE_NOT_FOUND" as const };
+      const payment = includeQuickBooksPayment
+        ? await readQuickBooksHostedPaymentLink(transaction, app.env, access.tenantId, invoiceId) : null;
+      if (includeQuickBooksPayment && !payment) return { error: "QUICKBOOKS_INVOICE_LINK_UNAVAILABLE" as const };
+      const tenant = await transaction.tenant.findFirstOrThrow({
+        where: { id: access.tenantId, deletedAtUtc: null }, select: { name: true, timezone: true },
+      });
+      const branding = await transaction.tenantBranding.findFirst({
+        where: { tenantId: access.tenantId, deletedAtUtc: null },
+        select: { businessEmail: true, businessPhone: true, addressLine1: true, addressLine2: true,
+          city: true, state: true, postalCode: true },
+      });
+      const data: InvoicePdfData = {
+        invoiceNumber: invoice.invoiceNumber, title: invoice.titleSnapshot, scopeText: invoice.scopeSnapshot ?? "",
+        documentLocale: invoice.documentLocale === "es-US" ? "es-US" : "en-US",
+        status: invoice.status, paymentStatus: invoice.paymentStatus, currency: invoice.currency,
+        issuedAtUtc: invoice.issuedAtUtc, dueAtUtc: invoice.dueAtUtc, createdAt: invoice.createdAt,
+        business: { ...tenant, businessEmail: branding?.businessEmail, businessPhone: branding?.businessPhone,
+          addressLines: [branding?.addressLine1, branding?.addressLine2,
+            [branding?.city, branding?.state, branding?.postalCode].filter(Boolean).join(" ")].filter((line): line is string => Boolean(line)) },
+        customerName: invoice.customer.fullName,
+        lineItems: invoice.lineItems.map(line => ({ description: line.description, quantity: Number(line.quantity),
+          unitPrice: Number(line.unitPrice), lineTotal: Number(line.lineTotal) })),
+        subtotalAmount: Number(invoice.subtotalAmount), taxAmount: Number(invoice.taxAmount),
+        totalAmount: Number(invoice.totalAmount), amountPaid: Number(invoice.amountPaid), balanceDue: Number(invoice.balanceDue),
+        hostedPaymentUrl: payment?.hostedPaymentUrl ?? null,
+      };
+      return { data };
+    });
+    if ("error" in result) {
+      const status = result.error === "INVOICE_PDF_FORBIDDEN" ? 403 : result.error === "INVOICE_NOT_FOUND" ? 404 : 409;
+      return reply.code(status).send({ error: result.error === "INVOICE_PDF_FORBIDDEN"
+        ? "Only owners or admins can download customer invoices." : result.error === "INVOICE_NOT_FOUND"
+          ? "Invoice not found for tenant." : "Refresh the invoice and confirm its QuickBooks payment link before downloading.", code: result.error });
+    }
+    let pdf: Buffer;
+    try { pdf = await renderInvoicePdf(result.data); }
+    catch (error) {
+      if (error instanceof Error && error.message.startsWith("INVOICE_PDF_")) {
+        return reply.code(422).send({ error: "This invoice cannot be downloaded as a PDF. Review its content and amounts.", code: "INVOICE_PDF_UNAVAILABLE" });
+      }
+      throw error;
+    }
+    reply.type("application/pdf");
+    reply.header("Content-Disposition", `attachment; filename="invoice-${result.data.invoiceNumber}.pdf"`);
+    return reply.send(pdf);
+  });
+
   app.patch("/invoices/:invoiceId/due-date", { preHandler: [app.authenticate] }, async (request, reply) => {
     reply.header("Cache-Control", "private, no-store");
     const { invoiceId } = InvoiceParamsSchema.parse(request.params);

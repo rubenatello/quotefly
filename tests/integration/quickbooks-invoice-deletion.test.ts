@@ -59,7 +59,7 @@ async function fixture(account: Owner, providerInvoiceId = "provider-invoice", s
   const snapshot = {
     Id: providerInvoiceId, DocNumber: `QF-${sequence}`, CustomerRef: { value: "test-customer" }, CurrencyRef: { value: "USD" },
     TotalAmt: 100, Balance: 100, SyncToken: "1", MetaData: { LastUpdatedTime: now.toISOString() },
-    AllowOnlineACHPayment: false, AllowOnlineCreditCardPayment: true, AllowOnlinePayment: true,
+    AllowOnlineACHPayment: false, AllowOnlineCreditCardPayment: true, AllowOnlinePayment: false,
     InvoiceLink: "https://connect.intuit.com/portal/app/CommerceNetwork/view/scs-v1-test",
     Line: [{ Amount: 100, DetailType: "SalesItemLineDetail", SalesItemLineDetail: { ItemRef: { value: "test-item" }, Qty: 1, UnitPrice: 100 } }],
   };

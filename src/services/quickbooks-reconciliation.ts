@@ -296,7 +296,6 @@ function providerPaymentReviewFailure(
   reviewed: { allowOnlineAchPayment: boolean; allowOnlineCardPayment: boolean },
 ): string | null {
   const record = invoice as Record<string, unknown>;
-  const reviewedOnlinePayment = reviewed.allowOnlineAchPayment || reviewed.allowOnlineCardPayment;
   const methods = [
     ["AllowOnlineACHPayment", reviewed.allowOnlineAchPayment],
     ["AllowOnlineCreditCardPayment", reviewed.allowOnlineCardPayment],
@@ -313,13 +312,18 @@ function providerPaymentReviewFailure(
       ? "QUICKBOOKS_PAYMENT_METHOD_INELIGIBLE"
       : "QUICKBOOKS_PAYMENT_METHOD_REVIEW_MISMATCH";
   }
-  if (
-    Object.prototype.hasOwnProperty.call(record, "AllowOnlinePayment")
-    && record.AllowOnlinePayment !== reviewedOnlinePayment
-  ) {
-    return reviewedOnlinePayment && record.AllowOnlinePayment === false
-      ? "QUICKBOOKS_PAYMENT_METHOD_INELIGIBLE"
-      : "QUICKBOOKS_PAYMENT_METHOD_REVIEW_MISMATCH";
+  if (record.AllowOnlinePayPalPayment === true || record.AllowOnlineAffirmPayment === true) {
+    return "QUICKBOOKS_PAYMENT_METHOD_REVIEW_MISMATCH";
+  }
+  if (record.AllowOnlinePayment === true) {
+    if (
+      !reviewed.allowOnlineAchPayment
+      || !reviewed.allowOnlineCardPayment
+      || record.AllowOnlineACHPayment !== true
+      || record.AllowOnlineCreditCardPayment !== true
+    ) {
+      return "QUICKBOOKS_PAYMENT_METHOD_REVIEW_MISMATCH";
+    }
   }
   return null;
 }

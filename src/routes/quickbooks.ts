@@ -1,3 +1,4 @@
+import { readQuickBooksHostedPaymentLink } from "../services/quickbooks-hosted-payment-links";
 import { createHash } from "crypto";
 import { Prisma } from "@prisma/client";
 import { FastifyPluginAsync } from "fastify";
@@ -16,7 +17,6 @@ import {
   classifyQuickBooksInvoiceWriteFailure,
   QUICKBOOKS_INVOICE_IDENTITY_BIND_BUDGET_MS,
   createSignedQuickBooksState,
-  decryptQuickBooksHostedPaymentLink,
   encryptQuickBooksSecret,
   exchangeQuickBooksAuthorizationCode,
   fetchQuickBooksInvoice,
@@ -2066,6 +2066,13 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
         if (authoritativeInvoice.Id !== createdInvoice.Id) {
           throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_ID_MISMATCH", true);
         }
+        if (
+          authoritativeInvoice.AllowOnlinePayPalPayment !== false
+          || authoritativeInvoice.AllowOnlineAffirmPayment !== false
+          || (authoritativeInvoice.EmailStatus !== "NotSet" && authoritativeInvoice.EmailStatus !== "NOT_SET")
+        ) {
+          throw new QuickBooksProviderError("QUICKBOOKS_INVOICE_DELIVERY_UNCONFIRMED", true);
+        }
       } catch (error) {
         const failure = classifyQuickBooksProviderFailure(error);
         // A successful provider CREATE is irreversible from QuoteFly's point of
@@ -2498,94 +2505,14 @@ export const quickBooksRoutes: FastifyPluginAsync = async (app) => {
       ) {
         return hostedPaymentsRuntimeUnavailable(reply);
       }
-      const record = await withTenantRlsContext(app.prisma, access.tenantId, async (transaction) => {
-        const operation = await transaction.quickBooksInvoiceOperation.findFirst({
-          where: {
-            tenantId: access.tenantId,
-            invoiceId,
-            archivedAtUtc: null,
-            status: "SUCCEEDED",
-            taxEstimateOperationId: null,
-            providerInvoiceLink: { not: null },
-            providerInvoiceId: { not: null },
-            invoiceLinkFetchedAtUtc: { not: null },
-            lastReconciledAtUtc: { not: null },
-            providerSyncToken: { not: null },
-            providerUpdatedAtUtc: { not: null },
-          },
-          select: {
-            ...QuickBooksInvoiceOperationPublicSelect,
-            connection: {
-              select: {
-                status: true,
-                realmId: true,
-                deletedAtUtc: true,
-                setupConfirmedAtUtc: true,
-                setupConfirmedByTenantUserId: true,
-                setupChecklistVersion: true,
-              },
-            },
-          },
-        });
-        const invoice = await transaction.invoice.findFirst({
-          where: {
-            id: invoiceId,
-            tenantId: access.tenantId,
-            deletedAtUtc: null,
-            status: "OPEN",
-            paymentStatus: { in: ["PENDING", "PARTIALLY_PAID", "REFUNDED", "PARTIALLY_REFUNDED"] },
-            balanceDue: { gt: 0 },
-            voidedAtUtc: null,
-          },
-          select: { paymentStatus: true, balanceDue: true },
-        });
-        if (!operation || !invoice) return null;
-        const binding = await transaction.quickBooksRealmBinding.findFirst({
-          where: {
-            tenantId: access.tenantId,
-            quickBooksConnectionId: operation.quickBooksConnectionId,
-            realmId: operation.providerRealmId,
-            active: true,
-          },
-          select: { id: true },
-        });
-        const connectedRealmMatches = operation.connection.status === "CONNECTED"
-          && operation.connection.deletedAtUtc === null
-          && Boolean(operation.connection.setupConfirmedAtUtc)
-          && Boolean(operation.connection.setupConfirmedByTenantUserId)
-          && operation.connection.setupChecklistVersion === QUICKBOOKS_SETUP_CHECKLIST_VERSION
-          && operation.connection.realmId === operation.providerRealmId;
-        return binding && connectedRealmMatches ? { operation, invoice } : null;
-      });
-      const reviewedOnlinePayments = Boolean(
-        record?.operation.allowOnlineAchPayment || record?.operation.allowOnlineCardPayment,
-      );
-      const hostedPaymentUrl = reviewedOnlinePayments
-        && record
-        && quickBooksInvoiceLinkAvailable(record.operation)
-        ? (() => {
-            try {
-              return validateQuickBooksInvoiceLink(decryptQuickBooksHostedPaymentLink(
-                app.env,
-                record.operation.providerInvoiceLink as string,
-              ));
-            } catch {
-              return null;
-            }
-          })()
-        : null;
-      if (!record || !hostedPaymentUrl) {
+      const payment = await withTenantRlsContext(app.prisma, access.tenantId, transaction =>
+        readQuickBooksHostedPaymentLink(transaction, app.env, access.tenantId, invoiceId));
+      if (!payment) {
         return reply.code(404).send({ error: "A QuickBooks hosted payment link is not available yet.", code: "QUICKBOOKS_INVOICE_LINK_UNAVAILABLE" });
       }
       reply.header("Cache-Control", "private, no-store");
       reply.header("Referrer-Policy", "no-referrer");
-      return {
-        invoiceId,
-        provider: "QUICKBOOKS" as const,
-        hostedPaymentUrl,
-        paymentStatus: record.invoice.paymentStatus,
-        balanceDue: Number(record.invoice.balanceDue),
-      };
+      return payment;
     },
   );
 

@@ -61,6 +61,8 @@ const QuickBooksInvoiceSchema = z.object({
   AllowOnlinePayment: z.boolean().optional(),
   AllowOnlineACHPayment: z.boolean().optional(),
   AllowOnlineCreditCardPayment: z.boolean().optional(),
+  AllowOnlinePayPalPayment: z.boolean().optional(),
+  AllowOnlineAffirmPayment: z.boolean().optional(),
   CurrencyRef: QuickBooksRefSchema.optional(),
   TxnTaxDetail: z.object({
     TotalTax: z.number().finite().optional(),
@@ -205,6 +207,8 @@ export type QuickBooksInvoiceEntity = {
   AllowOnlinePayment?: boolean;
   AllowOnlineACHPayment?: boolean;
   AllowOnlineCreditCardPayment?: boolean;
+  AllowOnlinePayPalPayment?: boolean;
+  AllowOnlineAffirmPayment?: boolean;
   MetaData?: { CreateTime?: string; LastUpdatedTime?: string };
   CurrencyRef?: QuickBooksApiRef;
   TxnTaxDetail?: { TotalTax?: number };

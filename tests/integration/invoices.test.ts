@@ -372,7 +372,7 @@ describe("invoice ledger API", () => {
         SyncToken: createdInvoice.SyncToken ?? "1",
         MetaData: createdInvoice.MetaData ?? { LastUpdatedTime: "2026-08-27T20:00:00.000Z" },
         LinkedTxn: createdInvoice.LinkedTxn ?? [],
-        ...(providerPayload.AllowOnlinePayment
+        ...((providerPayload.AllowOnlineACHPayment || providerPayload.AllowOnlineCreditCardPayment)
           ? { InvoiceLink: "https://app.qbo.intuit.com/app/invoice?txnId=mock-hosted-payment" }
           : {}),
       };
@@ -1078,10 +1078,13 @@ describe("invoice ledger API", () => {
       });
       const providerPayload = quickBooksProviderMocks.createInvoice.mock.calls.at(-1)?.[3] as Record<string, unknown>;
       expect(providerPayload).not.toHaveProperty("BillEmail");
+      expect(providerPayload).not.toHaveProperty("AllowOnlinePayment");
       expect(providerPayload).toMatchObject({
-        AllowOnlinePayment: false,
+        EmailStatus: "NotSet",
         AllowOnlineACHPayment: false,
         AllowOnlineCreditCardPayment: false,
+        AllowOnlinePayPalPayment: false,
+        AllowOnlineAffirmPayment: false,
       });
     } finally {
       app.env.QUICKBOOKS_HOSTED_PAYMENTS_ENABLED = hostedPaymentsFlag;
@@ -2286,11 +2289,14 @@ describe("invoice ledger API", () => {
       },
     });
     const providerPayload = quickBooksProviderMocks.createInvoice.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(providerPayload).not.toHaveProperty("AllowOnlinePayment");
     expect(providerPayload).toMatchObject({
       BillEmail: { Address: reviewedBillingEmail },
-      AllowOnlinePayment: true,
+      EmailStatus: "NotSet",
       AllowOnlineACHPayment: true,
       AllowOnlineCreditCardPayment: true,
+      AllowOnlinePayPalPayment: false,
+      AllowOnlineAffirmPayment: false,
     });
     const persistedInvoice = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
     expect(persistedInvoice).toMatchObject({
@@ -2558,6 +2564,91 @@ describe("invoice ledger API", () => {
     expect(reconciled.statusCode).toBe(200);
     expect(reconciled.json()).toMatchObject({ found: true, operation: { status: "SUCCEEDED" } });
     expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
+  });
+
+  test("quarantines created invoices when the first canonical read does not confirm delivery safeguards", async () => {
+    const snapshots: Array<{
+      label: string;
+      project: (providerPayload: Record<string, unknown>) => Record<string, unknown>;
+    }> = [
+      {
+        label: "email-sent",
+        project: (providerPayload) => ({ ...providerPayload, EmailStatus: "EmailSent" }),
+      },
+      {
+        label: "missing-payment-opt-outs",
+        project: (providerPayload) => {
+          const {
+            AllowOnlinePayPalPayment: _allowOnlinePayPalPayment,
+            AllowOnlineAffirmPayment: _allowOnlineAffirmPayment,
+            ...withoutOptOuts
+          } = providerPayload;
+          return withoutOptOuts;
+        },
+      },
+    ];
+
+    for (const scenario of snapshots) {
+      quickBooksProviderMocks.createInvoice.mockReset();
+      quickBooksProviderMocks.fetchInvoice.mockReset();
+      const owner = await signUp(`invoice-qb-delivery-unconfirmed-${scenario.label}`);
+      const { invoice, reviewBinding } = await createQuickBooksReadyInvoice(owner, scenario.label);
+      const providerInvoiceId = `qb-invoice-delivery-unconfirmed-${scenario.label}`;
+      quickBooksProviderMocks.createInvoice.mockResolvedValue({
+        Id: providerInvoiceId,
+        DocNumber: "QF-000001",
+        TotalAmt: 150,
+        Balance: 150,
+      });
+      quickBooksProviderMocks.fetchInvoice.mockImplementationOnce(async (
+        _runtimeEnv: unknown,
+        _realmId: unknown,
+        _accessToken: unknown,
+        invoiceId: string,
+      ) => {
+        const providerPayload = quickBooksProviderMocks.createInvoice.mock.calls.at(-1)?.[3] as Record<string, unknown>;
+        return {
+          ...scenario.project(providerPayload),
+          Id: invoiceId,
+          TotalAmt: 150,
+          Balance: 150,
+          SyncToken: "1",
+          MetaData: { LastUpdatedTime: "2026-09-02T20:00:00.000Z" },
+          CurrencyRef: { value: "USD" },
+          LinkedTxn: [],
+        };
+      });
+
+      const publish = await app.inject({
+        method: "POST",
+        url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": `qb-delivery-unconfirmed-${scenario.label}-${Date.now()}` },
+        payload: { invoiceVersion: invoice.version, reviewBinding },
+      });
+      expect(publish.statusCode).toBe(202);
+      expect(publish.json()).toMatchObject({
+        code: "QUICKBOOKS_RESULT_UNCERTAIN",
+        reconciliationRequired: true,
+        operation: { status: "RECONCILIATION_REQUIRED", reconciliationAvailable: true },
+      });
+      await expect(prisma.quickBooksInvoiceOperation.findUniqueOrThrow({
+        where: { tenantId_invoiceId: { tenantId: owner.tenant.id, invoiceId: invoice.id } },
+      })).resolves.toMatchObject({
+        status: "RECONCILIATION_REQUIRED",
+        providerInvoiceId,
+        lastFailureCode: "QUICKBOOKS_INVOICE_DELIVERY_UNCONFIRMED",
+      });
+
+      const blockedRetry = await app.inject({
+        method: "POST",
+        url: `/v1/integrations/quickbooks/invoices/${invoice.id}/publish`,
+        headers: { cookie: owner.cookie, "idempotency-key": `qb-delivery-unconfirmed-retry-${scenario.label}-${Date.now()}` },
+        payload: { invoiceVersion: invoice.version, reviewBinding },
+      });
+      expect(blockedRetry.statusCode).toBe(409);
+      expect(blockedRetry.json()).toMatchObject({ code: "QUICKBOOKS_RECONCILIATION_REQUIRED" });
+      expect(quickBooksProviderMocks.createInvoice).toHaveBeenCalledTimes(1);
+    }
   });
 
   test("retains provider identity when authorization is revoked after create and never creates twice", async () => {
@@ -2843,7 +2934,7 @@ describe("invoice ledger API", () => {
         MetaData: { LastUpdatedTime: "2026-08-27T21:30:00.000Z" },
         CurrencyRef: { value: "USD" },
         LinkedTxn: [],
-        AllowOnlinePayment: true,
+        AllowOnlinePayment: false,
         AllowOnlineACHPayment: true,
         AllowOnlineCreditCardPayment: false,
         InvoiceLink: "https://app.qbo.intuit.com/app/invoice?txnId=uncertain-hosted",
@@ -4119,6 +4210,26 @@ describe("invoice ledger API", () => {
         },
         code: "QUICKBOOKS_PAYMENT_METHOD_REVIEW_MISMATCH",
       },
+      {
+        label: "legacy-true-expands-reviewed-methods",
+        reviewed: { ach: true, card: false },
+        provider: {
+          AllowOnlinePayment: true,
+          AllowOnlineACHPayment: true,
+          AllowOnlineCreditCardPayment: true,
+        },
+        code: "QUICKBOOKS_PAYMENT_METHOD_REVIEW_MISMATCH",
+      },
+      {
+        label: "paypal-enabled",
+        reviewed: { ach: false, card: false },
+        provider: {
+          AllowOnlineACHPayment: false,
+          AllowOnlineCreditCardPayment: false,
+          AllowOnlinePayPalPayment: true,
+        },
+        code: "QUICKBOOKS_PAYMENT_METHOD_REVIEW_MISMATCH",
+      },
     ] as const;
     let connection: Awaited<ReturnType<typeof prisma.quickBooksConnection.create>> | undefined;
     for (const scenario of scenarios) {
@@ -4163,6 +4274,7 @@ describe("invoice ledger API", () => {
     const defaultOff = await createQuickBooksReconciliationFixture(owner, "provider-default-off", connection);
     quickBooksProviderMocks.fetchInvoice.mockResolvedValue({
       ...defaultOff.providerPayload,
+      AllowOnlinePayment: false,
       Balance: 150,
       SyncToken: "1",
       MetaData: { LastUpdatedTime: "2026-08-27T20:31:00.000Z" },
@@ -4689,7 +4801,7 @@ describe("invoice ledger API", () => {
         SyncToken: "1",
         MetaData: { LastUpdatedTime: "2026-08-28T18:10:00.000Z" },
         LinkedTxn: [],
-        AllowOnlinePayment: true,
+        AllowOnlinePayment: false,
         AllowOnlineACHPayment: true,
       });
       await reconcileQuickBooksInvoice({
@@ -4712,7 +4824,7 @@ describe("invoice ledger API", () => {
         SyncToken: "2",
         MetaData: { LastUpdatedTime: "2026-08-28T18:11:00.000Z" },
         LinkedTxn: [],
-        AllowOnlinePayment: true,
+        AllowOnlinePayment: false,
         AllowOnlineACHPayment: true,
       });
       await expect(reconcileQuickBooksInvoice({

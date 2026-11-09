@@ -616,9 +616,11 @@ async function loadSyncContext(
           name: customerMap.quickBooksDisplayName ?? invoice.customer.fullName,
         },
         ...(billingEmail ? { BillEmail: { Address: billingEmail } } : {}),
-        AllowOnlinePayment: allowOnlineAchPayment || allowOnlineCardPayment,
+        EmailStatus: "NotSet",
         AllowOnlineACHPayment: allowOnlineAchPayment,
         AllowOnlineCreditCardPayment: allowOnlineCardPayment,
+        AllowOnlinePayPalPayment: false,
+        AllowOnlineAffirmPayment: false,
         Line: lineItems.map((line) => {
           const providerPricing = providerQuantityAndUnitPrice(line);
           return {

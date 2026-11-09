@@ -1,6 +1,6 @@
 import { useGuardedNavigate } from "../../hooks/navigation-guard-context";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { CalendarDays, ExternalLink, FileCheck2, ReceiptText, RefreshCw } from "lucide-react";
+import { CalendarDays, Download, ExternalLink, FileCheck2, ReceiptText, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { money, useDashboard } from "../dashboard/DashboardContext";
@@ -149,6 +149,10 @@ export function InvoicePanel({
   const quickBooksPageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [quickBooksPaymentLink, setQuickBooksPaymentLink] = useState<string | null>(null);
   const [quickBooksPaymentLinkLoading, setQuickBooksPaymentLinkLoading] = useState(false);
+  const [invoicePdfDownloading, setInvoicePdfDownloading] = useState<"plain" | "payment" | null>(null);
+  const invoicePdfPlainButtonRef = useRef<HTMLButtonElement>(null);
+  const invoicePdfPaymentButtonRef = useRef<HTMLButtonElement>(null);
+  const invoicePdfFocusedButtonRef = useRef<"plain" | "payment" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ message: string; tone: "success" | "warning" } | null>(null);
   const [dueDate, setDueDate] = useState(() => defaultDueDate(timeZone));
@@ -160,6 +164,7 @@ export function InvoicePanel({
   const quickBooksMappingMutationGenerationRef = useRef(0);
   const quickBooksLookupGenerationRef = useRef(0);
   const quickBooksPaymentLinkGenerationRef = useRef(0);
+  const invoicePdfGenerationRef = useRef(0);
   const activeInvoiceRef = useRef<Invoice | null>(invoice);
   activeInvoiceRef.current = invoice;
   const quickBooksCommandRef = useRef<{ fingerprint: string; key: string } | null>(null);
@@ -171,6 +176,7 @@ export function InvoicePanel({
     quickBooksMappingMutationGenerationRef.current += 1;
     quickBooksLookupGenerationRef.current += 1;
     quickBooksPaymentLinkGenerationRef.current += 1;
+    invoicePdfGenerationRef.current += 1;
   }
 
   const operationIsCurrent = useCallback(
@@ -398,6 +404,7 @@ export function InvoicePanel({
     setQuickBooksSearchPages({});
     setQuickBooksPaymentLink(null);
     setQuickBooksPaymentLinkLoading(false);
+    setInvoicePdfDownloading(null);
     commandRef.current = null;
     quickBooksCommandRef.current = null;
     quickBooksGenerationRef.current += 1;
@@ -406,6 +413,7 @@ export function InvoicePanel({
     void loadInvoice();
     return () => {
       operationGenerationRef.current += 1;
+      invoicePdfGenerationRef.current += 1;
     };
   }, [loadInvoice, sourceKey, timeZone]);
 
@@ -448,6 +456,14 @@ export function InvoicePanel({
   }), [quickBooksAllowAch, quickBooksAllowCard, quickBooksBillingEmail]);
   const paymentDisplay = invoice ? invoicePaymentDisplay(invoice) : null;
   const invoicePaymentLabel = paymentDisplay ? t(paymentDisplay.translationKey) : "";
+  const quickBooksPaymentPdfAvailable = Boolean(
+    quickBooksEnabled
+    && quickBooksPreview?.operation?.status === "SUCCEEDED"
+    && quickBooksPreview.operation.paymentLinkAvailable === true
+    && (quickBooksPreview.operation.paymentMethods?.ach || quickBooksPreview.operation.paymentMethods?.card)
+    && invoice?.status === "OPEN"
+    && Number(invoice.balanceDue) > 0,
+  );
   const quickBooksBillingEmailInvalid = Boolean(
     quickBooksBillingEmail.trim()
     && !isValidQuickBooksBillingEmail(quickBooksBillingEmail),
@@ -883,6 +899,65 @@ export function InvoicePanel({
     }
   };
 
+  const handleInvoicePdf = async (includeQuickBooksPayment: boolean) => {
+    if (!invoice || !canCreate || invoicePdfDownloading) return;
+    const requestedInvoice = invoice;
+    const operationSource = sourceKey;
+    const generation = ++invoicePdfGenerationRef.current;
+    const isCurrent = () => isCurrentQuickBooksRequestContext({
+      requestedSource: operationSource,
+      requestedGeneration: generation,
+      currentSource: sourceRef.current,
+      currentGeneration: invoicePdfGenerationRef.current,
+      requestedInvoiceId: requestedInvoice.id,
+      currentInvoiceId: activeInvoiceRef.current?.id ?? null,
+      requestedInvoiceVersion: requestedInvoice.version,
+      currentInvoiceVersion: activeInvoiceRef.current?.version ?? null,
+    });
+    invoicePdfFocusedButtonRef.current = includeQuickBooksPayment ? "payment" : "plain";
+    setInvoicePdfDownloading(includeQuickBooksPayment ? "payment" : "plain");
+    setError(null);
+    try {
+      const blob = await api.invoices.downloadPdf(requestedInvoice.id, { includeQuickBooksPayment });
+      if (!isCurrent()) return;
+      const url = URL.createObjectURL(blob);
+      try {
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `invoice-${requestedInvoice.invoiceNumber}.pdf`;
+        anchor.rel = "noreferrer";
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+      } finally {
+        // Allow the browser to consume the download before releasing its bytes.
+        window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+      }
+    } catch (err) {
+      if (isCurrent()) {
+        setError(localizedApiError(err, t, {
+          fallbackKey: "invoices.pdfError",
+          codeKeys: {
+            QUICKBOOKS_INVOICE_LINK_UNAVAILABLE: "invoices.paymentPdfLinkUnavailable",
+            INVOICE_PDF_UNAVAILABLE: "invoices.pdfUnavailable",
+          },
+        }));
+      }
+    } finally {
+      if (sourceRef.current === operationSource && invoicePdfGenerationRef.current === generation) {
+        setInvoicePdfDownloading(null);
+        const focusedButton = invoicePdfFocusedButtonRef.current;
+        requestAnimationFrame(() => {
+          if (invoicePdfGenerationRef.current !== generation || sourceRef.current !== operationSource) return;
+          const target = focusedButton === "payment"
+            ? invoicePdfPaymentButtonRef.current
+            : invoicePdfPlainButtonRef.current;
+          if (target?.isConnected && !target.disabled && document.activeElement === document.body) target.focus();
+        });
+      }
+    }
+  };
+
   const handleQuickBooksReconcile = async () => {
     if (!invoice || quickBooksSaving) return;
     const operationSource = sourceKey;
@@ -987,6 +1062,26 @@ export function InvoicePanel({
                 }}>{t("invoices.dueEditor.edit")}</Button> : null}
             </div>
           </div>
+          {canCreate ? (
+            <div className="space-y-2">
+              <div className="grid gap-2 sm:flex sm:flex-wrap">
+                {quickBooksPaymentPdfAvailable ? (
+                  <Button ref={invoicePdfPaymentButtonRef} type="button" className="min-h-11" loading={invoicePdfDownloading === "payment"}
+                    disabled={Boolean(invoicePdfDownloading) || quickBooksLoading || quickBooksSaving || taxContextPending || taxContextSaving}
+                    onClick={() => void handleInvoicePdf(true)}>
+                    <Download size={16} aria-hidden="true" />
+                    {t("invoices.downloadPaymentPdf")}
+                  </Button>
+                ) : null}
+                <Button ref={invoicePdfPlainButtonRef} type="button" variant="outline" className="min-h-11" loading={invoicePdfDownloading === "plain"}
+                  disabled={Boolean(invoicePdfDownloading)} onClick={() => void handleInvoicePdf(false)}>
+                  <Download size={16} aria-hidden="true" />
+                  {t("invoices.downloadPdf")}
+                </Button>
+              </div>
+              <p className="text-xs leading-5 text-[var(--qf-text-muted)]">{t("invoices.pdfHelp")}</p>
+            </div>
+          ) : null}
           <div className="flex flex-col gap-3 border-t border-[var(--qf-border)] pt-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs leading-5 text-[var(--qf-text-muted)]">
               {quickBooksPreview?.operation?.status === "SUCCEEDED"
